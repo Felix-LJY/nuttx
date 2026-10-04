@@ -98,7 +98,7 @@ static inline void rcc_reset(void)
 
   /* Config PWR */
 
-  n32_pwr_setcorepwrsrc(PWR_VCORESRC_LDO);
+  n32_pwr_setcorepwrsrc(PWR_VCORESRC_EXT);
 
   /* Set HSIEN bit */
 

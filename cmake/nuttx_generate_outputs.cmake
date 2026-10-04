@@ -21,6 +21,14 @@
 # ##############################################################################
 
 function(nuttx_generate_outputs target)
+    add_custom_command(
+      OUTPUT ${target}.elf
+      COMMAND ${CMAKE_OBJCOPY} ${target} ${target}.elf
+      DEPENDS ${target})
+    add_custom_target(${target}-elf ALL DEPENDS ${target}.elf)
+    add_dependencies(nuttx_post ${target}-elf)
+    file(APPEND ${NUTTX_BINARY_DIR}/nuttx.manifest "${target}.elf\n")
+
   if(CONFIG_INTELHEX_BINARY)
     add_custom_command(
       OUTPUT ${target}.hex

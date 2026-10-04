@@ -2007,6 +2007,7 @@ static int up_interrupt(int irq, void *context, void *arg)
 
   /* Handle IDLE interrupt (DMA reception complete) */
 
+#ifdef SERIAL_HAVE_RXDMA
   if ((sts & USART_STS_IDLEF) && (priv->rxdma) &&
       (priv->ie & USART_CTRL1_IDLEIEN))
     {
@@ -2035,6 +2036,7 @@ static int up_interrupt(int irq, void *context, void *arg)
           return OK;
         }
     }
+#endif
 
   /* Non-DMA reception */
 
@@ -2709,9 +2711,15 @@ void arm_serialinit(void)
   char devname[32];
   int minor = 0;
 
+#ifdef SERIAL_HAVE_RXDMA
   UNUSED(g_uart_rxdma_ops);
+#endif
+#ifdef SERIAL_HAVE_TXDMA
   UNUSED(g_uart_txdma_ops);
+#endif
+#if defined(SERIAL_HAVE_RXDMA) && defined(SERIAL_HAVE_TXDMA)
   UNUSED(g_uart_rxtxdma_ops);
+#endif
   UNUSED(g_uart_ops);
 
   /* Configure console */
