@@ -40,6 +40,7 @@
  *   PART        PACKAGE          GPIOs  I2S
  *   ----------- ---------------- ----- ----
  *   N32H762Ix    LQFP176          138   7/4
+ *   N32H760Vx    VBGA100           82   5/4
  *   ----------- ---------------- ----- ----
  *
  * Parts N32H7xxxI have 2048Kb of FLASH
@@ -48,7 +49,7 @@
  * overridden with CONFIG_N32H7_FLASH_OVERRIDE_x
  */
 
-#if defined (CONFIG_ARCH_CHIP_N32H762II)
+#if defined (CONFIG_N32H7_N32H76X)
 #else
 #  error N32 H7 chip not identified
 #endif

@@ -1318,7 +1318,7 @@ void n32_stdclockconfig(void)
 
       regval  = getreg32(N32_RCC_PLL1DIV);
       regval &= ~RCC_PLL1DIV_PLL1BDIV_MASK;
-      regval |= RCC_PLL1DIV_PLL1BDIV_DIV(6);
+      regval |= RCC_PLL1DIV_PLL1BDIV_DIV(N32_PLL1B_DIV);
       putreg32(regval, N32_RCC_PLL1DIV);
 
       /* Configure sys_clk source is PLL1A */

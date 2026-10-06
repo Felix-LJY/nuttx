@@ -40,6 +40,7 @@
  *   PART        PACKAGE          GPIOs  I2S
  *   ----------- ---------------- ----- ----
  *   N32H762Ix    LQFP176          138   7/4
+ *   N32H760Vx    VBGA100           82   5/4
  *   ----------- ---------------- ----- ----
  *
  * Parts N32H7xxxI have 2048Kb of FLASH
@@ -48,27 +49,18 @@
  * overridden with CONFIG_N32H7_FLASH_OVERRIDE_x
  */
 
-#if defined (CONFIG_ARCH_CHIP_N32H762II)
+#if defined (CONFIG_N32H7_N32H76X)
 
 /* Memory */
-#    define N32H7_AXI_RAM_SIZE          (128*1024)  /* Placeholder, actual value to be determined */
-#    define N32H7_AHB_RAM_SIZE          (352*1024)  /* Placeholder, actual value to be determined */
-#  if defined(CONFIG_ARMV7M_HAVE_DTCM)
-#      define N32H7_DTCM_SRAM_SIZE     (1024*1024)  /* Assume same as N32H7, adjust as needed */
-#  else
-#      define N32H7_DTCM_SRAM_SIZE      (0)         /* No DTCM SRAM on TCM interface */
-#  endif
-#  if defined(CONFIG_ARMV7M_HAVE_ITCM)
-#      define N32H7_ITCM_SRAM_SIZE      (0)         /* Assume same as N32H7, adjust as needed */
-#  else
-#      define N32H7_ITCM_SRAM_SIZE      (0)         /* No ITCM SRAM on TCM interface */
-#  endif
+#  define N32H7_AXI_RAM_SIZE            (128*1024) /* Placeholder, actual value to be determined */
+#  define N32H7_AHB_RAM_SIZE            (352*1024) /* Placeholder, actual value to be determined */
+#  define N32H7_TCM_SRAM_SIZE          (1024*1024) /* Placeholder, actual value to be determined */
 
 /* Peripherals */
 #  if defined(CONFIG_N32H7_IO_CONFIG_V)
 #      define N32H7_NGPIO               (5)        /* Placeholder, actual value to be determined */
 #  elif defined(CONFIG_N32H7_IO_CONFIG_Z)
-#      define N32H7_NGPIO               (7)       /* Placeholder, actual value to be determined */
+#      define N32H7_NGPIO               (7)        /* Placeholder, actual value to be determined */
 #  elif defined(CONFIG_N32H7_IO_CONFIG_I)
 #      define N32H7_NGPIO               (9)        /* Placeholder, actual value to be determined */
 #  elif defined(CONFIG_N32H7_IO_CONFIG_X)

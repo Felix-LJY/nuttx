@@ -36,11 +36,20 @@ choice
 config ARCH_CHIP_N32H762II
 	bool "N32H762IIL7"
 	select N32H7_N32H76X
-	select N32H7_FLASH_CONFIG_I
 	select N32H7_IO_CONFIG_I
+	select N32H7_FLASH_CONFIG_I
 	---help---
 		N32 H7 Cortex M7, 2048 Kb FLASH, 15K Kb SRAM,
 		with cryptographic accelerator, LQFP176
+
+config ARCH_CHIP_N32H760VI
+	bool "N32H760VIB7"
+	select N32H7_N32H76X
+	select N32H7_IO_CONFIG_V
+	select N32H7_FLASH_CONFIG_I
+	---help---
+		N32 H7 Cortex M7, 2048 Kb FLASH, 15K Kb SRAM,
+		with cryptographic accelerator, VBGA100
 endchoice # N32 H7 Chip Selection
 
 config N32H7_N32H76X
@@ -219,7 +228,7 @@ config N32H7_USBHS
 
 config N32H7_USBHS_FS
 	bool "USBHS FS"
-	default n
+	default y
 
 if N32H7_USBHS
 config N32H7_USBHS_ID_DISABLE

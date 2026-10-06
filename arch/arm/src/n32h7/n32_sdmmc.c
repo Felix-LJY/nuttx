@@ -254,6 +254,7 @@ static void n32_sdmmc_reset(struct sdio_dev_s *dev);
 static sdio_capset_t n32_sdmmc_capabilities(struct sdio_dev_s *dev);
 static sdio_statset_t n32_sdmmc_status(struct sdio_dev_s *dev);
 static void n32_sdmmc_widebus(struct sdio_dev_s *dev, bool enable);
+static void n32_sdmmc_set_input_tap(struct n32_sdmmc_s *priv, uint32_t tap);
 static void n32_sdmmc_clock(struct sdio_dev_s *dev, enum sdio_clock_e rate);
 static int n32_sdmmc_attach(struct sdio_dev_s *dev);
 static int n32_sdmmc_sendcmd(struct sdio_dev_s *dev, uint32_t cmd,
@@ -923,7 +924,7 @@ static void n32_sdmmc_setup_data(struct n32_sdmmc_s *priv)
            (priv->blocksize & N32_SDHOST_BLKCFG_SIZE_MASK);
   n32_sdmmc_putreg(priv, regval, N32_SDHOST_BLKCFG_OFFSET);
 
-  up_udelay(10);
+  up_udelay(25);
 
   mcinfo("DATA: size=%lu, blocks=%lu, total=%lu, dir=%s\n",
          (unsigned long)priv->blocksize, (unsigned long)priv->nblocks,
@@ -1660,7 +1661,7 @@ static sdio_capset_t n32_sdmmc_capabilities(struct sdio_dev_s *dev)
 {
   sdio_capset_t caps = SDIO_CAPS_4BIT | SDIO_CAPS_DMABEFOREWRITE;
 #if HAVE_ADMA2
-  caps |= (SDIO_CAPS_DMASUPPORTED/* | SDIO_CAPS_SD_HS_MODE */);
+  caps |= (SDIO_CAPS_DMASUPPORTED/* | SDIO_CAPS_SD_HS_MODE*/);
 #endif
   return caps;
 }
@@ -1718,6 +1719,35 @@ static void n32_sdmmc_widebus(struct sdio_dev_s *dev, bool enable)
 }
 
 /****************************************************************************
+* Name: n32_sdmmc_set_input_tap
+*
+* Description:
+*   Set the input tap delay for rxclk (non-SDR104 mode).
+*   Must follow ITCW gating sequence to avoid clock glitches.
+*
+****************************************************************************/
+
+static void n32_sdmmc_set_input_tap(struct n32_sdmmc_s *priv, uint32_t tap)
+{
+uint32_t regval;
+
+/* 1. Enable ITCW to gate rxclk (avoid glitch when changing ITDS) */
+
+regval = N32_SDMMC_DLYCTRL_ITDE | N32_SDMMC_DLYCTRL_ITCW |
+       N32_SDMMC_DLYCTRL_ITDS(tap);
+N32_PUT_CFG(priv, N32_SDMMC_DLYCTRL_OFFSET, regval);
+
+/* 2. Wait for the delay chain to settle */
+
+up_udelay(10);
+
+/* 3. Disable ITCW to release rxclk (keep ITDE and ITDS) */
+
+regval = N32_SDMMC_DLYCTRL_ITDE | N32_SDMMC_DLYCTRL_ITDS(tap);
+N32_PUT_CFG(priv, N32_SDMMC_DLYCTRL_OFFSET, regval);
+}
+
+/****************************************************************************
  * Name: n32_sdmmc_clock
  *
  * Description:
@@ -1745,18 +1775,19 @@ static void n32_sdmmc_clock(struct sdio_dev_s *dev, enum sdio_clock_e rate)
       case CLOCK_IDMODE:
         freq = 400000;
         break;
-      case CLOCK_MMC_TRANSFER:
-      case CLOCK_MMC_TRANSFER_4BIT:
-        freq = 25000000;
-        break;
       case CLOCK_SD_TRANSFER_1BIT:
       case CLOCK_SD_TRANSFER_4BIT:
+        regval = n32_sdmmc_getreg(priv, N32_SDHOST_CTRL1_OFFSET);
+        regval &= ~N32_SDHOST_CTRL1_HSEN;
+        n32_sdmmc_putreg(priv, regval, N32_SDHOST_CTRL1_OFFSET);
+        N32_PUT_CFG(priv, N32_SDMMC_DLYCTRL_OFFSET, 0);
         freq = 25000000;
         break;
       case CLOCK_SD_TRANSFER_4BIT_HS:
         regval = n32_sdmmc_getreg(priv, N32_SDHOST_CTRL1_OFFSET);
         regval |= N32_SDHOST_CTRL1_HSEN;
         n32_sdmmc_putreg(priv, regval, N32_SDHOST_CTRL1_OFFSET);
+        n32_sdmmc_set_input_tap(priv, 16);
         freq = 50000000;
         break;
       default:
