@@ -30,6 +30,7 @@
 #include <nuttx/config.h>
 
 #include <sys/types.h>
+#include <limits.h>
 #include <stdint.h>
 
 /****************************************************************************
@@ -48,7 +49,9 @@
 #define O_WRONLY     (1U << 0)       /* Open for write access (only) */
 #define O_RDWR       (2U << 0)       /* Open for both read & write access */
 #define O_ACCMODE    (3U << 0)       /* Mask for access mode */
+#ifndef NUTTX_NO_EXTENSIONS          /* See nuttx/compiler.h */
 #define O_TEXT       (1U << 5)       /* Open the file in text (translated) mode. */
+#endif
 #define O_CREAT      (1U << 6)       /* Create file/sem/mq object */
 #define O_EXCL       (1U << 7)       /* Name must not exist when opened  */
 #define O_NOCTTY     (1U << 8)       /* Don't assign a controlling terminal */
@@ -59,25 +62,46 @@
 #define O_ASYNC      (1U << 13)      /* Enable signal-driven I/O */
 #define O_DIRECT     (1U << 14)      /* Avoid caching, write directly to hardware */
 #define O_LARGEFILE  (1U << 15)      /* Large File */
-#define O_DIRECTORY  (1U << 16)      /* Must be a directory */
-#define O_NOFOLLOW   (1U << 17)      /* Don't follow links */
-#define O_NOATIME    (1U << 18)      /* Don't update the file last access time */
-#define O_CLOEXEC    (1U << 19)      /* Close on execute */
-#define __O_SYNC     (1U << 20)      /* Synchronize file (data+metadata) */
-#define O_PATH       (1U << 21)      /* Obtain a path-only fd (no I/O) */
-#define __O_TMPFILE  (1U << 22)      /* Create an unnamed temporary file */
+
+#if UINT_MAX > 0xffff
+#  define O_DIRECTORY  (1U << 16)    /* Must be a directory */
+#  define O_NOFOLLOW   (1U << 17)    /* Don't follow links */
+#  define O_NOATIME    (1U << 18)    /* Don't update the file last access time */
+#  define O_CLOEXEC    (1U << 19)    /* Close on execute */
+#  define __O_SYNC     (1U << 20)    /* Synchronize file (data+metadata) */
+#  define O_PATH       (1U << 21)    /* Obtain a path-only fd (no I/O) */
+#  define __O_TMPFILE  (1U << 22)    /* Create an unnamed temporary file */
+#  define O_TMPFILE    (__O_TMPFILE | O_DIRECTORY)
+#else
+/* With a 16-bit int, the oflags argument of open() holds bits 0-15 only.
+ * The flags that the VFS and the C library act on use the free bits 2-4.
+ * O_NOATIME is only a hint and O_SYNC falls back to O_DSYNC; O_PATH and
+ * O_TMPFILE are not available.
+ */
+
+#  define O_DIRECTORY  (1U << 2)     /* Must be a directory */
+#  define O_CLOEXEC    (1U << 3)     /* Close on execute */
+#  define O_NOFOLLOW   (1U << 4)     /* Don't follow links */
+#  define O_NOATIME    0             /* Not supported */
+#  define __O_SYNC     0             /* Not supported: O_SYNC is O_DSYNC */
+#endif
 
 #define O_NDELAY     O_NONBLOCK                  /* Synonym for O_NONBLOCK */
 #define O_SYNC       (__O_SYNC | O_DSYNC)        /* Synchronize output on write */
 #define O_RSYNC      O_SYNC                      /* Synchronize input on read */
-#define O_TMPFILE    (__O_TMPFILE | O_DIRECTORY) /* Create a temporary file */
+#ifndef NUTTX_NO_EXTENSIONS                      /* See nuttx/compiler.h */
 #define O_BINARY     0                           /* Open the file in binary mode */
+#endif
 
 /* This is the highest bit number used in the open flags bitset.  Bits above
  * this bit number may be used within NuttX for other, internal purposes.
  */
 
-#define _O_MAXBIT   22
+#if UINT_MAX > 0xffff
+#  define _O_MAXBIT   22
+#else
+#  define _O_MAXBIT   15
+#endif
 
 /* Synonyms historically used as F_SETFL flags (BSD). */
 
@@ -194,13 +218,9 @@ struct flock
  * Public Function Prototypes
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -216,7 +236,6 @@ int fcntl(int fd, int cmd, ...);
 
 int posix_fallocate(int fd, off_t offset, off_t len);
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

@@ -96,7 +96,7 @@ static int dac_open(FAR struct file *filep)
    * finished.
    */
 
-  ret = nxmutex_lock(&dev->ad_closelock);
+  ret = nxmutex_lock(&dev->ad_lock);
   if (ret >= 0)
     {
       /* Increment the count of references to the device.  If this is the
@@ -121,7 +121,6 @@ static int dac_open(FAR struct file *filep)
             {
               /* Yes.. perform one time hardware initialization. */
 
-              irqstate_t flags = enter_critical_section();
               ret = dev->ad_ops->ao_setup(dev);
               if (ret == OK)
                 {
@@ -129,17 +128,18 @@ static int dac_open(FAR struct file *filep)
 
                   dev->ad_xmit.af_head = 0;
                   dev->ad_xmit.af_tail = 0;
-
-                  /* Save the new open count on success */
-
-                  dev->ad_ocount = tmp;
                 }
+            }
 
-              leave_critical_section(flags);
+          /* Save the new open count on success */
+
+          if (ret == OK)
+            {
+              dev->ad_ocount = tmp;
             }
         }
 
-      nxmutex_unlock(&dev->ad_closelock);
+      nxmutex_unlock(&dev->ad_lock);
     }
 
   return ret;
@@ -158,10 +158,9 @@ static int dac_close(FAR struct file *filep)
 {
   FAR struct inode     *inode = filep->f_inode;
   FAR struct dac_dev_s *dev   = inode->i_private;
-  irqstate_t            flags;
   int                   ret;
 
-  ret = nxmutex_lock(&dev->ad_closelock);
+  ret = nxmutex_lock(&dev->ad_lock);
   if (ret >= 0)
     {
       /* Decrement the references to the driver.  If the reference count will
@@ -171,7 +170,7 @@ static int dac_close(FAR struct file *filep)
       if (dev->ad_ocount > 1)
         {
           dev->ad_ocount--;
-          nxmutex_unlock(&dev->ad_closelock);
+          nxmutex_unlock(&dev->ad_lock);
         }
       else
         {
@@ -183,16 +182,14 @@ static int dac_close(FAR struct file *filep)
 
           while (dev->ad_xmit.af_head != dev->ad_xmit.af_tail)
             {
-               nxsched_usleep(HALF_SECOND_USEC);
+              nxsched_usleep(HALF_SECOND_USEC);
             }
 
           /* Free the IRQ and disable the DAC device */
 
-          flags = enter_critical_section();    /* Disable interrupts */
-          dev->ad_ops->ao_shutdown(dev);       /* Disable the DAC */
-          leave_critical_section(flags);
+          dev->ad_ops->ao_shutdown(dev);
 
-          nxmutex_unlock(&dev->ad_closelock);
+          nxmutex_unlock(&dev->ad_lock);
         }
     }
 
@@ -253,7 +250,7 @@ static ssize_t dac_write(FAR struct file *filep, FAR const char *buffer,
 
   /* Interrupts must be disabled throughout the following */
 
-  flags = enter_critical_section();
+  flags = spin_lock_irqsave(&dev->ad_spinlock);
 
   /* Check if the TX FIFO was empty when we started.  That is a clue that we
    * have to kick off a new TX sequence.
@@ -321,7 +318,8 @@ static ssize_t dac_write(FAR struct file *filep, FAR const char *buffer,
                   ret = nsent;
                 }
 
-              goto return_with_irqdisabled;
+              spin_unlock_irqrestore(&dev->ad_spinlock, flags);
+              return ret;
             }
 
           /* If the FIFO was empty when we started, then we will have to
@@ -333,13 +331,17 @@ static ssize_t dac_write(FAR struct file *filep, FAR const char *buffer,
               dac_xmit(dev);
             }
 
+          spin_unlock_irqrestore(&dev->ad_spinlock, flags);
+
           /* Wait for a message to be sent */
 
           ret = nxsem_wait_uninterruptible(&fifo->af_sem);
           if (ret < 0)
             {
-              goto return_with_irqdisabled;
+              return ret;
             }
+
+          flags = spin_lock_irqsave(&dev->ad_spinlock);
 
           /* Re-check the FIFO state */
 
@@ -405,8 +407,7 @@ static ssize_t dac_write(FAR struct file *filep, FAR const char *buffer,
 
   ret = nsent;
 
-return_with_irqdisabled:
-  leave_critical_section(flags);
+  spin_unlock_irqrestore(&dev->ad_spinlock, flags);
   return ret;
 }
 
@@ -499,7 +500,8 @@ int dac_register(FAR const char *path, FAR struct dac_dev_s *dev)
   /* Initialize semaphores & mutex */
 
   nxsem_init(&dev->ad_xmit.af_sem, 0, 0);
-  nxmutex_init(&dev->ad_closelock);
+  nxmutex_init(&dev->ad_lock);
+  spin_lock_init(&dev->ad_spinlock);
 
   dev->ad_ops->ao_reset(dev);
 

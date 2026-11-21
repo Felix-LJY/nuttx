@@ -68,7 +68,6 @@
 #  include <nuttx/clock.h>
 #endif
 
-#if !defined(CONFIG_DISABLE_MOUNTPOINT) && defined(CONFIG_FS_PROCFS)
 #ifndef CONFIG_FS_PROCFS_EXCLUDE_PROCESS
 
 /****************************************************************************
@@ -279,71 +278,71 @@ const struct procfs_operations g_proc_operations =
 
 static const struct proc_node_s g_level0node =
 {
-  "",             "",        (uint8_t)PROC_LEVEL0,       DTYPE_DIRECTORY   /* Top-level directory */
+  "",             "",        PROC_LEVEL0,       DTYPE_DIRECTORY   /* Top-level directory */
 };
 
 static const struct proc_node_s g_status =
 {
-  "status",       "status",  (uint8_t)PROC_STATUS,       DTYPE_FILE        /* Task/thread status */
+  "status",       "status",  PROC_STATUS,       DTYPE_FILE        /* Task/thread status */
 };
 
 static const struct proc_node_s g_cmdline =
 {
-  "cmdline",      "cmdline", (uint8_t)PROC_CMDLINE,      DTYPE_FILE        /* Task command line */
+  "cmdline",      "cmdline", PROC_CMDLINE,      DTYPE_FILE        /* Task command line */
 };
 
 #ifndef CONFIG_SCHED_CPULOAD_NONE
 static const struct proc_node_s g_loadavg =
 {
-  "loadavg",       "loadavg", (uint8_t)PROC_LOADAVG,     DTYPE_FILE        /* Average CPU utilization */
+  "loadavg",       "loadavg", PROC_LOADAVG,     DTYPE_FILE        /* Average CPU utilization */
 };
 #endif
 
 #ifdef CONFIG_SCHED_CRITMONITOR
 static const struct proc_node_s g_critmon =
 {
-  "critmon",       "critmon", (uint8_t)PROC_CRITMON,     DTYPE_FILE        /* Critical Section Monitor */
+  "critmon",       "critmon", PROC_CRITMON,     DTYPE_FILE        /* Critical Section Monitor */
 };
 #endif
 
 #if CONFIG_MM_BACKTRACE >= 0
 static const struct proc_node_s g_heap =
 {
-  "heap",         "heap",   (uint8_t)PROC_HEAP,          DTYPE_FILE        /* Task heap info */
+  "heap",         "heap",   PROC_HEAP,          DTYPE_FILE        /* Task heap info */
 };
 #endif
 
 #ifdef CONFIG_DEBUG_MM
 static const struct proc_node_s g_heapcheck =
 {
-  "heapcheck",    "heapcheck", (uint8_t)PROC_HEAP_CHECK, DTYPE_FILE        /* Task heap info */
+  "heapcheck",    "heapcheck", PROC_HEAP_CHECK, DTYPE_FILE        /* Task heap info */
 };
 #endif
 
 static const struct proc_node_s g_stack =
 {
-  "stack",        "stack",   (uint8_t)PROC_STACK,        DTYPE_FILE        /* Task stack info */
+  "stack",        "stack",   PROC_STACK,        DTYPE_FILE        /* Task stack info */
 };
 
 static const struct proc_node_s g_group =
 {
-  "group",        "group",   (uint8_t)PROC_GROUP,        DTYPE_DIRECTORY   /* Group directory */
+  "group",        "group",   PROC_GROUP,        DTYPE_DIRECTORY   /* Group directory */
 };
 
 static const struct proc_node_s g_groupstatus =
 {
-  "group/status", "status",  (uint8_t)PROC_GROUP_STATUS, DTYPE_FILE        /* Task group status */
+  "group/status", "status",  PROC_GROUP_STATUS, DTYPE_FILE        /* Task group status */
 };
 
 static const struct proc_node_s g_groupfd =
 {
-  "group/fd",     "fd",      (uint8_t)PROC_GROUP_FD,     DTYPE_FILE        /* Group file descriptors */
+  "group/fd",     "fd",      PROC_GROUP_FD,     DTYPE_FILE        /* Group file descriptors */
 };
 
 #if !defined(CONFIG_DISABLE_ENVIRON) && !defined(CONFIG_FS_PROCFS_EXCLUDE_ENVIRON)
 static const struct proc_node_s g_groupenv =
 {
-  "group/env",    "env",     (uint8_t)PROC_GROUP_ENV,    DTYPE_FILE        /* Group environment variables */
+  "group/env",    "env",     PROC_GROUP_ENV,    DTYPE_FILE        /* Group environment variables */
 };
 
 #endif
@@ -465,6 +464,10 @@ static FAR const struct proc_node_s *proc_findnode(FAR const char *relpath)
  *   Type:       xxxxxxx            {Task, pthread, Kthread, Invalid}
  *   PPID:       xxxxx              Parent thread ID
  *   Group:      xxxxx              Group ID
+ *   Uid:        xxxxx xxxxx        Real, effective user ID
+ *                                  (CONFIG_SCHED_USER_IDENTITY only)
+ *   Gid:        xxxxx xxxxx        Real, effective group ID
+ *                                  (CONFIG_SCHED_USER_IDENTITY only)
  *   CPU:        xxx                CPU (CONFIG_SMP only)
  *   State:      xxxxxxxx,xxxxxxxxx {Invalid, Waiting, Ready, Running,
  *                                   Inactive},
@@ -542,17 +545,44 @@ static ssize_t proc_status(FAR struct proc_file_s *procfile,
       return totalsize;
     }
 
+#ifdef CONFIG_SCHED_USER_IDENTITY
+  /* Show the real and the effective user and group IDs */
+
+  if (tcb->group != NULL)
+    {
+      linesize   = procfs_snprintf(procfile->line, STATUS_LINELEN,
+                                   "%-12s%u %u\n%-12s%u %u\n",
+                                   "Uid:", tcb->group->tg_uid,
+                                   tcb->group->tg_euid,
+                                   "Gid:", tcb->group->tg_gid,
+                                   tcb->group->tg_egid);
+      copysize   = procfs_memcpy(procfile->line, linesize, buffer,
+                                 remaining, &offset);
+
+      totalsize += copysize;
+      buffer    += copysize;
+      remaining -= copysize;
+
+      if (totalsize >= buflen)
+        {
+          return totalsize;
+        }
+    }
+#endif
+
 #ifdef CONFIG_SMP
   if (tcb->task_state >= FIRST_ASSIGNED_STATE &&
       tcb->task_state <= LAST_ASSIGNED_STATE)
     {
       linesize   = procfs_snprintf(procfile->line, STATUS_LINELEN,
-                                   "%-12s%d\n", "CPU:", tcb->cpu);
+                                   "%-12s%03d(0x%08" PRIx32 ")\n", "CPU:",
+                                   tcb->cpu, tcb->affinity);
     }
   else
     {
       linesize   = procfs_snprintf(procfile->line, STATUS_LINELEN,
-                                   "%-12s---\n", "CPU:");
+                                   "%-12s---(0x%08" PRIx32 ")\n", "CPU:",
+                                   tcb->affinity);
     }
 
   copysize   = procfs_memcpy(procfile->line, linesize, buffer, remaining,
@@ -694,7 +724,7 @@ static ssize_t proc_cmdline(FAR struct proc_file_s *procfile,
 
   linesize   = nxtask_argvstr(tcb, procfile->line, sizeof(procfile->line));
   copysize   = procfs_memcpy(procfile->line, linesize, buffer,
-                             sizeof(procfile->line), &offset);
+                             remaining, &offset);
   totalsize += copysize;
   buffer    += copysize;
   remaining -= copysize;
@@ -775,6 +805,12 @@ static ssize_t proc_critmon(FAR struct proc_file_s *procfile,
 
   remaining = buflen;
   totalsize = 0;
+
+  UNUSED(maxtime);
+  UNUSED(runtime);
+  UNUSED(remaining);
+  UNUSED(linesize);
+  UNUSED(copysize);
 
   /* Convert the for maximum time pre-emption disabled */
 
@@ -1568,7 +1604,7 @@ static ssize_t proc_groupenv(FAR struct proc_file_s *procfile,
 
   /* Generate output for each environment variable */
 
-  env_foreach(group, proc_groupenv_callback, &info);
+  env_foreach(group->tg_info, proc_groupenv_callback, &info);
 
 #ifdef CONFIG_ARCH_ADDRENV
   if (tcb->addrenv_own != NULL)
@@ -1738,55 +1774,55 @@ static ssize_t proc_read(FAR struct file *filep, FAR char *buffer,
 
   switch (procfile->node->node)
     {
-    case PROC_STATUS: /* Task/thread status */
-      ret = proc_status(procfile, tcb, buffer, buflen, filep->f_pos);
-      break;
+      case PROC_STATUS: /* Task/thread status */
+        ret = proc_status(procfile, tcb, buffer, buflen, filep->f_pos);
+        break;
 
-    case PROC_CMDLINE: /* Task command line */
-      ret = proc_cmdline(procfile, tcb, buffer, buflen, filep->f_pos);
-      break;
+      case PROC_CMDLINE: /* Task command line */
+        ret = proc_cmdline(procfile, tcb, buffer, buflen, filep->f_pos);
+        break;
 
 #ifndef CONFIG_SCHED_CPULOAD_NONE
-    case PROC_LOADAVG: /* Average CPU utilization */
-      ret = proc_loadavg(procfile, tcb, buffer, buflen, filep->f_pos);
-      break;
+      case PROC_LOADAVG: /* Average CPU utilization */
+        ret = proc_loadavg(procfile, tcb, buffer, buflen, filep->f_pos);
+        break;
 #endif
 #ifdef CONFIG_SCHED_CRITMONITOR
-    case PROC_CRITMON: /* Critical section monitor */
-      ret = proc_critmon(procfile, tcb, buffer, buflen, filep->f_pos);
-      break;
+      case PROC_CRITMON: /* Critical section monitor */
+        ret = proc_critmon(procfile, tcb, buffer, buflen, filep->f_pos);
+        break;
 #endif
 #if CONFIG_MM_BACKTRACE >= 0
-    case PROC_HEAP: /* Task heap info */
-      ret = proc_heap(procfile, tcb, buffer, buflen, filep->f_pos);
-      break;
+      case PROC_HEAP: /* Task heap info */
+        ret = proc_heap(procfile, tcb, buffer, buflen, filep->f_pos);
+        break;
 #endif
 #ifdef CONFIG_DEBUG_MM
-    case PROC_HEAP_CHECK: /* Task heap check flag */
-      ret = proc_heapcheck(procfile, tcb, buffer, buflen, filep->f_pos);
-      break;
+      case PROC_HEAP_CHECK: /* Task heap check flag */
+        ret = proc_heapcheck(procfile, tcb, buffer, buflen, filep->f_pos);
+        break;
 #endif
-    case PROC_STACK: /* Task stack info */
-      ret = proc_stack(procfile, tcb, buffer, buflen, filep->f_pos);
-      break;
+      case PROC_STACK: /* Task stack info */
+        ret = proc_stack(procfile, tcb, buffer, buflen, filep->f_pos);
+        break;
 
-    case PROC_GROUP_STATUS: /* Task group status */
-      ret = proc_groupstatus(procfile, tcb, buffer, buflen, filep->f_pos);
-      break;
+      case PROC_GROUP_STATUS: /* Task group status */
+        ret = proc_groupstatus(procfile, tcb, buffer, buflen, filep->f_pos);
+        break;
 
-    case PROC_GROUP_FD: /* Group file descriptors */
-      ret = proc_groupfd(procfile, tcb, buffer, buflen, filep->f_pos);
-      break;
+      case PROC_GROUP_FD: /* Group file descriptors */
+        ret = proc_groupfd(procfile, tcb, buffer, buflen, filep->f_pos);
+        break;
 
 #if !defined(CONFIG_DISABLE_ENVIRON) && !defined(CONFIG_FS_PROCFS_EXCLUDE_ENVIRON)
-    case PROC_GROUP_ENV: /* Group environment variables */
-      ret = proc_groupenv(procfile, tcb, buffer, buflen, filep->f_pos);
-      break;
+      case PROC_GROUP_ENV: /* Group environment variables */
+        ret = proc_groupenv(procfile, tcb, buffer, buflen, filep->f_pos);
+        break;
 #endif
 
-     default:
-      ret = -EINVAL;
-      break;
+      default:
+        ret = -EINVAL;
+        break;
     }
 
   leave_critical_section(flags);
@@ -2083,18 +2119,18 @@ static int proc_readdir(FAR struct fs_dirent_s *dir,
 
       switch (procdir->node->node)
         {
-         case PROC_LEVEL0: /* Top level directory */
-           DEBUGASSERT(procdir->base.level == 1);
-           node = g_level0info[index];
-           break;
+          case PROC_LEVEL0: /* Top level directory */
+            DEBUGASSERT(procdir->base.level == 1);
+            node = g_level0info[index];
+            break;
 
-         case PROC_GROUP:  /* Group sub-directory */
-           DEBUGASSERT(procdir->base.level == 2);
-           node = g_groupinfo[index];
-           break;
+          case PROC_GROUP:  /* Group sub-directory */
+            DEBUGASSERT(procdir->base.level == 2);
+            node = g_groupinfo[index];
+            break;
 
-         default:
-           return -ENOENT;
+          default:
+            return -ENOENT;
         }
 
       /* Save the filename and file type */
@@ -2196,11 +2232,25 @@ static int proc_stat(const char *relpath, struct stat *buf)
   /* Was the <pid> the final element of the path? */
 
   memset(buf, 0, sizeof(struct stat));
+
+#ifdef CONFIG_SCHED_USER_IDENTITY
+  /* The directory and its files belong to the effective user and group of
+   * the task group.
+   */
+
+  if (tcb->group != NULL)
+    {
+      buf->st_uid = tcb->group->tg_euid;
+      buf->st_gid = tcb->group->tg_egid;
+    }
+#endif
+
   if (*ptr == '\0' || strcmp(ptr, "/") == 0)
     {
       /* Yes ... It's a read-only directory */
 
-      buf->st_mode = S_IFDIR | S_IROTH | S_IRGRP | S_IRUSR;
+      buf->st_mode = S_IFDIR | S_IROTH | S_IRGRP | S_IRUSR |
+                     S_IXOTH | S_IXGRP | S_IXUSR;
     }
 
   /* Verify that the process ID is followed by valid path segment delimiter */
@@ -2241,7 +2291,8 @@ static int proc_stat(const char *relpath, struct stat *buf)
         }
       else
         {
-          buf->st_mode = S_IFDIR | S_IROTH | S_IRGRP | S_IRUSR;
+          buf->st_mode = S_IFDIR | S_IROTH | S_IRGRP | S_IRUSR |
+                         S_IXOTH | S_IXGRP | S_IXUSR;
         }
     }
 
@@ -2253,4 +2304,3 @@ static int proc_stat(const char *relpath, struct stat *buf)
  ****************************************************************************/
 
 #endif /* CONFIG_FS_PROCFS_EXCLUDE_PROCESS */
-#endif /* !CONFIG_DISABLE_MOUNTPOINT && CONFIG_FS_PROCFS */

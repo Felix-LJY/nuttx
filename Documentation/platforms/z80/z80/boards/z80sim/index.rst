@@ -1,6 +1,8 @@
-======
-z80sim
-======
+======================================
+Z80 Instruction Set Simulator (z80sim)
+======================================
+
+.. tags:: arch:z80, chip:z80, vendor:zilog
 
 z80 Microcontroller.  This port uses a Z80 instruction set simulator
 called z80sim.  This port also uses the SDCC toolchain

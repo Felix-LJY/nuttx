@@ -29,18 +29,20 @@
 #include <sys/select.h>
 #include <sys/time.h>
 
-#include <string.h>
-#include <poll.h>
-#include <errno.h>
 #include <assert.h>
+#include <errno.h>
+#include <limits.h>
+#include <poll.h>
+#include <string.h>
+#include <nuttx/clock.h>
 #include <nuttx/debug.h>
 
 #include <nuttx/kmalloc.h>
 #include <nuttx/cancelpt.h>
 #include <nuttx/fs/fs.h>
+#include <nuttx/lib/lib.h>
 
 #include "inode/inode.h"
-#include "fs_heap.h"
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -104,9 +106,46 @@ int select(int nfds, FAR fd_set *readfds, FAR fd_set *writefds,
       return ERROR;
     }
 
+  /* Convert the timeout to milliseconds */
+
+  if (timeout != NULL)
+    {
+      if (timeout->tv_sec < 0 || timeout->tv_usec < 0 ||
+          timeout->tv_usec >= USEC_PER_SEC)
+        {
+          set_errno(EINVAL);
+          return ERROR;
+        }
+
+      /* Calculate the timeout in milliseconds, clamping to INT_MAX
+       * to prevent integer overflow.
+       */
+
+      if (timeout->tv_sec > (INT_MAX - 1000) / 1000)
+        {
+          msec = INT_MAX;
+        }
+      else
+        {
+          msec = timeout->tv_sec * 1000 + (timeout->tv_usec + 999) / 1000;
+        }
+    }
+  else
+    {
+      /* Any negative value of msec means no timeout */
+
+      msec = -1;
+    }
+
 #ifdef CONFIG_FDCHECK
   nfds = fdcheck_restore(nfds - 1) + 1;
 #endif
+
+  if (nfds < 0 || nfds > FD_SETSIZE)
+    {
+      set_errno(EINVAL);
+      return ERROR;
+    }
 
   /* How many pollfd structures do we need to allocate? */
 
@@ -131,13 +170,15 @@ int select(int nfds, FAR fd_set *readfds, FAR fd_set *writefds,
   if (npfds > 0)
     {
       pollset = (FAR struct pollfd *)
-        fs_heap_zalloc(npfds * sizeof(struct pollfd));
+        lib_get_tempbuffer(npfds * sizeof(struct pollfd));
 
       if (pollset == NULL)
         {
           set_errno(ENOMEM);
           return ERROR;
         }
+
+      memset(pollset, 0, npfds * sizeof(struct pollfd));
     }
 
   /* Initialize the descriptor list for poll() */
@@ -198,21 +239,6 @@ int select(int nfds, FAR fd_set *readfds, FAR fd_set *writefds,
 
   DEBUGASSERT(ndx == npfds);
 
-  /* Convert the timeout to milliseconds */
-
-  if (timeout)
-    {
-      /* Calculate the timeout in milliseconds */
-
-      msec = timeout->tv_sec * 1000 + (timeout->tv_usec + 999) / 1000;
-    }
-  else
-    {
-      /* Any negative value of msec means no timeout */
-
-      msec = -1;
-    }
-
   /* Then let poll do all of the real work. */
 
   ret = poll(pollset, npfds, msec);
@@ -245,11 +271,16 @@ int select(int nfds, FAR fd_set *readfds, FAR fd_set *writefds,
            * read condition.  POLLHUP will be reported when no more data will
            * be available (such as when a connection is lost).  In either
            * case, the read() can then be performed without blocking.
+           *
+           * POLLERR is a read and a write condition too: a read() or a
+           * write() then returns at once, with an error.  poll() reports
+           * POLLHUP and POLLERR even when they were not asked for, so set
+           * only the bits that the caller asked for.
            */
 
-          if (readfds)
+          if (readfds && (pollset[ndx].events & POLLIN) != 0)
             {
-              if (pollset[ndx].revents & (POLLIN | POLLHUP))
+              if (pollset[ndx].revents & (POLLIN | POLLHUP | POLLERR))
                 {
                   FD_SET(pollset[ndx].fd, readfds);
                   ret++;
@@ -258,9 +289,9 @@ int select(int nfds, FAR fd_set *readfds, FAR fd_set *writefds,
 
           /* Check for write conditions */
 
-          if (writefds)
+          if (writefds && (pollset[ndx].events & POLLOUT) != 0)
             {
-              if (pollset[ndx].revents & (POLLOUT | POLLHUP))
+              if (pollset[ndx].revents & (POLLOUT | POLLHUP | POLLERR))
                 {
                   FD_SET(pollset[ndx].fd, writefds);
                   ret++;
@@ -280,6 +311,10 @@ int select(int nfds, FAR fd_set *readfds, FAR fd_set *writefds,
         }
     }
 
-  fs_heap_free(pollset);
+  if (pollset != NULL)
+    {
+      lib_put_tempbuffer(pollset);
+    }
+
   return ret;
 }

@@ -29,13 +29,20 @@
 
 #include <stdint.h>
 
-#include <nuttx/list.h>
+#include <nuttx/fs/ioctl.h>
+#include <nuttx/queue.h>
 #include <nuttx/spinlock.h>
 #include <nuttx/virtio/virtio-config.h>
 
-#ifdef CONFIG_OPENAMP
+/****************************************************************************
+ * Pre-processor Definitions
+ ****************************************************************************/
 
-#include <openamp/open_amp.h>
+/* VirtIO ioctl command definitions */
+
+#define VIRTIOIOC_DUMP        _VIRTIOIOC(1)
+
+#ifdef CONFIG_OPENAMP
 
 /****************************************************************************
  * Public Type Definitions
@@ -44,10 +51,11 @@
 #ifdef CONFIG_DRIVERS_VIRTIO
 struct virtio_driver
 {
-  struct list_node   node;
   uint32_t           device;   /* device id */
   CODE int         (*probe)(FAR struct virtio_device *vdev);
   CODE void        (*remove)(FAR struct virtio_device *vdev);
+  CODE void        (*dump)(FAR struct virtio_device *vdev);
+  struct dq_entry_s  node;
 };
 #endif
 
@@ -69,9 +77,9 @@ virtqueue_add_buffer_lock(FAR struct virtqueue *vq,
   irqstate_t flags;
   int ret;
 
-  flags = spin_lock_irqsave(lock);
+  flags = spin_lock_irqsave_notrace(lock);
   ret = virtqueue_add_buffer(vq, buf_list, readable, writable, cookie);
-  spin_unlock_irqrestore(lock, flags);
+  spin_unlock_irqrestore_notrace(lock, flags);
 
   return ret;
 }
@@ -87,9 +95,9 @@ virtqueue_get_buffer_lock(FAR struct virtqueue *vq, FAR uint32_t *len,
   irqstate_t flags;
   FAR void *ret;
 
-  flags = spin_lock_irqsave(lock);
+  flags = spin_lock_irqsave_notrace(lock);
   ret = virtqueue_get_buffer(vq, len, idx);
-  spin_unlock_irqrestore(lock, flags);
+  spin_unlock_irqrestore_notrace(lock, flags);
 
   return ret;
 }
@@ -106,9 +114,9 @@ virtqueue_get_available_buffer_lock(FAR struct virtqueue *vq,
   irqstate_t flags;
   FAR void *ret;
 
-  flags = spin_lock_irqsave(lock);
+  flags = spin_lock_irqsave_notrace(lock);
   ret = virtqueue_get_first_avail_buffer(vq, avail_idx, len);
-  spin_unlock_irqrestore(lock, flags);
+  spin_unlock_irqrestore_notrace(lock, flags);
 
   return ret;
 }
@@ -125,9 +133,9 @@ virtqueue_add_consumed_buffer_lock(FAR struct virtqueue *vq,
   irqstate_t flags;
   int ret;
 
-  flags = spin_lock_irqsave(lock);
+  flags = spin_lock_irqsave_notrace(lock);
   ret = virtqueue_add_consumed_buffer(vq, head_idx, len);
-  spin_unlock_irqrestore(lock, flags);
+  spin_unlock_irqrestore_notrace(lock, flags);
 
   return ret;
 }
@@ -141,9 +149,9 @@ virtqueue_disable_cb_lock(FAR struct virtqueue *vq, FAR spinlock_t *lock)
 {
   irqstate_t flags;
 
-  flags = spin_lock_irqsave(lock);
+  flags = spin_lock_irqsave_notrace(lock);
   virtqueue_disable_cb(vq);
-  spin_unlock_irqrestore(lock, flags);
+  spin_unlock_irqrestore_notrace(lock, flags);
 }
 
 /****************************************************************************
@@ -156,9 +164,9 @@ static inline_function int virtqueue_enable_cb_lock(FAR struct virtqueue *vq,
   irqstate_t flags;
   int ret;
 
-  flags = spin_lock_irqsave(lock);
+  flags = spin_lock_irqsave_notrace(lock);
   ret = virtqueue_enable_cb(vq);
-  spin_unlock_irqrestore(lock, flags);
+  spin_unlock_irqrestore_notrace(lock, flags);
 
   return ret;
 }
@@ -172,9 +180,9 @@ static inline_function void virtqueue_kick_lock(FAR struct virtqueue *vq,
 {
   irqstate_t flags;
 
-  flags = spin_lock_irqsave(lock);
+  flags = spin_lock_irqsave_notrace(lock);
   virtqueue_kick(vq);
-  spin_unlock_irqrestore(lock, flags);
+  spin_unlock_irqrestore_notrace(lock, flags);
 }
 
 static inline_function FAR void *
@@ -213,11 +221,8 @@ virtio_zalloc_buf(FAR struct virtio_device *vdev, size_t size, size_t align)
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /* Driver and device register/unregister function */
@@ -228,11 +233,27 @@ int virtio_register_device(FAR struct virtio_device *device);
 int virtio_unregister_driver(FAR struct virtio_driver *driver);
 int virtio_unregister_device(FAR struct virtio_device *device);
 
-/* Virtio driver initailied function, called in NuttX driver_intialize() */
+/* VirtIO driver initailied function, called in NuttX driver_intialize() */
 
 void virtio_register_drivers(void);
 
-#undef EXTERN
+/* Buffer map ops for MMIO/PCI with per-process address environments */
+
+#ifdef CONFIG_ARCH_ADDRENV
+size_t virtio_addrenv_free_largest(FAR struct virtio_device *vdev);
+FAR void *virtio_addrenv_map(FAR struct virtio_device *vdev, FAR void *buf,
+                             size_t len, enum virtio_dma_map dir);
+void virtio_addrenv_unmap(FAR struct virtio_device *vdev, FAR void *buf,
+                          size_t len, enum virtio_dma_map dir,
+                          FAR void *mapped);
+#endif
+
+FAR void *virtio_get_next_buffer(FAR struct virtqueue *vq, uint16_t idx,
+                                 FAR uint16_t *next_idx,
+                                 FAR uint32_t *next_len);
+ssize_t virtio_get_buffers(FAR struct virtqueue *vq,
+                           FAR struct virtqueue_buf *vb, size_t vbcnt);
+
 #ifdef __cplusplus
 }
 #endif

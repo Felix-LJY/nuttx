@@ -61,9 +61,9 @@ POSIX.1 Option Requirements:
 +-------------------------------------------------+-------------+----------------------------------+
 |`_POSIX_REALTIME_SIGNALS`_                       | 201712L     |                                  |
 +-------------------------------------------------+-------------+----------------------------------+
-|`_POSIX_SEMAPHORES`_                             | 201712L     |                                  |
+|`_POSIX_SEMAPHORES`_                             | 201712L     | ``CONFIG_FS_NAMED_SEMAPHORES``   |
 +-------------------------------------------------+-------------+----------------------------------+
-|`_POSIX_SHARED_MEMORY_OBJECTS`_                  | 201712L     |                                  |
+|`_POSIX_SHARED_MEMORY_OBJECTS`_                  | 201712L     | ``CONFIG_FS_SHMFS``              |
 +-------------------------------------------------+-------------+----------------------------------+
 |`_POSIX_SYNCHRONIZED_IO`_                        | Yes         |                                  |
 +-------------------------------------------------+-------------+----------------------------------+
@@ -71,7 +71,7 @@ POSIX.1 Option Requirements:
 +-------------------------------------------------+-------------+----------------------------------+
 |`_POSIX_THREAD_ATTR_STACKSIZE`_                  | Yes         |                                  |
 +-------------------------------------------------+-------------+----------------------------------+
-|`_POSIX_THREAD_CPUTIME`_                         | 201712L     |                                  |
+|`_POSIX_THREAD_CPUTIME`_                         | 201712L     | ``CONFIG_SCHED_CRITMONITOR``     |
 +-------------------------------------------------+-------------+----------------------------------+
 |`_POSIX_THREAD_PRIO_INHERIT`_                    | Yes         | ``CONFIG_PRIORITY_INHERITANCE``  |
 +-------------------------------------------------+-------------+----------------------------------+
@@ -132,7 +132,7 @@ POSIX.1 Option Requirements
 +------------------------------------+---------+----------------------------+
 | Symbol                             | Support | Remarks                    |
 +====================================+=========+============================+
-| `_POSIX_MAPPED_FILES`_             | 201712L |                            |
+| `_POSIX_MAPPED_FILES`_             | 201712L | ``CONFIG_FS_RAMMAP``       |
 +------------------------------------+---------+----------------------------+
 | `_POSIX_MESSAGE_PASSING`_          | Yes     | ``!CONFIG_DISABLE_MQUEUE`` |
 +------------------------------------+---------+----------------------------+
@@ -176,7 +176,7 @@ POSIX.1 Option Requirements
 +=================================+=============+===========================+
 | `_POSIX_ASYNCHRONOUS_IO`_       | 201712L     | ``CONFIG_FS_AIO``         |
 +---------------------------------+-------------+---------------------------+
-| `_POSIX_CPUTIME`_               | 201712L     |                           |
+| `_POSIX_CPUTIME`_               | 201712L     | [#fn9b]_                  |
 +---------------------------------+-------------+---------------------------+
 | `_POSIX_MEMORY_PROTECTION`_     | Yes [#fn9]_ |                           |
 +---------------------------------+-------------+---------------------------+
@@ -190,12 +190,16 @@ POSIX.1 Option Requirements
 +---------------------------------+-------------+---------------------------+
 | `_POSIX_SPORADIC_SERVER`_       | Yes         | ``CONFIG_SCHED_SPORADIC`` |
 +---------------------------------+-------------+---------------------------+
-| `_POSIX_THREAD_PROCESS_SHARED`_ | 201712L     |                           |
+| `_POSIX_THREAD_PROCESS_SHARED`_ | 201712L     | [#fn9a]_                  |
 +---------------------------------+-------------+---------------------------+
 
-.. [#fn9] NuttX provides dummy implementations for ``_POSIX_MEMORY_PROTECTION``
-          which is sufficient for devices without MMU, but doesn't meet the
-          requirement for devices with MMU.
+.. [#fn9] ``mprotect()`` changes the page permissions only with
+          ``CONFIG_ARCH_ADDRENV`` on arm64 and RISC-V.  On other targets it
+          checks the arguments and changes nothing, which is sufficient for
+          devices without MMU.
+.. [#fn9a] A kernel build needs shared memory: ``CONFIG_FS_SHMFS`` or
+           ``CONFIG_MM_SHM``.
+.. [#fn9b] ``CONFIG_SCHED_CRITMONITOR`` (CPU-time accounting).
 
 POSIX PSE54 - Multipurpose
 --------------------------
@@ -217,7 +221,7 @@ Units of Functionality Requirements:
 +------------------------------+---------+--------------------------------+
 | `POSIX_FILE_SYSTEM_EXT`_     | Yes     |                                |
 +------------------------------+---------+--------------------------------+
-| `POSIX_JOB_CONTROL`_         | 1/4     |                                |
+| `POSIX_JOB_CONTROL`_         | Yes     | ``CONFIG_SCHED_PROCESS_GROUPS``|
 +------------------------------+---------+--------------------------------+
 | `POSIX_REGEXP`_              | Yes     |                                |
 +------------------------------+---------+--------------------------------+
@@ -250,7 +254,7 @@ POSIX.1 Option Requirements
 +-----------------------------+---------+---------+
 | `_POSIX_SAVED_IDS`_         | No      |         |
 +-----------------------------+---------+---------+
-| `_POSIX_VDISABLE`_          | No      |         |
+| `_POSIX_VDISABLE`_          | Yes     |         |
 +-----------------------------+---------+---------+
 | `_POSIX2_CHAR_TERM`_        | ?       |         |
 +-----------------------------+---------+---------+
@@ -639,7 +643,7 @@ Single Process:
 +--------------------------------+---------+
 | :c:func:`getenv`               | Yes     |
 +--------------------------------+---------+
-| secure_getenv()                | No      |
+| secure_getenv()                | Yes     |
 +--------------------------------+---------+
 | :c:func:`setenv`               | Yes     |
 +--------------------------------+---------+
@@ -743,6 +747,8 @@ Base Threads:
 | :c:func:`pthread_setspecific`           | Yes     |
 +-----------------------------------------+---------+
 | :c:func:`pthread_sigmask`               | Yes     |
++-----------------------------------------+---------+
+| :c:func:`pthread_sigqueue`              | Yes     |
 +-----------------------------------------+---------+
 | :c:func:`pthread_testcancel`            | Yes     |
 +-----------------------------------------+---------+
@@ -1325,12 +1331,17 @@ POSIX_FILE_SYSTEM
 
 File System:
 
+``chroot()`` is supported when ``CONFIG_FS_CHROOT`` is enabled.  See
+:ref:`chroot`.
+
 +--------------------------------+---------+
 | API                            | Support |
 +================================+=========+
 | :c:func:`access`               | Yes     |
 +--------------------------------+---------+
 | :c:func:`chdir`                | Yes     |
++--------------------------------+---------+
+| :c:func:`chroot`               | Yes     |
 +--------------------------------+---------+
 | :c:func:`closedir`             | Yes     |
 +--------------------------------+---------+
@@ -1433,13 +1444,13 @@ Multiple Processes:
 +--------------------------------+---------+
 | :c:func:`getrlimit`            | Yes     |
 +--------------------------------+---------+
-| getsid()                       | No      |
+| getsid()                       | Yes     |
 +--------------------------------+---------+
 | :c:func:`quick_exit`           | Yes     |
 +--------------------------------+---------+
 | :c:func:`setrlimit`            | Yes     |
 +--------------------------------+---------+
-| setsid()                       | No      |
+| setsid()                       | Yes     |
 +--------------------------------+---------+
 | :c:func:`sleep`                | Yes     |
 +--------------------------------+---------+
@@ -1760,6 +1771,31 @@ Wide-Character ISO C Library:
 | wmemset()                      | Yes     |
 +--------------------------------+---------+
 
+POSIX_C_LANG_WIDE_CHAR_EXT
+--------------------------
+
+Extended Wide-Character ISO C Library:
+
++--------------------------------+---------+
+| API                            | Support |
++================================+=========+
+| mbsnrtowcs()                   | Yes     |
++--------------------------------+---------+
+| wcpcpy()                       | Yes     |
++--------------------------------+---------+
+| wcpncpy()                      | Yes     |
++--------------------------------+---------+
+| wcscasecmp()                   | Yes     |
++--------------------------------+---------+
+| wcsdup()                       | Yes     |
++--------------------------------+---------+
+| wcsncasecmp()                  | Yes     |
++--------------------------------+---------+
+| wcsnlen()                      | Yes     |
++--------------------------------+---------+
+| wcsnrtombs()                   | Yes     |
++--------------------------------+---------+
+
 POSIX_DEVICE_SPECIFIC
 ---------------------
 
@@ -1776,7 +1812,7 @@ General Terminal:
 +--------------------------------+---------+
 | :c:func:`cfsetospeed`          | Yes     |
 +--------------------------------+---------+
-| ctermid()                      | No      |
+| ctermid()                      | Yes     |
 +--------------------------------+---------+
 | :c:func:`isatty`               | Yes     |
 +--------------------------------+---------+
@@ -1858,11 +1894,11 @@ Job Control:
 +--------------------------------+---------+
 | API                            | Support |
 +================================+=========+
-| setpgid()                      | No      |
+| setpgid()                      | Yes     |
 +--------------------------------+---------+
-| tcgetpgrp()                    | No      |
+| tcgetpgrp()                    | Yes     |
 +--------------------------------+---------+
-| tcsetpgrp()                    | No      |
+| tcsetpgrp()                    | Yes     |
 +--------------------------------+---------+
 | :c:func:`tcgetsid`             | Yes     |
 +--------------------------------+---------+
@@ -1974,7 +2010,7 @@ User and Group:
 +--------------------------------+---------+
 | :c:func:`getgroups`            | Yes     |
 +--------------------------------+---------+
-| getlogin()                     | No      |
+| getlogin()                     | Yes     |
 +--------------------------------+---------+
 | :c:func:`getuid`               | Yes     |
 +--------------------------------+---------+
@@ -2044,7 +2080,7 @@ XSI General C Library:
 +================================+=========+
 | a64l()                         | No      |
 +--------------------------------+---------+
-| daylight                       | No      |
+| daylight                       | Yes     |
 +--------------------------------+---------+
 | :c:func:`drand48`              | Yes     |
 +--------------------------------+---------+
@@ -2066,7 +2102,7 @@ XSI General C Library:
 +--------------------------------+---------+
 | initstate()                    | No      |
 +--------------------------------+---------+
-| insque()                       | No      |
+| insque()                       | Yes     |
 +--------------------------------+---------+
 | :c:func:`jrand48`              | Yes     |
 +--------------------------------+---------+
@@ -2074,11 +2110,11 @@ XSI General C Library:
 +--------------------------------+---------+
 | :c:func:`lcong48`              | Yes     |
 +--------------------------------+---------+
-| lfind()                        | No      |
+| lfind()                        | Yes     |
 +--------------------------------+---------+
 | :c:func:`lrand48`              | Yes     |
 +--------------------------------+---------+
-| lsearch()                      | No      |
+| lsearch()                      | Yes     |
 +--------------------------------+---------+
 | :c:func:`memccpy`              | Yes     |
 +--------------------------------+---------+
@@ -2088,7 +2124,7 @@ XSI General C Library:
 +--------------------------------+---------+
 | :c:func:`random`               | Yes     |
 +--------------------------------+---------+
-| remque()                       | No      |
+| remque()                       | Yes     |
 +--------------------------------+---------+
 | :c:func:`seed48`               | Yes     |
 +--------------------------------+---------+
@@ -2104,15 +2140,15 @@ XSI General C Library:
 +--------------------------------+---------+
 | :c:func:`swab`                 | Yes     |
 +--------------------------------+---------+
-| tdelete()                      | No      |
+| :c:func:`tdelete`              | Yes     |
 +--------------------------------+---------+
-| tfind()                        | No      |
+| :c:func:`tfind`                | Yes     |
 +--------------------------------+---------+
-| timezone                       | No      |
+| timezone                       | Yes     |
 +--------------------------------+---------+
-| tsearch()                      | No      |
+| :c:func:`tsearch`              | Yes     |
 +--------------------------------+---------+
-| twalk()                        | No      |
+| :c:func:`twalk`                | Yes     |
 +--------------------------------+---------+
 
 XSI_DBM
@@ -2350,11 +2386,11 @@ XSI Multiple Process:
 +--------------------------------+---------+
 | :c:func:`getrusage`            | Yes     |
 +--------------------------------+---------+
-| getsid()                       | No      |
+| getsid()                       | Yes     |
 +--------------------------------+---------+
 | :c:func:`nice`                 | Yes     |
 +--------------------------------+---------+
-| setpgrp()                      | No      |
+| :c:func:`setpgrp`              | Yes     |
 +--------------------------------+---------+
 | :c:func:`setpriority`          | Yes     |
 +--------------------------------+---------+
@@ -2436,9 +2472,9 @@ XSI System Logging:
 +--------------------------------+---------+
 | API                            | Support |
 +================================+=========+
-| :c:func:`closelog`             | No      |
+| :c:func:`closelog`             | Yes     |
 +--------------------------------+---------+
-| :c:func:`openlog`              | No      |
+| :c:func:`openlog`              | Yes     |
 +--------------------------------+---------+
 | :c:func:`setlogmask`           | Yes     |
 +--------------------------------+---------+
@@ -2475,6 +2511,10 @@ XSI Timers:
 | :c:func:`setitimer`            | Yes     |
 +--------------------------------+---------+
 
+``ITIMER_VIRTUAL`` and ``ITIMER_PROF`` need ``CONFIG_SCHED_CRITMONITOR``.
+Both count the CPU time of the process: NuttX does not count the user time
+and the system time separately.
+
 XSI_USER_GROUPS
 ---------------
 
@@ -2483,11 +2523,11 @@ XSI User and Group:
 +--------------------------------+---------+
 | API                            | Support |
 +================================+=========+
-| endgrent()                     | No      |
+| endgrent()                     | Yes     |
 +--------------------------------+---------+
 | endutxent()                    | No      |
 +--------------------------------+---------+
-| getgrent()                     | No      |
+| getgrent()                     | Yes     |
 +--------------------------------+---------+
 | getutxent()                    | No      |
 +--------------------------------+---------+
@@ -2497,7 +2537,7 @@ XSI User and Group:
 +--------------------------------+---------+
 | pututxline()                   | No      |
 +--------------------------------+---------+
-| setgrent()                     | No      |
+| setgrent()                     | Yes     |
 +--------------------------------+---------+
 | :c:func:`setregid`             | Yes     |
 +--------------------------------+---------+
@@ -2907,8 +2947,13 @@ _POSIX_CPUTIME
 +--------------------------------+---------+
 | API                            | Support |
 +================================+=========+
+| CLOCK_PROCESS_CPUTIME_ID       | Yes     |
++--------------------------------+---------+
 | :c:func:`clock_getcpuclockid`  | Yes     |
 +--------------------------------+---------+
+
+``timer_create()`` takes the CPU-time clocks of ``_POSIX_CPUTIME`` and
+``_POSIX_THREAD_CPUTIME``.
 
 _POSIX_MEMORY_PROTECTION
 ------------------------
@@ -2916,11 +2961,16 @@ _POSIX_MEMORY_PROTECTION
 +--------------------------------+----------------+
 | API                            | Support        |
 +================================+================+
-| :c:func:`mprotect`             | Dummy [#fn17]_ |
+| :c:func:`mprotect`             | Yes [#fn17]_   |
 +--------------------------------+----------------+
 
-.. [#fn17] The function returns a success value but doesn't implement
-           the required functionality.
+.. [#fn17] All builds return ``EINVAL`` when ``addr`` is not a multiple of
+           ``sysconf(_SC_PAGESIZE)`` or ``prot`` has an unknown bit.  With
+           ``CONFIG_ARCH_ADDRENV`` on arm64 and RISC-V the function changes
+           the page permissions, and returns ``ENOMEM`` when a page of the
+           range is not mapped.  Other configurations return a success value
+           for a valid request and change nothing: without an MMU the
+           permissions cannot be enforced.
 
 _POSIX_PRIORITIZED_IO
 ---------------------
@@ -2987,7 +3037,7 @@ Depends on ``CONFIG_BUILD_KERNEL``.
 +---------------------------------------------+---------+
 | :c:func:`posix_spawnattr_getflags`          | Yes     |
 +---------------------------------------------+---------+
-| :c:func:`posix_spawnattr_getpgroup`         | No      |
+| :c:func:`posix_spawnattr_getpgroup`         | Yes     |
 +---------------------------------------------+---------+
 | :c:func:`posix_spawnattr_getsigdefault`     | No      |
 +---------------------------------------------+---------+
@@ -2997,7 +3047,7 @@ Depends on ``CONFIG_BUILD_KERNEL``.
 +---------------------------------------------+---------+
 | :c:func:`posix_spawnattr_setflags`          | Yes     |
 +---------------------------------------------+---------+
-| :c:func:`posix_spawnattr_setpgroup`         | No      |
+| :c:func:`posix_spawnattr_setpgroup`         | Yes     |
 +---------------------------------------------+---------+
 | :c:func:`posix_spawnattr_setsigdefault`     | No      |
 +---------------------------------------------+---------+
@@ -3009,7 +3059,12 @@ Depends on ``CONFIG_BUILD_KERNEL``.
 _POSIX_SPIN_LOCKS
 -----------------
 
-Depends on ``CONFIG_PTHREAD_SPINLOCKS``.
+Depends on ``CONFIG_PTHREAD_SPINLOCKS``.  A spin lock is an atomic
+variable in the memory of the program: the functions need no system call,
+also in protected and kernel builds.  Outside a flat build, the option
+needs atomic operations that work in user mode
+(``CONFIG_LIBC_ATOMIC_TOOLCHAIN`` or ``CONFIG_LIBC_ATOMIC_ARCH``).  Prefer
+a mutex: a spin lock only helps on SMP, with very short critical sections.
 
 +--------------------------------+---------+
 | API                            | Support |

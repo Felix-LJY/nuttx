@@ -1,8 +1,8 @@
-===
-SIM
-===
+======================
+NuttX Simulation (SIM)
+======================
 
-.. tags:: arch:sim
+.. tags:: arch:sim, chip:sim
 
 This documentation page describes the contents of the build configurations
 available for the NuttX "sim" target. The sim target is a NuttX port that runs
@@ -41,6 +41,8 @@ Timing Fidelity
    Another option is to use ``CONFIG_SIM_WALLTIME_SLEEP`` which will enable the
    tick events to be delayed from the Idle task by using a host sleep call.
 
+.. _sim_babblesim_time:
+
 BabbleSim Discrete Time
 -----------------------
 
@@ -77,6 +79,9 @@ launching the NuttX simulator.
 
 The runtime options override ``CONFIG_SIM_BSIM_SIM_ID``,
 ``CONFIG_SIM_BSIM_PHY_ID``, and ``CONFIG_SIM_BSIM_DEVICE_NBR``.
+
+For a complete two-device Bluetooth example using virtual Controllers,
+see :ref:`simulator_bluetooth_testing`.
 
 Debugging
 =========
@@ -733,6 +738,17 @@ The process listening on the socket must be started before NuttX. If that
 process opens a real UART device, it still needs permission to access that UART
 device.
 
+For advertising, scanning, and connection tests without Bluetooth hardware,
+see :ref:`simulator_bluetooth_testing`.
+
+bridge
+------
+
+Ethernet bridge test configuration with two TAP network devices, the bridge
+support (``CONFIG_NET_BRIDGE``), ``brctl``, ``ping`` and ``iperf``.  The
+network devices stay down at boot.  See :doc:`/os/networking/bridge` for how
+to bridge the two TAP devices and test the bridge from the Linux host.
+
 configdata
 ----------
 
@@ -908,6 +924,32 @@ mtdrwb
 
 This is the ``apps/examples/mtdrwb`` test using a MTD RAM driver to simulate the
 FLASH part.
+
+mw
+--
+
+Microwindows demo configuration using virtual keyboard (event mode),
+touchscreen, and X11-based framebuffer.
+
+Build the demo with::
+
+   cd nuttx
+   tools/configure.sh sim:mw
+   make -j$(nproc)
+
+This builds a host-native ``./nuttx`` binary that opens an X11 window.
+Keyboard input goes to the window that has focus; touch events are generated
+by mouse clicks within the window.  See
+:doc:`/applications/graphics/microwindows/index` for Microwindows details.
+
+nanox
+-----
+
+Nano-X configuration that boots directly into the ``nxterm`` terminal
+emulator, using virtual keyboard (event mode), touchscreen, and
+framebuffer.  Typing ``nanoxcalc`` inside the terminal starts the
+calculator demo.  See :doc:`/applications/graphics/microwindows/index`
+for details.
 
 nettest
 -------
@@ -1120,6 +1162,84 @@ Of course, this configuration can only be used in environments that support X11!
 
       -CONFIG_EXAMPLES_NXTERM=n
       +CONFIG_EXAMPLES_NXTERM=y
+
+nxcamera
+--------
+
+This configuration tests the V4L2 drivers. The sim camera driver
+(``CONFIG_SIM_CAMERA``) opens the V4L2 capture devices of the host and
+registers each one as ``/dev/videoN`` in the simulator, and ``nxcamera``
+streams frames from such a device to the framebuffer or to a file.
+
+**Capture**
+
+A host without a camera can use the ``v4l2loopback`` module, fed with a test
+pattern by FFmpeg:
+
+.. code:: console
+
+   $ sudo modprobe v4l2loopback
+   $ ffmpeg -re -f lavfi -i testsrc=size=640x480:rate=30 \
+       -pix_fmt yuv420p -f v4l2 /dev/video0
+
+To write ten frames to a file on the host, enable ``CONFIG_FS_HOSTFS`` and
+``CONFIG_SIM_HOSTFS`` and run:
+
+.. code:: console
+
+   nsh> mount -t hostfs -o fs=/tmp /host
+   nsh> nxcamera
+   nxcamera> input /dev/video0
+   nxcamera> output /host/frames.yuv 10
+   nxcamera> stream 640 480 30 YU12
+   nxcamera> q
+
+``frames.yuv`` then holds ten 640x480 YUV 4:2:0 frames.
+
+**Memory-to-memory decoding**
+
+The sim decoder (``CONFIG_SIM_VIDEO_DECODER``) is a V4L2 memory-to-memory
+device, ``/dev/video1`` by default, that decodes H.264 with OpenH264. On top of
+this configuration it needs:
+
+* ``CONFIG_VIDEOUTILS_OPENH264`` and ``CONFIG_SIM_VIDEO_DECODER``
+* ``CONFIG_HAVE_CXX`` and ``CONFIG_HAVE_CXXINITIALIZE``, for the C++ runtime
+  OpenH264 uses (the default minimal C++ library is enough)
+* ``CONFIG_SYSTEM_NXCODEC``, ``CONFIG_FS_HOSTFS`` and ``CONFIG_SIM_HOSTFS``
+* ``CONFIG_NSH_MAXARGUMENTS=16``, for the ``nxcodec`` command line
+
+Create a stream on the host:
+
+.. code:: console
+
+   $ ffmpeg -f lavfi -i testsrc=size=320x240:rate=30 -t 2 -c:v libx264 \
+       -profile:v baseline -pix_fmt yuv420p -f h264 /tmp/t.h264
+
+and decode it in the simulator to YUV 4:2:0 frames:
+
+.. code:: console
+
+   nsh> mount -t hostfs -o fs=/tmp /host
+   nsh> cd /host
+   nsh> nxcodec -d /dev/video1 -s 320x240 -f H264 -i t.h264 -f YU12 -o o.yuv
+
+**Memory-to-memory JPEG decoding**
+
+The sim JPEG decoder (``CONFIG_SIM_JPEG_DECODER``) is a V4L2
+memory-to-memory device, ``/dev/video3`` by default, that decodes JPEG
+with the host libjpeg.  It needs ``CONFIG_SIM_JPEG_DECODER`` and the
+same ``nxcodec`` setup as above:
+
+.. code:: console
+
+   nsh> mount -t hostfs -o fs=/tmp /host
+   nsh> cd /host
+   nsh> nxcodec -d /dev/video3 -s 320x240 -f JPEG -i t.jpg -f YU12 -o o.yuv
+
+Besides YUV 4:2:0 (``YU12``) the capture side accepts NV12 (``NV12``),
+RGB24 (``RGB3``), BGR24 (``BGR3``), XRGB32 (``BX24``) and XBGR32
+(``XR24``).  The packed YUV formats decode 4:2:0 and grayscale JPEG;
+the RGB formats accept any input sampling.
 
 nxdoom
 ------
@@ -1772,6 +1892,28 @@ This a simple vnc server test configuration, Remmina is tested and recommended
 since there are some compatibility issues. By default SIM will be blocked at
 startup to wait client connection, if a client connected, then the fb example
 will launch.
+
+watchdog
+--------
+
+This configuration enables ``CONFIG_WATCHDOG_WDOG``, a watchdog timer
+registered at ``CONFIG_WATCHDOG_DEVPATH``. The simulator cannot reset itself,
+so the watchdog powers it off when it expires, with status 77
+(``CONFIG_WATCHDOG_WDOG_STATUS``). It enables the ``wdog`` example: it feeds
+the watchdog for a while, stops, and the simulator exits with that status when
+the timeout expires::
+
+    nsh> wdog
+
+taskmonitor
+-----------
+
+This configuration enables the task supervision of the watchdog auto-monitor
+(``CONFIG_WATCHDOG_AUTOMONITOR_TASKS``) on top of ``CONFIG_WATCHDOG_WDOG``, which
+powers the simulator off with status 77 when it expires, because the simulator
+cannot reset. It enables the ``taskwdt_test`` application; run it without
+arguments for the list of test cases. The cases that end in a system reset make
+the simulator exit with that status.
 
 vpnkit
 ------

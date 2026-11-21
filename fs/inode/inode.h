@@ -33,41 +33,18 @@
 #include <sys/types.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <errno.h>
 #include <dirent.h>
 #include <sched.h>
+#include <unistd.h>
 
 #include <nuttx/kmalloc.h>
 #include <nuttx/sched.h>
 #include <nuttx/fs/fs.h>
-#include <nuttx/lib/lib.h>
 
 /****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
-
-#define SETUP_SEARCH(d,p,n) \
-  do \
-    { \
-      (d)->path     = (p); \
-      (d)->node     = NULL; \
-      (d)->peer     = NULL; \
-      (d)->parent   = NULL; \
-      (d)->relpath  = NULL; \
-      (d)->buffer   = NULL; \
-      (d)->nofollow = (n); \
-    } \
-  while (0)
-
-#define RELEASE_SEARCH(d) \
-  do \
-    { \
-      if ((d)->buffer != NULL) \
-        { \
-          lib_put_tempbuffer((d)->buffer); \
-          (d)->buffer  = NULL; \
-        } \
-    } \
-  while (0)
 
 #if CONFIG_FS_BACKTRACE > 0
 #  define FS_ADD_BACKTRACE(fd) \
@@ -102,6 +79,8 @@
 #define INODE_GET_NLINK(i) \
   ((atomic_read(&(i)->i_crefs) >> INODE_NLINK_SHIFT) + 1)
 
+#define INODE_HASH_INIT  2166136261u /* Start of inode_hash() */
+
 /****************************************************************************
  * Public Types
  ****************************************************************************/
@@ -110,8 +89,6 @@
  *
  *  path     - INPUT:  Path of inode to find
  *             OUTPUT: Residual part of path not traversed
- *  node     - INPUT:  (not used)
- *             OUTPUT: On success, holds the pointer to the inode found.
  *  peer     - INPUT:  (not used)
  *             OUTPUT: The inode to the "left" of the inode found.
  *  parent   - INPUT:  (not used)
@@ -138,7 +115,6 @@
 struct inode_search_s
 {
   FAR const char *path;      /* Path of inode to find */
-  FAR struct inode *node;    /* Pointer to the inode found */
   FAR struct inode *peer;    /* Node to the "left" for the found inode */
   FAR struct inode *parent;  /* Node "above" the found inode */
   FAR const char *relpath;   /* Relative path into the mountpoint */
@@ -158,16 +134,12 @@ typedef int (*foreach_inode_t)(FAR struct inode *inode,
  * Public Data
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
-EXTERN FAR struct inode *g_root_inode;
+extern FAR struct inode *g_root_inode;
 
 /****************************************************************************
  * Public Function Prototypes
@@ -243,12 +215,41 @@ void inode_runlock(void);
  *   If a soft link is encountered that is not the terminal node in the path,
  *   that link WILL be deferenced unconditionally.
  *
+ * Input Parameters:
+ *   desc  - Search descriptor initialized with inode_search_setup()
+ *   inode - OUTPUT: The found inode.  May be NULL if the caller only
+ *           cares about existence (e.g. inode_reserve).
+ *
  * Assumptions:
- *   The caller holds the g_inode_sem semaphore
+ *   The caller holds the inode tree lock (inode_lock() or inode_rlock())
+ *   The descriptor was initialized with inode_search_setup()
  *
  ****************************************************************************/
 
-int inode_search(FAR struct inode_search_s *desc);
+int inode_search(FAR struct inode_search_s *desc, FAR struct inode **inode);
+
+/****************************************************************************
+ * Name: inode_search_setup
+ *
+ * Description:
+ *   Initialize a search descriptor and make 'path' host-absolute: join
+ *   $PWD if it is relative, prepend the chroot jail if one is installed,
+ *   and canonicalize "." / "..".
+ *
+ ****************************************************************************/
+
+int inode_search_setup(FAR struct inode_search_s *desc,
+                       FAR const char *path, bool nofollow);
+
+/****************************************************************************
+ * Name: inode_search_release
+ *
+ * Description:
+ *   Release any buffer allocated by inode_search_setup().
+ *
+ ****************************************************************************/
+
+void inode_search_release(FAR struct inode_search_s *desc);
 
 /****************************************************************************
  * Name: inode_find
@@ -260,9 +261,13 @@ int inode_search(FAR struct inode_search_s *desc);
  *   difference between inode_find() and inode_search is that inode_find()
  *   will lock the inode tree and increment the reference count on the inode.
  *
+ * Input Parameters:
+ *   desc  - Search descriptor initialized with inode_search_setup()
+ *   inode - OUTPUT: The found inode.  Must not be NULL.
+ *
  ****************************************************************************/
 
-int inode_find(FAR struct inode_search_s *desc);
+int inode_find(FAR struct inode_search_s *desc, FAR struct inode **inode);
 
 /****************************************************************************
  * Name: inode_stat
@@ -350,6 +355,17 @@ void inode_free(FAR struct inode *inode);
 const char *inode_nextname(FAR const char *name);
 
 /****************************************************************************
+ * Name: inode_basename
+ *
+ * Description:
+ *   Given a path with node names separated by '/', return name of last
+ *   segment in the path.
+ *
+ ****************************************************************************/
+
+FAR const char *inode_basename(FAR const char *name);
+
+/****************************************************************************
  * Name: inode_root_reserve
  *
  * Description:
@@ -431,6 +447,12 @@ void inode_release(FAR struct inode *inode);
 
 #define INODE_CHECK_LOCKED  (1 << 0)
 
+/* The access that a path needs on the inode from inode_find(): X_OK on a
+ * mountpoint to go into the volume, nothing on the last path component.
+ */
+
+#define INODE_PATH_AMODE(desc) (*(desc)->relpath != '\0' ? X_OK : 0)
+
 /****************************************************************************
  * Name: inode_checkperm
  *
@@ -447,8 +469,8 @@ void inode_release(FAR struct inode *inode);
  * Description:
  *   Enforce directory search (X_OK) on the path leading to 'inode', and
  *   optionally check 'amode' on 'inode' itself.  Requires X_OK on every
- *   ancestor, and on 'inode' when it is a pseudo directory or mountpoint.
- *   If 'amode' is non-zero, also requires that access on 'inode'.
+ *   ancestor.  If 'amode' is non-zero, also requires that access on 'inode':
+ *   use INODE_PATH_AMODE() when 'inode' comes from inode_find().
  *
  *   Takes the inode tree read lock unless INODE_CHECK_LOCKED is set in
  *   'flags' (caller already holds inode_lock/inode_rlock).
@@ -507,7 +529,29 @@ int fs_checkopenperm(uid_t owner, gid_t group, mode_t mode, int oflags);
  *
  ****************************************************************************/
 
-int foreach_inode(foreach_inode_t handler, FAR void *arg);
+int foreach_inode(foreach_inode_t handler, FAR void *arg, bool readonly);
+
+/****************************************************************************
+ * Name: inode_hash
+ *
+ * Description:
+ *   Add a string to a 32-bit FNV-1a hash that starts at INODE_HASH_INIT.
+ *   A file system that has no file serial numbers makes them from the hash
+ *   of a path.  The result is never 0: programs skip a directory entry
+ *   with d_ino 0.
+ *
+ ****************************************************************************/
+
+static inline uint32_t inode_hash(uint32_t hash, FAR const char *str)
+{
+  while (*str != '\0')
+    {
+      hash ^= *str++ & 0xff;
+      hash *= 16777619u;
+    }
+
+  return hash != 0 ? hash : 1;
+}
 
 /****************************************************************************
  * Name: dir_allocate
@@ -517,7 +561,50 @@ int foreach_inode(foreach_inode_t handler, FAR void *arg);
  *
  ****************************************************************************/
 
+#ifdef CONFIG_DISABLE_DIRECTORY_OPERATIONS
+static inline int dir_allocate(FAR struct file *filep,
+                               FAR const char *relpath)
+{
+  return -ENOSYS;
+}
+#else
 int dir_allocate(FAR struct file *filep, FAR const char *relpath);
+#endif
+
+/****************************************************************************
+ * Name: dir_fstat
+ *
+ * Description:
+ *   fstat() of a directory opened with open().  Returns -ENOTTY if filep
+ *   is not such a directory.
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_DISABLE_DIRECTORY_OPERATIONS
+static inline int dir_fstat(FAR struct file *filep, FAR struct stat *buf)
+{
+  return -ENOTTY;
+}
+#else
+int dir_fstat(FAR struct file *filep, FAR struct stat *buf);
+#endif
+
+/****************************************************************************
+ * Name: dir_isdirectory
+ *
+ * Description:
+ *   Return true if filep is a directory opened with open().
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_DISABLE_DIRECTORY_OPERATIONS
+static inline bool dir_isdirectory(FAR struct file *filep)
+{
+  return false;
+}
+#else
+bool dir_isdirectory(FAR struct file *filep);
+#endif
 
 /****************************************************************************
  * Name: pseudofile_create
@@ -545,7 +632,6 @@ int pseudofile_create(FAR struct inode **node, FAR const char *path,
 bool inode_is_pseudofile(FAR struct inode *inode);
 #endif
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

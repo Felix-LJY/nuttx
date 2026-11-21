@@ -43,7 +43,6 @@
 #include "stm32_pwr.h"
 #include "stm32_rcc.h"
 #include "stm32_spi.h"
-#include "stm32_tim.h"
 #include "stm32_uart.h"
 #include "stm32_lowputc.h"
 #include "stm32_adc.h"
@@ -51,5 +50,12 @@
 /****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
+
+/* FDCAN1 shares interrupt vectors with TIM16 and TIM17. */
+
+#if defined(CONFIG_STM32_FDCAN1) && \
+    (defined(CONFIG_STM32_TIM16) || defined(CONFIG_STM32_TIM17))
+#  error "FDCAN1 cannot be used with TIM16 or TIM17"
+#endif
 
 #endif /* __ARCH_ARM_SRC_STM32G0_STM32_H */

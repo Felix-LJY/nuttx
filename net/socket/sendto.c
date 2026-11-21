@@ -213,6 +213,14 @@ ssize_t sendto(int sockfd, FAR const void *buf, size_t len, int flags,
   enter_cancellation_point();
 
 #ifdef CONFIG_BUILD_KERNEL
+  /* The kernel copy of the address has a fixed size */
+
+  if (to != NULL && tolen > sizeof(kaddr))
+    {
+      ret = -EINVAL;
+      goto errout_with_cancelpt;
+    }
+
   /* Allocate memory and copy user buffer to kernel */
 
   kbuf = kmm_malloc(len);
@@ -245,6 +253,7 @@ ssize_t sendto(int sockfd, FAR const void *buf, size_t len, int flags,
   if (ret == OK)
     {
       ret = psock_sendto(psock, buf, len, flags, to, tolen);
+      psock_sigpipe(psock, ret, flags);
       file_put(filep);
     }
 

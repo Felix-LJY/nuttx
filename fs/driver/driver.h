@@ -37,13 +37,9 @@
  * Public Data
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -77,6 +73,22 @@ extern "C"
 int register_partition_with_inode(FAR const char *partition,
                                   mode_t mode, FAR struct inode *parent,
                                   off_t firstsector, off_t nsectors);
+#endif
+
+/****************************************************************************
+ * Name: unique_devname
+ *
+ * Description:
+ *   Build a temporary device name "/dev/tmp<prefix><6 hex digits>" that
+ *   is not in use: prefix 'c' for block_proxy(), 'b' for mtd_proxy().
+ *
+ * Returned Value:
+ *   Zero (OK) on success; a negated errno value on failure.
+ *
+ ****************************************************************************/
+
+#ifndef CONFIG_DISABLE_MOUNTPOINT
+int unique_devname(char prefix, FAR char *devbuf, size_t len);
 #endif
 
 /****************************************************************************
@@ -152,12 +164,11 @@ int register_partition_with_mtd(FAR const char *partition,
  *
  ****************************************************************************/
 
-#ifdef CONFIG_MTD
+#ifdef CONFIG_FS_MTD_PROXY
 int mtd_proxy(FAR const char *mtddev, int mountflags,
               FAR struct inode **ppinode);
 #endif
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

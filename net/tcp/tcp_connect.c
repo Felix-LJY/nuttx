@@ -222,6 +222,7 @@ static uint32_t psock_connect_eventhandler(FAR struct net_driver_s *dev,
            * but not necessarily at any time later.
            */
 
+          conn->sconn.s_flags &= ~_SF_CONNECTING;
           conn->sconn.s_flags |= (_SF_BOUND | _SF_CONNECTED);
 
           /* Indicate that the socket is no longer connected */
@@ -353,19 +354,22 @@ int psock_tcp_connect(FAR struct socket *psock,
         }
 #endif /* CONFIG_NET_IPv4 */
 
+      conn_dev_lock(&conn->sconn, conn->dev);
+
       /* Non-blocking connection ? set the socket error
        * and start the monitor
        */
 
       if (_SS_ISNONBLOCK(conn->sconn.s_flags))
         {
+          tcp_add_active_conn(conn);
           ret = -EINPROGRESS;
         }
       else
         {
           /* Set up the callbacks in the connection */
 
-          conn_dev_lock(&conn->sconn, conn->dev);
+          tcp_add_active_conn(conn);
           ret = psock_setup_callbacks(psock, &state);
           if (ret >= 0)
             {
@@ -414,8 +418,6 @@ int psock_tcp_connect(FAR struct socket *psock,
 
               psock_teardown_callbacks(&state, ret);
             }
-
-          conn_dev_unlock(&conn->sconn, conn->dev);
         }
 
       /* Check if the socket was successfully connected. */
@@ -445,6 +447,8 @@ int psock_tcp_connect(FAR struct socket *psock,
 
           netdev_txnotify_dev(conn->dev, TCP_POLL);
         }
+
+      conn_dev_unlock(&conn->sconn, conn->dev);
     }
 
   return ret;

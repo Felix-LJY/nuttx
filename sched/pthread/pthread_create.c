@@ -40,6 +40,7 @@
 #include <nuttx/arch.h>
 #include <nuttx/semaphore.h>
 #include <nuttx/kmalloc.h>
+#include <nuttx/lib/lib.h>
 #include <nuttx/pthread.h>
 
 #include "task/task.h"
@@ -191,7 +192,12 @@ int nx_pthread_create(pthread_trampoline_t trampoline, FAR pthread_t *thread,
   int policy;
   int ret;
 
-  DEBUGASSERT(trampoline != NULL);
+  /* The trampoline and the thread entry point must be non-NULL */
+
+  if (trampoline == NULL || entry == NULL)
+    {
+      return EINVAL;
+    }
 
   parent = this_task();
   DEBUGASSERT(parent != NULL);
@@ -207,8 +213,28 @@ int nx_pthread_create(pthread_trampoline_t trampoline, FAR pthread_t *thread,
           default_attr.priority = parent->sched_priority;
         }
 
+      /* The RLIMIT_STACK soft limit gives the default stack size */
+
+      default_attr.stacksize = lib_get_stacksize(default_attr.stacksize);
       attr = &default_attr;
     }
+
+  /* The stack size must be at least PTHREAD_STACK_MIN */
+
+  if (attr->stacksize < PTHREAD_STACK_MIN)
+    {
+      return EINVAL;
+    }
+
+#ifdef CONFIG_TLS_ALIGNED
+  /* The TLS alignment limits the size of the stack */
+
+  if (attr->stacksize + (attr->stackaddr ? 0 : attr->guardsize) >
+      TLS_MAXSTACK)
+    {
+      return EINVAL;
+    }
+#endif
 
   /* Allocate a TCB for the new task. */
 

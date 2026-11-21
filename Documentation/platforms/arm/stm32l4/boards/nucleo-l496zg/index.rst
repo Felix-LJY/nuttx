@@ -2,7 +2,7 @@
 ST Nucleo L496ZG
 ================
 
-.. tags:: chip:stm32, chip:stm32l4, chip:stm32l496
+.. tags:: arch:arm, chip:stm32l4, part:stm32l496, vendor:st
 
 This page discusses issues unique to NuttX configurations for the STMicro
 Nucleo-144 board for STM32L4 chips.
@@ -256,3 +256,9 @@ NOTES:
    the Virtual COM port) I have done all testing with the console
    device configured for USART3 (see instruction above under "Serial
    Consoles).
+
+ostest
+------
+
+Same as nsh, with the OS test (``apps/testing/ostest``) added as an NSH
+builtin.  Run ``ostest`` from NSH.

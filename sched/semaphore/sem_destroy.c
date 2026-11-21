@@ -53,8 +53,7 @@
  *
  * Returned Value:
  *   This is an internal OS interface and should not be used by applications.
- *   It follows the NuttX internal error return policy:  Zero (OK) is
- *   returned on success.  A negated errno value is returned on failure.
+ *   Zero (OK) is always returned.
  *
  ****************************************************************************/
 
@@ -91,5 +90,6 @@ int nxsem_destroy(FAR sem_t *sem)
   /* Release holders of the semaphore */
 
   nxsem_destroyholder(sem);
+  sem->flags = 0;
   return OK;
 }

@@ -38,37 +38,90 @@
 
 /* Clocking *****************************************************************/
 
-/* Clock tree (single PLL1 fed from the internal HSI):
- *
- *   HSI 64 MHz / M=4 * N=50 = 800 MHz VCO
- *     IC1  /4 = 200 MHz  -> CPU clock (CPUSW)
- *     IC2  /8 = 100 MHz  \
- *     IC6 /12 = 66.7 MHz  > SYSCLK components (SYSSW IC2_IC6_IC11)
- *     IC11 /8 = 100 MHz  /
- *   HPRE /2  = 50 MHz   -> HCLK
- *   PPRE1 /1 = 50 MHz   -> PCLK1
- *   PPRE2 /1 = 50 MHz   -> PCLK2
- *
- * Works with the default VOS SCALE1, no SMPS overdrive required.  Higher
- * CPU frequencies (600/800 MHz) are deferred to a follow-up.
+/* Single PLL1 fed from the internal HSI.  See
+ * arch/arm/src/stm32n6/stm32n6xx_rcc.c for the board.h clock macros.
  */
 
 #define STM32_HSI_FREQUENCY     64000000ul
+#define STM32_LSI_FREQUENCY     32000
+#define STM32_LSE_FREQUENCY     32768
 
+/* HSI 64 MHz
+ *   PLL1 = HSI / 4 * 50 = 800 MHz
+ *     IC1  /4  = 200 MHz  -> CPU clock (CPUSW)
+ *     IC2  /8  = 100 MHz  \
+ *     IC6  /12 = 66.7 MHz  > SYSCLK components (SYSSW IC2_IC6_IC11)
+ *     IC11 /8  = 100 MHz  /
+ *   HPRE /2   = 50 MHz   -> HCLK
+ *   PPREx /1  = 50 MHz   -> PCLK1/2/4/5
+ *   TIMPRE /1 = 100 MHz  -> timer kernel clock
+ *
+ * Works with VOS low, no VDDCORE overdrive required.
+ */
+
+#define STM32_PLL1_SRC          RCC_PLL1CFGR1_SEL_HSI
 #define STM32_PLL1_M            4
 #define STM32_PLL1_N            50
-#define STM32_PLL1_IC1_DIV      4
+#define STM32_PLL1_FREQUENCY    800000000ul
 
-#define STM32_CPUCLK_FREQUENCY  200000000ul
-#define STM32_SYSCLK_FREQUENCY  (STM32_CPUCLK_FREQUENCY / 2)
-#define STM32_HCLK_FREQUENCY    (STM32_CPUCLK_FREQUENCY / 4)
+#define STM32_IC1_SRC           RCC_ICCFGR_SEL_PLL1
+#define STM32_IC1_DIV           4
+#define STM32_IC2_SRC           RCC_ICCFGR_SEL_PLL1
+#define STM32_IC2_DIV           8
+#define STM32_IC6_SRC           RCC_ICCFGR_SEL_PLL1
+#define STM32_IC6_DIV           12
+#define STM32_IC11_SRC          RCC_ICCFGR_SEL_PLL1
+#define STM32_IC11_DIV          8
+
+#define STM32_CPUCLK_FREQUENCY  (STM32_PLL1_FREQUENCY / STM32_IC1_DIV)
+#define STM32_SYSCLK_FREQUENCY  (STM32_PLL1_FREQUENCY / STM32_IC2_DIV)
+#define STM32_RCC_CFGR2_HPRE    RCC_CFGR2_HPRE_SYSCLKd2
+#define STM32_RCC_CFGR2_TIMPRE  RCC_CFGR2_TIMPRE_SYSCLK
+#define STM32_HCLK_FREQUENCY    (STM32_SYSCLK_FREQUENCY / 2)
+#define STM32_TIMCLK_FREQUENCY  STM32_SYSCLK_FREQUENCY
+
 #define STM32_PCLK1_FREQUENCY   STM32_HCLK_FREQUENCY
 #define STM32_PCLK2_FREQUENCY   STM32_HCLK_FREQUENCY
+#define STM32_PCLK4_FREQUENCY   STM32_HCLK_FREQUENCY
+#define STM32_PCLK5_FREQUENCY   STM32_HCLK_FREQUENCY
 
-/* Timer input clock = SYSCLK (TIMPRE=0 default) */
+/* Timer kernel clock (TIMG = SYSCLK / TIMPRE) */
 
-#define STM32_APB1_TIM_FREQUENCY STM32_SYSCLK_FREQUENCY
-#define STM32_APB2_TIM_FREQUENCY STM32_SYSCLK_FREQUENCY
+#define STM32_APB1_TIM_FREQUENCY STM32_TIMCLK_FREQUENCY
+#define STM32_APB2_TIM_FREQUENCY STM32_TIMCLK_FREQUENCY
+
+#define STM32_TIM1_CLKIN         STM32_APB2_TIM_FREQUENCY
+#define STM32_TIM8_CLKIN         STM32_APB2_TIM_FREQUENCY
+#define STM32_TIM9_CLKIN         STM32_APB2_TIM_FREQUENCY
+#define STM32_TIM15_CLKIN        STM32_APB2_TIM_FREQUENCY
+#define STM32_TIM16_CLKIN        STM32_APB2_TIM_FREQUENCY
+#define STM32_TIM17_CLKIN        STM32_APB2_TIM_FREQUENCY
+#define STM32_TIM2_CLKIN         STM32_APB1_TIM_FREQUENCY
+#define STM32_TIM3_CLKIN         STM32_APB1_TIM_FREQUENCY
+#define STM32_TIM4_CLKIN         STM32_APB1_TIM_FREQUENCY
+#define STM32_TIM5_CLKIN         STM32_APB1_TIM_FREQUENCY
+#define STM32_TIM6_CLKIN         STM32_APB1_TIM_FREQUENCY
+#define STM32_TIM7_CLKIN         STM32_APB1_TIM_FREQUENCY
+#define STM32_TIM10_CLKIN        STM32_APB1_TIM_FREQUENCY
+#define STM32_TIM11_CLKIN        STM32_APB1_TIM_FREQUENCY
+#define STM32_TIM12_CLKIN        STM32_APB1_TIM_FREQUENCY
+#define STM32_TIM13_CLKIN        STM32_APB1_TIM_FREQUENCY
+#define STM32_TIM14_CLKIN        STM32_APB1_TIM_FREQUENCY
+
+/* LPTIM kernel clocks (RCC_CCIPR12 LPTIMxSEL reset values): LPTIM1 on
+ * PCLK1, LPTIM2-5 on PCLK4 (= HCLK, PPRE4 /1)
+ */
+
+#define STM32_LPTIM1_CLKIN       STM32_PCLK1_FREQUENCY
+#define STM32_LPTIM2_CLKIN       STM32_HCLK_FREQUENCY
+#define STM32_LPTIM3_CLKIN       STM32_HCLK_FREQUENCY
+#define STM32_LPTIM4_CLKIN       STM32_HCLK_FREQUENCY
+#define STM32_LPTIM5_CLKIN       STM32_HCLK_FREQUENCY
+
+/* USART1 kernel clock: HSI, independent of the system clock tree */
+
+#define STM32_RCC_CCIPR13_USART1SEL RCC_CCIPR13_USART1SEL_HSI
+#define STM32_USART1_FREQUENCY      STM32_HSI_FREQUENCY
 
 /* I/O voltage domains ******************************************************/
 
@@ -140,8 +193,29 @@
  * Connected to the on-board ST-Link to provide a Virtual COM Port.
  */
 
-#define GPIO_USART1_TX   GPIO_USART1_TX_1
-#define GPIO_USART1_RX   GPIO_USART1_RX_1
+#define GPIO_USART1_TX   (GPIO_USART1_TX_3 | GPIO_SPEED_50MHZ)
+#define GPIO_USART1_RX   (GPIO_USART1_RX_3 | GPIO_SPEED_50MHZ)
+
+/* Ethernet GPIOs ***********************************************************/
+
+/* ETH1 RMII to the LAN8742A PHY at MDIO address 0: PG11 MDC, PF4 MDIO,
+ * PF7 REF_CLK, PF10 CRS_DV, PF14 PF15 RXD0-1, PF11 TX_EN, PF12 PF13
+ * TXD0-1.  The PHY drives the 50 MHz REF_CLK.
+ */
+
+#define GPIO_ETH_MDC            (GPIO_ETH_MDC_2 | GPIO_SPEED_100MHZ)
+#define GPIO_ETH_MDIO           (GPIO_ETH_MDIO_2 | GPIO_SPEED_100MHZ)
+#define GPIO_ETH_RMII_REF_CLK   (GPIO_ETH_RMII_REF_CLK_1 | GPIO_SPEED_100MHZ)
+#define GPIO_ETH_RMII_CRS_DV    (GPIO_ETH_RMII_CRS_DV_1 | GPIO_SPEED_100MHZ)
+#define GPIO_ETH_RMII_RXD0      (GPIO_ETH_RMII_RXD0_1 | GPIO_SPEED_100MHZ)
+#define GPIO_ETH_RMII_RXD1      (GPIO_ETH_RMII_RXD1_1 | GPIO_SPEED_100MHZ)
+#define GPIO_ETH_RMII_TX_EN     (GPIO_ETH_RMII_TX_EN_1 | GPIO_SPEED_100MHZ)
+#define GPIO_ETH_RMII_TXD0      (GPIO_ETH_RMII_TXD0_1 | GPIO_SPEED_100MHZ)
+#define GPIO_ETH_RMII_TXD1      (GPIO_ETH_RMII_TXD1_1 | GPIO_SPEED_100MHZ)
+
+/* The PTP clock is HCLK, as the Ethernet driver assumes */
+
+#define STM32_RCC_CCIPR2_ETH1PTPSEL RCC_CCIPR2_ETH1PTPSEL_HCLK
 
 /****************************************************************************
  * Public Data
@@ -149,13 +223,9 @@
 
 #ifndef __ASSEMBLY__
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -175,7 +245,6 @@ extern "C"
 
 void stm32_board_initialize(void);
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

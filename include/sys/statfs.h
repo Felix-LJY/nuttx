@@ -36,7 +36,12 @@
  * Pre-processor Definitions
  ****************************************************************************/
 
-/* struct statfs file system types. */
+/* The file system types of struct statfs.  POSIX does not define them:
+ * NUTTX_NO_EXTENSIONS (see nuttx/compiler.h) hides them, so that a
+ * program can use these names for its own constants.
+ */
+
+#ifndef NUTTX_NO_EXTENSIONS
 
 #define ADFS_SUPER_MAGIC      0xadf5
 #define AFFS_SUPER_MAGIC      0xadff
@@ -101,6 +106,8 @@
 #define XIPFS_MAGIC           0x58495046
 #define V9FS_MAGIC            0x01021997
 
+#endif /* NUTTX_NO_EXTENSIONS */
+
 #if defined(CONFIG_FS_LARGEFILE)
 #  define statfs64            statfs
 #  define fstatfs64           fstatfs
@@ -129,13 +136,9 @@ struct statfs
  * Public Function Prototypes
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /* Inspired by Linux statfs() which was, in turn, inspired by
@@ -146,7 +149,6 @@ extern "C"
 int statfs(FAR const char *path, FAR struct statfs *buf);
 int fstatfs(int fd, FAR struct statfs *buf);
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

@@ -35,11 +35,6 @@
 #  include <sys/types.h>
 #  include <stdint.h>
 #  include <syscall.h>
-
-#  include <IfxCpu_reg.h>
-#  include <Ifx_Ssw_Compilers.h>
-#  include <Compilers/Compilers.h>
-#  include <IfxCpu_Intrinsics.h>
 #endif
 
 /****************************************************************************
@@ -128,6 +123,25 @@
 
 #ifndef __ASSEMBLY__
 typedef void (*up_vector_t)(void);
+
+/* Bus trap hook function type for safety test modules.
+ * Returns OK if the trap was handled, ERROR otherwise.
+ */
+
+typedef int (*tricore_bustrap_hook_t)(uint32_t tid, void *context);
+
+/* Trap information that tricore_vectors.S/.asm builds on the stack and
+ * passes to tricore_trapcall and tricore_svcall; keep the layout in
+ * sync with the vectors.
+ */
+
+struct tricore_trap_s
+{
+  uintptr_t taddr;  /* Trap return address (A11) */
+  uint8_t   tid;    /* Trap identification number (TIN) */
+  uint8_t   tclass; /* Trap class */
+  uint8_t   tcpu;   /* Core that took the trap */
+};
 #endif
 
 /****************************************************************************
@@ -141,17 +155,15 @@ typedef void (*up_vector_t)(void);
  * end of the heap is CONFIG_RAM_END
  */
 
-extern uintptr_t        __USTACK0_END[];
-extern uintptr_t        __USTACK0[];
-#define g_idle_topstack __USTACK0
+extern uintptr_t        __ustack[];
+#define g_idle_topstack __ustack
 
 /* Address of the saved user stack pointer */
 
 #if CONFIG_ARCH_INTERRUPTSTACK > 3
-extern uintptr_t        __ISTACK0_END[];
-extern uintptr_t        __ISTACK0[];
-#define g_intstackalloc __ISTACK0_END
-#define g_intstacktop   __ISTACK0
+extern uintptr_t        __istack[];
+#define g_intstackalloc ((uintptr_t)__istack - CONFIG_ARCH_INTERRUPTSTACK)
+#define g_intstacktop   __istack
 #endif
 
 /* These symbols are setup by the linker script. */
@@ -176,6 +188,26 @@ extern uintptr_t        _eheap[]; /* End+1 of .heap */
 /* Interrupt ****************************************************************/
 
 void tricore_ack_irq(int irq);
+void tricore_doirq(void);
+
+/* Startup ******************************************************************/
+
+/* tricore_head calls these on CPU0 in this order, and copies .data and
+ * clears .bss itself before tricore_clockconfig.  tricore_wdt_disable and
+ * tricore_ram_init (TC4xx only) run before .data and .bss, on TC4xx on the
+ * boot stack and CSAs in the PSPR: they may only use registers and
+ * constants.
+ */
+
+void tricore_wdt_disable(void);    /* Chip: CPU and safety watchdogs off */
+void tricore_ram_init(void);       /* Chip: RAMs the boot firmware skips */
+int tricore_clockconfig(void);     /* Chip: oscillator, PLLs and dividers */
+void tricore_start(void);          /* Start the other cores, enter NuttX */
+void tricore_main(void);           /* Per core entry into NuttX */
+
+/* Clocks *******************************************************************/
+
+uint32_t tricore_clock_asclinf(void);
 
 /* Signal handling **********************************************************/
 
@@ -186,6 +218,9 @@ void tricore_sigdeliver(void);
 void tricore_svcall(volatile void *trap);
 void tricore_trapcall(volatile void *trap);
 void tricore_trapinit(void);
+void tricore_bustrap_register_hook(tricore_bustrap_hook_t hook);
+void tricore_fcu_register_pool(void *base, size_t num);
+void tricore_fcu_recover(void);
 
 /* Context Save Areas *******************************************************/
 
@@ -216,10 +251,18 @@ void tricore_fpuinit(void);
 int tricore_init_dbgmonitor(void);
 #endif
 
+#ifdef CONFIG_BUILD_PROTECTED
+void tricore_userspace(void);
+#endif
+
+#ifdef CONFIG_ARCH_USE_MPU
+void tricore_mpuinit(void);
+#endif
+
 /* System Timer *************************************************************/
 
 struct oneshot_lowerhalf_s *
-tricore_systimer_initialize(volatile void *tbase, int irq, uint64_t freq);
+tricore_systimer_initialize(uintptr_t tbase, int irq, uint64_t freq);
 
 /* Debug ********************************************************************/
 

@@ -84,6 +84,13 @@ struct tmpfs_object_s
   uint8_t  to_type;      /* See enum tmpfs_objtype_e */
   uint8_t  to_refs;      /* Reference count */
   FAR struct tmpfs_directory_s *to_parent;
+  ino_t    to_ino;       /* File serial number (st_ino, d_ino) */
+
+  /* Times of last access, modification and status change */
+
+  struct timespec to_atime;
+  struct timespec to_mtime;
+  struct timespec to_ctime;
 #ifdef CONFIG_FS_PERMISSION
   mode_t   to_mode;      /* File mode (permission bits) */
   uid_t    to_uid;       /* Owner user ID */
@@ -103,6 +110,13 @@ struct tmpfs_directory_s
   uint8_t  tdo_type;     /* See enum tmpfs_objtype_e */
   uint8_t  tdo_refs;     /* Reference count */
   FAR struct tmpfs_directory_s *tdo_parent;
+  ino_t    tdo_ino;      /* File serial number (st_ino, d_ino) */
+
+  /* Times of last access, modification and status change */
+
+  struct timespec tdo_atime;
+  struct timespec tdo_mtime;
+  struct timespec tdo_ctime;
 #ifdef CONFIG_FS_PERMISSION
   mode_t   tdo_mode;     /* Directory mode (permission bits) */
   uid_t    tdo_uid;      /* Owner user ID */
@@ -135,6 +149,13 @@ struct tmpfs_file_s
   uint8_t  tfo_type;     /* See enum tmpfs_objtype_e */
   uint8_t  tfo_refs;     /* Reference count */
   FAR struct tmpfs_directory_s *tfo_parent;
+  ino_t    tfo_ino;      /* File serial number (st_ino, d_ino) */
+
+  /* Times of last access, modification and status change */
+
+  struct timespec tfo_atime;
+  struct timespec tfo_mtime;
+  struct timespec tfo_ctime;
 #ifdef CONFIG_FS_PERMISSION
   mode_t   tfo_mode;     /* File mode (permission bits) */
   uid_t    tfo_uid;      /* Owner user ID */
@@ -179,22 +200,17 @@ typedef int (*tmpfs_foreach_t)(FAR struct tmpfs_directory_s *tdo,
  * Public Data
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
-EXTERN const struct mountpt_operations g_tmpfs_operations;
+extern const struct mountpt_operations g_tmpfs_operations;
 
 /****************************************************************************
  * Public Function Prototypes
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

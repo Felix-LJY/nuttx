@@ -26,17 +26,8 @@
 
 #include <nuttx/config.h>
 
-#include <stdint.h>
-#include <assert.h>
-#include <nuttx/debug.h>
-
-#include <nuttx/cache.h>
-#ifdef CONFIG_PAGING
-#  include <nuttx/page.h>
-#endif
-
 #include <arch/chip/chip.h>
-#include "arm64_arch.h"
+
 #include "arm64_internal.h"
 #include "arm64_mmu.h"
 
@@ -44,10 +35,10 @@
 #include "imx9_clockconfig.h"
 #include "imx9_ccm.h"
 #include "imx9_trdc.h"
-#include "imx9_serial.h"
 #include "imx9_gpio.h"
 #include "imx9_lowputc.h"
 #include "imx9_system_ctl.h"
+#include "hardware/imx9_ccm.h"
 #ifdef CONFIG_IMX9_DDR_TRAINING
 #include "ddr/imx9_ddr_training.h"
 #endif
@@ -95,6 +86,37 @@ const struct arm_mmu_config g_mmu_config =
   .num_regions = nitems(g_mmu_regions),
   .mmu_regions = g_mmu_regions,
 };
+
+/****************************************************************************
+ * Private Functions
+ ****************************************************************************/
+
+/****************************************************************************
+ * Name: imx9_a55_frequency
+ *
+ * Description:
+ *   Return the clock of the A55 cores: the ARM PLL or the A55 clock root.
+ *
+ ****************************************************************************/
+
+#if defined(CONFIG_ARCH_PERF_EVENTS) && !defined(CONFIG_IMX9_CLK_OVER_SCMI)
+static uint32_t imx9_a55_frequency(void)
+{
+  uint32_t freq = 0;
+
+  if ((getreg32(IMX9_CCM_GPR_SH(CCM_SHARED_A55_CLK)) &
+       CCM_GPR_A55_CLK_SEL_MASK) == CCM_GPR_A55_CLK_SEL_PLL)
+    {
+      imx9_get_clock(ARM_PLL, &freq);
+    }
+  else
+    {
+      imx9_get_rootclock(CCM_ARM_A55_CLK_ROOT, &freq);
+    }
+
+  return freq;
+}
+#endif
 
 /****************************************************************************
  * Public Functions
@@ -194,20 +216,10 @@ void arm64_chip_boot(void)
 #endif
 #endif
 
-#ifdef CONFIG_ARCH_USE_MMU
-  /* MAP IO and DRAM, enable MMU. */
-
-  arm64_mmu_init(true);
-#endif
-
   /* Do UART early initialization & pin muxing */
 
 #ifdef CONFIG_IMX9_LPUART
   imx9_lowsetup();
-#endif
-
-#if defined(CONFIG_ARM64_PSCI)
-  arm64_psci_init("smc");
 #endif
 
   /* Initialize pin interrupt support */
@@ -216,17 +228,13 @@ void arm64_chip_boot(void)
   imx9_gpioirq_initialize();
 #endif
 
-#ifdef USE_EARLYSERIALINIT
-  /* Perform early serial initialization if we are going to use the serial
-   * driver.
-   */
-
-  arm64_earlyserialinit();
-#endif
-
   /* Perform board-specific device initialization. This would include
    * configuration of board specific resources such as GPIOs, LEDs, etc.
    */
 
   imx9_board_initialize();
+
+#if defined(CONFIG_ARCH_PERF_EVENTS) && !defined(CONFIG_IMX9_CLK_OVER_SCMI)
+  up_perf_init((void *)(uintptr_t)imx9_a55_frequency());
+#endif
 }

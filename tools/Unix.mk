@@ -55,9 +55,14 @@ else
 # Generate .version.tmp every time from GIT history
 # Only update .version if the contents of version.tmp actually changes
 # Note: this is executed before any rule is run
+# Do it once per make invocation; sub-makes get NUTTX_VERSION_UPDATED from
+# the environment.
 
+ifeq ($(origin NUTTX_VERSION_UPDATED),undefined)
 $(shell tools/version.sh $(VERSION_ARG) .version.tmp > /dev/null)
 $(shell $(call TESTANDREPLACEFILE, .version.tmp, .version))
+export NUTTX_VERSION_UPDATED := y
+endif
 endif
 
 # Process architecture specific directories
@@ -288,6 +293,9 @@ tools/mkpasswd$(HOSTEXEEXT):
 
 tools/mknxflat$(HOSTEXEEXT):
 	$(Q) $(MAKE) -C tools -f Makefile.host mknxflat$(HOSTEXEEXT)
+
+tools/ldnxflat$(HOSTEXEEXT):
+	$(Q) $(MAKE) -C tools -f Makefile.host ldnxflat$(HOSTEXEEXT)
 
 # .dirlinks, and helpers
 #
@@ -569,11 +577,12 @@ ifeq ($(CONFIG_BUILD_2PASS),y)
 	fi
 	$(Q) $(MAKE) -C $(CONFIG_PASS1_BUILDIR) LINKLIBS="$(LINKLIBS)" USERLIBS="$(USERLIBS)" "$(CONFIG_PASS1_TARGET)"
 endif
-	$(Q) $(MAKE) -C $(ARCH_SRC) EXTRA_OBJS="$(EXTRA_OBJS)" LINKLIBS="$(LINKLIBS)" APPDIR="$(APPDIR)" EXTRAFLAGS="$(KDEFINE) $(EXTRAFLAGS)" $(BIN)
+	$(Q) echo $(BIN) > nuttx.manifest
+	$(Q) $(MAKE) -C $(ARCH_SRC) EXTRA_OBJS="$(EXTRA_OBJS)" LINKLIBS="$(LINKLIBS)" APPDIR="$(APPDIR)" \
+		EXTRAFLAGS="$(KDEFINE) $(EXTRAFLAGS)" NUTTX_MANIFEST="$(TOPDIR)/nuttx.manifest" $(BIN)
 	$(Q) if [ -w /tftpboot ] ; then \
 		cp -f $(BIN) /tftpboot/$(BIN).${CONFIG_ARCH}; \
 	fi
-	$(Q) echo $(BIN) > nuttx.manifest
 	$(Q) printf "%s\n" *.map >> nuttx.manifest
 ifeq ($(CONFIG_INTELHEX_BINARY),y)
 	@echo "CP: nuttx.hex"
@@ -673,12 +682,14 @@ ifeq ($(CONFIG_BOARD_ETC_ROMFS_PASSWD_ENABLE),y)
 PASSWD_TOOL_DEP += tools/mkpasswd$(HOSTEXEEXT)
 endif
 
-# mknxflat generates the import thunks for an NXFLAT module, so it is only
-# needed by a configuration that builds them.
+# mknxflat generates the import thunks for an NXFLAT module and ldnxflat
+# converts it, so both are needed by a configuration that builds them, and by
+# no other.
 
 NXFLAT_TOOL_DEP =
 ifeq ($(CONFIG_NXFLAT),y)
 NXFLAT_TOOL_DEP += tools/mknxflat$(HOSTEXEEXT)
+NXFLAT_TOOL_DEP += tools/ldnxflat$(HOSTEXEEXT)
 endif
 
 pass1dep: context tools/mkdeps$(HOSTEXEEXT) tools/cnvwindeps$(HOSTEXEEXT) $(PASSWD_TOOL_DEP) $(NXFLAT_TOOL_DEP)

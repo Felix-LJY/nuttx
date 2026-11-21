@@ -20,8 +20,6 @@
 #
 ############################################################################
 
-include $(TOPDIR)/Make.defs
-
 CSRCS = stm32_boot.c stm32_bringup.c stm32_spi.c
 
 ifeq ($(CONFIG_ARCH_LEDS),y)
@@ -96,6 +94,10 @@ endif
 
 ifeq ($(CONFIG_CAPTURE),y)
 CSRCS += stm32_capture.c
+endif
+
+ifeq ($(CONFIG_PTP_PPS),y)
+CSRCS += stm32_ptp_pps.c
 endif
 
 ifeq ($(CONFIG_ARCH_CUSTOM_PMINIT),y)

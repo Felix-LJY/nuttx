@@ -20,7 +20,7 @@
 #
 # ##############################################################################
 
-set(SRCS)
+set(SRCS board_common.c)
 
 if(CONFIG_SENSORS_BMP180)
   list(APPEND SRCS stm32_bmp180.c)
@@ -70,6 +70,10 @@ if(CONFIG_SENSORS_LM75)
   list(APPEND SRCS stm32_lm75.c)
 endif()
 
+if(CONFIG_INPUT_GT9XX)
+  list(APPEND SRCS stm32_gt9xx.c)
+endif()
+
 if(CONFIG_WL_NRF24L01)
   list(APPEND SRCS stm32_nrf24l01.c)
 endif()
@@ -86,6 +90,10 @@ if(CONFIG_SENSORS_MT6816)
   list(APPEND SRCS stm32_mt6816.c)
 endif()
 
+if(CONFIG_SENSORS_SCL3300)
+  list(APPEND SRCS stm32_scl3300.c)
+endif()
+
 if(CONFIG_SENSORS_ZEROCROSS)
   list(APPEND SRCS stm32_zerocross.c)
 endif()
@@ -98,6 +106,10 @@ endif()
 
 if(CONFIG_PWM AND NOT EXISTS ${NUTTX_BOARD_DIR}/src/stm32_pwm.c)
   list(APPEND SRCS board_pwm.c)
+endif()
+
+if(CONFIG_TIMER OR CONFIG_ONESHOT)
+  list(APPEND SRCS board_timer.c)
 endif()
 
 if(CONFIG_SENSORS_INA219)
@@ -188,11 +200,11 @@ if(CONFIG_AUDIO_CS4344)
   list(APPEND SRCS stm32_cs4344.c)
 endif()
 
-if(CONFIG_STM32_CAN)
-  if(CONFIG_STM32_CAN_CHARDRIVER)
+if(NOT CONFIG_STM32_HAVE_FDCAN_H7)
+  if(CONFIG_STM32_CAN_CHARDRIVER OR CONFIG_STM32_FDCAN_CHARDRIVER)
     list(APPEND SRCS stm32_can_setup.c)
   endif()
-  if(CONFIG_STM32_CAN_SOCKET)
+  if(CONFIG_STM32_CAN_SOCKET OR CONFIG_STM32_FDCAN_SOCKET)
     list(APPEND SRCS stm32_cansock_setup.c)
   endif()
 endif()

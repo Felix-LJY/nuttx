@@ -38,6 +38,8 @@
 #  include <arch/pic32mz/irq_pic32mzxxxec.h>
 #elif defined(CHIP_PIC32MZEF)
 #  include <arch/pic32mz/irq_pic32mzxxxef.h>
+#elif defined(CHIP_PIC32MZW1)
+#  include <arch/pic32mz/irq_pic32mzw1.h>
 #else
 #  error "Unknown PIC32MZ family"
 #endif
@@ -185,14 +187,10 @@ static inline_function void cp0_putebase(uint32_t ebase)
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

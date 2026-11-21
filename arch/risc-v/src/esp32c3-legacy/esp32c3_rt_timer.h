@@ -29,6 +29,7 @@
 
 #include <nuttx/config.h>
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <sys/types.h>
 #include <nuttx/list.h>
@@ -75,13 +76,9 @@ struct rt_timer_args_s
   void *arg;                    /* Private data */
 };
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -241,6 +238,5 @@ void esp32c3_rt_timer_deinit(void);
 #ifdef __cplusplus
 }
 #endif
-#undef EXTERN
 
 #endif /* __ARCH_RISCV_SRC_ESP32C3_LEGACY_ESP32C3_RT_TIMER_H */

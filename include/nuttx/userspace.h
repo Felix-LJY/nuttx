@@ -32,7 +32,8 @@
 #include <sys/types.h>
 #include <stdint.h>
 #include <signal.h>
-#include <pthread.h>
+
+#include <nuttx/lib/builtin.h>
 
 #ifdef CONFIG_BUILD_PROTECTED
 
@@ -121,6 +122,13 @@ struct userspace_s
 #ifdef CONFIG_LIBC_USRWORK
   CODE int (*work_usrstart)(void);
 #endif
+
+  /* Builtin support */
+
+#ifdef CONFIG_BUILTIN
+  FAR const int *builtin_count;
+  FAR const struct builtin_s *builtins;
+#endif
 };
 
 /****************************************************************************
@@ -128,18 +136,20 @@ struct userspace_s
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
  * Public Function Prototypes
  ****************************************************************************/
 
-#undef EXTERN
+/* This entry point must be supplied by the application */
+
+#ifdef CONFIG_INIT_ENTRYPOINT
+int CONFIG_INIT_ENTRYPOINT(int argc, FAR char *argv[]);
+#endif
+
 #ifdef __cplusplus
 }
 #endif

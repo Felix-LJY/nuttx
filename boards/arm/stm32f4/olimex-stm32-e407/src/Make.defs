@@ -20,8 +20,6 @@
 #
 ############################################################################
 
-include $(TOPDIR)/Make.defs
-
 CSRCS = stm32_boot.c stm32_bringup.c stm32_spi.c
 
 ifeq ($(CONFIG_ARCH_LEDS),y)
@@ -32,14 +30,6 @@ endif
 
 ifeq ($(CONFIG_ARCH_BUTTONS),y)
 CSRCS +=  stm32_buttons.c
-endif
-
-ifeq ($(CONFIG_ARCH_IDLE_CUSTOM),y)
-CSRCS += stm32_idle.c
-endif
-
-ifeq ($(CONFIG_STM32_FSMC),y)
-CSRCS += stm32_extmem.c
 endif
 
 ifeq ($(CONFIG_STM32_OTGFS),y)

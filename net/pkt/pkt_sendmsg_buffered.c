@@ -207,15 +207,15 @@ static uint32_t psock_send_eventhandler(FAR struct net_driver_s *dev,
 ssize_t pkt_sendmsg(FAR struct socket *psock, FAR const struct msghdr *msg,
                     int flags)
 {
-  FAR const void *buf = msg->msg_iov->iov_base;
-  size_t len = msg->msg_iov->iov_len;
-  FAR struct sockaddr_ll *addr = msg->msg_name;
+  FAR struct sockaddr_ll *addr;
   FAR struct net_driver_s *dev;
   FAR struct pkt_conn_s *conn;
+  FAR const void *buf;
   FAR struct iob_s *iob;
   bool nonblock;
+  size_t len;
   int offset = 0;
-  int ret = OK;
+  int ret;
 
   /* Validity check */
 
@@ -225,7 +225,11 @@ ssize_t pkt_sendmsg(FAR struct socket *psock, FAR const struct msghdr *msg,
       return ret;
     }
 
-  if (len <= 0)
+  buf  = msg->msg_iov[0].iov_base;
+  len  = msg->msg_iov[0].iov_len;
+  addr = msg->msg_name;
+
+  if (len == 0)
     {
       return 0;
     }
@@ -264,13 +268,11 @@ ssize_t pkt_sendmsg(FAR struct socket *psock, FAR const struct msghdr *msg,
     }
 #endif
 
-  if (nonblock)
+  iob = iob_tryalloc(true);
+  if (iob == NULL && !nonblock)
     {
-      iob = iob_tryalloc(false);
-    }
-  else
-    {
-      iob = net_iobtimedalloc(true, _SO_TIMEOUT(conn->sconn.s_sndtimeo));
+      iob = conn_dev_iobtimedalloc(true, _SO_TIMEOUT(conn->sconn.s_sndtimeo),
+                                   &conn->sconn, dev);
     }
 
   if (iob == NULL)
@@ -292,7 +294,14 @@ ssize_t pkt_sendmsg(FAR struct socket *psock, FAR const struct msghdr *msg,
     }
 
   iob_reserve(iob, CONFIG_NET_LL_GUARDSIZE);
-  iob_update_pktlen(iob, 0, false);
+  iob_update_pktlen(iob, 0, true);
+
+#ifdef CONFIG_NET_TIMESTAMP
+  if (_SO_GETOPT(conn->sconn.s_options, SO_TIMESTAMPING))
+    {
+      iob->io_conn = &conn->sconn;
+    }
+#endif
 
   /* Copy the user data into the write buffer.  We cannot wait for
    * buffer space if the socket was opened non-blocking.
@@ -303,11 +312,8 @@ ssize_t pkt_sendmsg(FAR struct socket *psock, FAR const struct msghdr *msg,
       offset = -NET_LL_HDRLEN(dev);
     }
 
-  if (nonblock)
-    {
-      ret = iob_trycopyin(iob, buf, len, offset, false);
-    }
-  else
+  ret = iob_trycopyin(iob, buf, len, offset, true);
+  if (ret < 0 && !nonblock)
     {
       /* iob_copyin might wait for buffers to be freed, but if
        * network is locked this might never happen, since network
@@ -315,7 +321,7 @@ ssize_t pkt_sendmsg(FAR struct socket *psock, FAR const struct msghdr *msg,
        */
 
       conn_dev_unlock(&conn->sconn, dev);
-      ret = iob_copyin(iob, buf, len, offset, false);
+      ret = iob_copyin(iob, buf, len, offset, true);
       conn_dev_lock(&conn->sconn, dev);
     }
 
@@ -325,31 +331,21 @@ ssize_t pkt_sendmsg(FAR struct socket *psock, FAR const struct msghdr *msg,
       goto errout_with_iob;
     }
 
-  if (psock->s_type == SOCK_DGRAM)
+  if (psock->s_type == SOCK_DGRAM &&
+      (dev->d_lltype == NET_LL_ETHERNET ||
+       dev->d_lltype == NET_LL_IEEE80211))
     {
       FAR struct eth_hdr_s *ethhdr =
           (FAR struct eth_hdr_s *)(IOB_DATA(iob) - NET_LL_HDRLEN(dev));
+
       memcpy(ethhdr->dest, addr->sll_addr, ETHER_ADDR_LEN);
       memcpy(ethhdr->src, &dev->d_mac.ether, ETHER_ADDR_LEN);
       ethhdr->type = addr->sll_protocol;
     }
 
-  if (nonblock)
-    {
-      ret = iob_tryadd_queue(iob, &conn->write_q);
-    }
-  else
-    {
-      ret = iob_add_queue(iob, &conn->write_q);
-    }
-
-  if (ret < 0)
-    {
-      nerr("ERROR: Failed to add buffer to w_queue\n");
-      goto errout_with_iob;
-    }
-
-  /* Allocate resource to receive a callback */
+  /* Allocate resource to receive a callback before enqueueing the IOB.
+   * Once the IOB is queued, ownership has moved to conn->write_q.
+   */
 
   if (conn->sndcb == NULL)
     {
@@ -366,19 +362,31 @@ ssize_t pkt_sendmsg(FAR struct socket *psock, FAR const struct msghdr *msg,
       ret = -ENOMEM;
       goto errout_with_iob;
     }
-  else
+
+  ret = iob_tryadd_queue(iob, &conn->write_q);
+  if (ret < 0 && !nonblock)
     {
-      /* Set up the callback in the connection */
-
-      conn->sndcb->flags = PKT_POLL;
-      conn->sndcb->priv  = conn;
-      conn->sndcb->event = psock_send_eventhandler;
-
-      /* Notify the device driver that new TX data is available. */
-
-      netdev_txnotify_dev(dev, PKT_POLL);
       conn_dev_unlock(&conn->sconn, dev);
+      ret = iob_add_queue(iob, &conn->write_q);
+      conn_dev_lock(&conn->sconn, dev);
     }
+
+  if (ret < 0)
+    {
+      nerr("ERROR: Failed to add buffer to w_queue\n");
+      goto errout_with_iob;
+    }
+
+  /* Set up the callback in the connection */
+
+  conn->sndcb->flags = PKT_POLL;
+  conn->sndcb->priv  = conn;
+  conn->sndcb->event = psock_send_eventhandler;
+
+  /* Notify the device driver that new TX data is available. */
+
+  netdev_txnotify_dev(dev, PKT_POLL);
+  conn_dev_unlock(&conn->sconn, dev);
 
   return len;
 

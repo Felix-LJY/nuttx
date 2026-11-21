@@ -1,6 +1,8 @@
-=======
-rv-virt
-=======
+===================
+QEMU RISC-V RV-Virt
+===================
+
+.. tags:: arch:risc-v, chip:qemu-rv
 
 RISC-V Toolchain
 ================
@@ -51,6 +53,19 @@ For stability, it is also recommended to use the latest QEMU and OpenSBI.
 +----------------------------+--------------+-----------------+
 
 For users who wish to use their own OpenSBI, please refer to `OpenSBI repository <https://github.com/riscv-software-src/opensbi>`_.
+
+RustSBI
+-------
+
+Enable ``CONFIG_RUSTSBI`` in the ``knsh64`` configuration to build RustSBI
+firmware. ``CONFIG_RUSTSBI_DIR`` points to the RustSBI source directory,
+which defaults to ``../rustsbi``. See RustSBI's ``firmware/README.md`` for
+build dependencies.
+
+Run NuttX with the generated firmware using QEMU's default CLINT::
+
+    $ qemu-system-riscv64 -semihosting -M virt -cpu rv64 -smp 1 \
+      -bios nuttx-rustsbi.elf -kernel nuttx -nographic
 
 Configurations
 ==============
@@ -106,9 +121,7 @@ To run it with QEMU, use the following command::
       -device virtio-blk-device,bus=virtio-mmio-bus.0,drive=userdata \
       -bios none -kernel nuttx -nographic
 
-To run the CI scripts, use the following command::
-
-    $ ./nuttx/boards/risc-v/qemu-rv/rv-virt/configs/citest/run
+To run the CI tests of this configuration locally, see :doc:`NTFC </testing/ntfc>`.
 
 citest64
 --------
@@ -142,6 +155,21 @@ To run it with QEMU, use the following command::
       -device virtio-gpu-device,xres=640,yres=480,bus=virtio-mmio-bus.0 \
       -mon chardev=con,mode=readline \
       -bios none -kernel nuttx
+
+elf
+---
+
+This configuration uses ``apps/examples/elf`` in order to test the ELF loader
+on 32-bit RISC-V. It boots directly into the ELF example and does not provide
+the NuttShell (NSH).
+
+libcxx64
+--------
+
+This configuration provides the NuttShell (NSH) with the C++ standard library
+on 64-bit RISC-V. The C++ test at ``apps/testing/cxxtest`` can be run with::
+
+    nsh> cxxtest
 
 lvgl64_vector
 -------------
@@ -294,6 +322,10 @@ leds64
 ------
 
 Similar to the `nsh64`_ configuration, but with User LEDs support for 64-bit RISC-V.
+
+The LEDs are implemented as virtual LEDs and their state is reported through
+the system log. The current ``rv-virt`` implementation does not provide
+a NuttX GPIO controller for these LEDs.
 
 leds64_rust
 -----------

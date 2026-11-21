@@ -56,6 +56,10 @@ SYSCALL_LOOKUP(nxsched_get_stackinfo,      2)
 #endif
 
 SYSCALL_LOOKUP(sysinfo,                    1)
+SYSCALL_LOOKUP(getrlimit,                  2)
+SYSCALL_LOOKUP(setrlimit,                  2)
+SYSCALL_LOOKUP(umask,                      1)
+SYSCALL_LOOKUP(getumask,                   0)
 
 SYSCALL_LOOKUP(gethostname,                2)
 SYSCALL_LOOKUP(sethostname,                2)
@@ -81,6 +85,7 @@ SYSCALL_LOOKUP(sethostname,                2)
   SYSCALL_LOOKUP(setresgid,                3)
   SYSCALL_LOOKUP(getresuid,                3)
   SYSCALL_LOOKUP(getresgid,                3)
+  SYSCALL_LOOKUP(issetugid,                0)
 #endif
 
 /* Semaphores */
@@ -174,6 +179,7 @@ SYSCALL_LOOKUP(sigqueue,                   3)
 SYSCALL_LOOKUP(sigsuspend,                 1)
 SYSCALL_LOOKUP(sigtimedwait,               3)
 SYSCALL_LOOKUP(sigwaitinfo,                2)
+SYSCALL_LOOKUP(pause,                      0)
 #endif
 SYSCALL_LOOKUP(clock_nanosleep,            4)
 
@@ -291,6 +297,10 @@ SYSCALL_LOOKUP(munlockall,                 0)
   SYSCALL_LOOKUP(readlink,                 3)
 #endif
 
+#ifdef CONFIG_FS_CHROOT
+  SYSCALL_LOOKUP(chroot,                   1)
+#endif
+
 #if defined(CONFIG_PIPES) && CONFIG_DEV_PIPE_SIZE > 0
   SYSCALL_LOOKUP(pipe2,                    2)
 #endif
@@ -345,7 +355,10 @@ SYSCALL_LOOKUP(munlockall,                 0)
   SYSCALL_LOOKUP(pthread_setaffinity_np,   3)
   SYSCALL_LOOKUP(pthread_getaffinity_np,   3)
 #endif
+#ifndef CONFIG_DISABLE_ALL_SIGNALS
   SYSCALL_LOOKUP(pthread_sigmask,          3)
+  SYSCALL_LOOKUP(pthread_sigqueue,         3)
+#endif
 #endif
 
 /* The following are defined only if message queues are enabled */
@@ -363,15 +376,13 @@ SYSCALL_LOOKUP(munlockall,                 0)
   SYSCALL_LOOKUP(mq_unlink,                1)
 #endif
 
-/* The following are defined only if environment variables are supported */
+/* The following are defined only if System V message queues are enabled */
 
-#ifndef CONFIG_DISABLE_ENVIRON
-  SYSCALL_LOOKUP(get_environ_ptr,          0)
-  SYSCALL_LOOKUP(clearenv,                 0)
-  SYSCALL_LOOKUP(getenv,                   1)
-  SYSCALL_LOOKUP(putenv,                   1)
-  SYSCALL_LOOKUP(setenv,                   3)
-  SYSCALL_LOOKUP(unsetenv,                 1)
+#ifndef CONFIG_DISABLE_MQUEUE_SYSV
+  SYSCALL_LOOKUP(msgctl,                   3)
+  SYSCALL_LOOKUP(msgget,                   2)
+  SYSCALL_LOOKUP(msgrcv,                   5)
+  SYSCALL_LOOKUP(msgsnd,                   4)
 #endif
 
 /* The following are defined only if networking AND sockets are supported */
@@ -382,7 +393,9 @@ SYSCALL_LOOKUP(munlockall,                 0)
   SYSCALL_LOOKUP(connect,                  3)
   SYSCALL_LOOKUP(getpeername,              3)
   SYSCALL_LOOKUP(getsockname,              3)
+#  ifdef CONFIG_NET_SOCKOPTS
   SYSCALL_LOOKUP(getsockopt,               5)
+#  endif
   SYSCALL_LOOKUP(listen,                   2)
   SYSCALL_LOOKUP(recv,                     4)
   SYSCALL_LOOKUP(recvfrom,                 6)
@@ -390,7 +403,9 @@ SYSCALL_LOOKUP(munlockall,                 0)
   SYSCALL_LOOKUP(send,                     4)
   SYSCALL_LOOKUP(sendto,                   6)
   SYSCALL_LOOKUP(sendmsg,                  3)
+#  ifdef CONFIG_NET_SOCKOPTS
   SYSCALL_LOOKUP(setsockopt,               5)
+#  endif
   SYSCALL_LOOKUP(shutdown,                 2)
   SYSCALL_LOOKUP(socket,                   3)
   SYSCALL_LOOKUP(socketpair,               4)
@@ -422,4 +437,20 @@ SYSCALL_LOOKUP(signal,                     2)
 #ifdef CONFIG_SCHED_INSTRUMENTATION_DUMP
   SYSCALL_LOOKUP(sched_note_vprintf_ip,    5)
   SYSCALL_LOOKUP(sched_note_event_ip,      5)
+#endif
+
+/* NIS domain name */
+
+SYSCALL_LOOKUP(getdomainname,              2)
+SYSCALL_LOOKUP(setdomainname,              2)
+
+/* Process groups and sessions.  They are at the end, so that the numbers
+ * of the other system calls do not depend on CONFIG_SCHED_PROCESS_GROUPS.
+ */
+
+#ifdef CONFIG_SCHED_PROCESS_GROUPS
+  SYSCALL_LOOKUP(setpgid,                  2)
+  SYSCALL_LOOKUP(getpgid,                  1)
+  SYSCALL_LOOKUP(setsid,                   0)
+  SYSCALL_LOOKUP(getsid,                   1)
 #endif

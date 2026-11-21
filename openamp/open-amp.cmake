@@ -76,6 +76,16 @@ if(NOT EXISTS ${CMAKE_CURRENT_LIST_DIR}/open-amp)
       ${CMAKE_CURRENT_LIST_DIR}/0018-lib-rpmsg-add-priority-support-for-rpmsg-endpoint.patch
       && patch -p0 -d ${CMAKE_CURRENT_LIST_DIR} <
       ${CMAKE_CURRENT_LIST_DIR}/0019-rpmsg-Add-VIRTIO_RPMSG_F_BUFADDR-to-support-specify-.patch
+      && patch -p0 -d ${CMAKE_CURRENT_LIST_DIR} <
+      ${CMAKE_CURRENT_LIST_DIR}/0020-rpmsg_virtio-do-not-trust-lengths-written-by-the-remote.patch
+      && patch -p0 -d ${CMAKE_CURRENT_LIST_DIR} <
+      ${CMAKE_CURRENT_LIST_DIR}/0021-virtio-add-buffer-map-unmap-ops-for-non-coherent-tra.patch
+      && patch -p0 -d ${CMAKE_CURRENT_LIST_DIR} <
+      ${CMAKE_CURRENT_LIST_DIR}/0022-rpmsg_virtio-export-the-rx-buffer-helpers.patch
+      && patch -p0 -d ${CMAKE_CURRENT_LIST_DIR} <
+      ${CMAKE_CURRENT_LIST_DIR}/0023-rpmsg_virtio-let-the-caller-provide-the-virtqueue-ca.patch
+      && patch -p0 -d ${CMAKE_CURRENT_LIST_DIR} <
+      ${CMAKE_CURRENT_LIST_DIR}/0024-virtio-restore-the-virtio_dev_name-declaration.patch
     DOWNLOAD_NO_PROGRESS true
     TIMEOUT 30)
 
@@ -90,6 +100,8 @@ if(CONFIG_OPENAMP_CACHE)
   set(WITH_DCACHE ON)
 endif()
 
+set(WITH_VQ_RX_EMPTY_NOTIFY ON)
+
 if(CONFIG_OPENAMP_DEBUG)
   add_compile_definitions(RPMSG_DEBUG)
   add_compile_definitions(VQUEUE_DEBUG)
@@ -97,16 +109,19 @@ endif()
 
 add_compile_definitions(elf_load=remoteproc_elf_load)
 
+# avoid multiple definitions in other file
+add_compile_definitions(safe_strcpy=openamp_safe_strcpy)
+
 if(CONFIG_OPENAMP_VIRTIO_DEVICE_SUPPORT)
-  add_compile_definitions(VIRTIO_DEVICE_SUPPORT=1)
+  set(WITH_VIRTIO_DEVICE ON)
 else()
-  add_compile_definitions(VIRTIO_DEVICE_SUPPORT=0)
+  set(WITH_VIRTIO_DEVICE OFF)
 endif()
 
 if(CONFIG_OPENAMP_VIRTIO_DRIVER_SUPPORT)
-  add_compile_definitions(VIRTIO_DRIVER_SUPPORT=1)
+  set(WITH_VIRTIO_DRIVER ON)
 else()
-  add_compile_definitions(VIRTIO_DRIVER_SUPPORT=0)
+  set(WITH_VIRTIO_DRIVER OFF)
 endif()
 
 set(WITH_LIBMETAL_FIND OFF)

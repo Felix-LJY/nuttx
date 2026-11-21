@@ -37,9 +37,12 @@
 #include <stdio.h>
 #include <nuttx/debug.h>
 
+#include <nuttx/clock.h>
 #include <nuttx/fs/fs.h>
+#include <nuttx/kmalloc.h>
 #include <nuttx/irq.h>
 #include <nuttx/lib/lib.h>
+#include <nuttx/list.h>
 #include <nuttx/panic_notifier.h>
 #include <nuttx/power/pm.h>
 #include <nuttx/mutex.h>
@@ -79,7 +82,8 @@
 #  define WATCHDOG_NOTIFIER_ACTION WATCHDOG_KEEPALIVE_BY_TIMER
 #elif defined(CONFIG_WATCHDOG_AUTOMONITOR_BY_WDOG)
 #  define WATCHDOG_NOTIFIER_ACTION WATCHDOG_KEEPALIVE_BY_WDOG
-#elif defined(CONFIG_WATCHDOG_AUTOMONITOR_BY_WORKER)
+#elif defined(CONFIG_WATCHDOG_AUTOMONITOR_BY_LPWORK) || \
+      defined(CONFIG_WATCHDOG_AUTOMONITOR_BY_HPWORK)
 #  define WATCHDOG_NOTIFIER_ACTION WATCHDOG_KEEPALIVE_BY_WORKER
 #elif defined(CONFIG_WATCHDOG_AUTOMONITOR_BY_CAPTURE)
 #  define WATCHDOG_NOTIFIER_ACTION WATCHDOG_KEEPALIVE_BY_CAPTURE
@@ -90,6 +94,25 @@
 /****************************************************************************
  * Private Types
  ****************************************************************************/
+
+#ifdef CONFIG_WATCHDOG_AUTOMONITOR_TASKS
+/* The supervision state of one open() of the device, a channel.  It is
+ * allocated by open() and kept in the list of the upper half.  close()
+ * releases it only if it is disarmed: an armed channel stays in the list and
+ * is never fed again, so it times out, which is what happens when the task
+ * that owns it exits or crashes.
+ */
+
+struct watchdog_user_s
+{
+  struct list_node node;                            /* Entry in the list */
+  pid_t            pid;                             /* Task that opened it */
+  char             name[CONFIG_TASK_NAME_SIZE + 1]; /* Its name */
+  clock_t          timeout;                         /* Timeout in ticks */
+  clock_t          deadline;                        /* Tick it times out */
+  bool             armed;                           /* Is it supervised */
+};
+#endif
 
 /* This structure describes the state of the upper half driver */
 
@@ -110,15 +133,19 @@ struct watchdog_upperhalf_s
   FAR struct timer_lowerhalf_s   *timer;
 #  elif defined(CONFIG_WATCHDOG_AUTOMONITOR_BY_WDOG)
   struct wdog_s                   wdog;
-#  elif defined(CONFIG_WATCHDOG_AUTOMONITOR_BY_WORKER)
+#  elif defined(CONFIG_WATCHDOG_AUTOMONITOR_BY_LPWORK) || \
+        defined(CONFIG_WATCHDOG_AUTOMONITOR_BY_HPWORK)
   struct work_s                   work;
 #  elif defined(CONFIG_WATCHDOG_AUTOMONITOR_BY_IDLE)
   struct pm_callback_s            idle;
 #  endif
   bool                            monitor;
+#  ifdef CONFIG_WATCHDOG_AUTOMONITOR_TASKS
+  spinlock_t                      slock;  /* Protects the channels */
+  struct list_node                users;  /* All the channels */
+#  endif
 #endif
 
-  uint8_t   crefs;    /* The number of times the device has been opened */
   mutex_t   lock;     /* Supports mutual exclusion */
   FAR char *path;     /* Registration path */
 
@@ -131,14 +158,23 @@ struct watchdog_upperhalf_s
  * Private Function Prototypes
  ****************************************************************************/
 
-static int     wdog_open(FAR struct file *filep);
-static int     wdog_close(FAR struct file *filep);
 static ssize_t wdog_read(FAR struct file *filep, FAR char *buffer,
                          size_t buflen);
+
+#ifdef CONFIG_WATCHDOG_AUTOMONITOR_TASKS
+static int     watchdog_channel_open(FAR struct file *filep);
+static int     watchdog_channel_close(FAR struct file *filep);
+static ssize_t watchdog_channel_write(FAR struct file *filep,
+                                      FAR const char *buffer,
+                                      size_t buflen);
+static int     watchdog_channel_ioctl(FAR struct file *filep, int cmd,
+                                      unsigned long arg);
+#else
 static ssize_t wdog_write(FAR struct file *filep, FAR const char *buffer,
                           size_t buflen);
 static int     wdog_ioctl(FAR struct file *filep, int cmd,
                           unsigned long arg);
+#endif
 
 /****************************************************************************
  * Private Data
@@ -146,12 +182,21 @@ static int     wdog_ioctl(FAR struct file *filep, int cmd,
 
 static const struct file_operations g_wdogops =
 {
-  wdog_open,  /* open */
-  wdog_close, /* close */
+#ifdef CONFIG_WATCHDOG_AUTOMONITOR_TASKS
+  watchdog_channel_open,  /* open */
+  watchdog_channel_close, /* close */
+  wdog_read,              /* read */
+  watchdog_channel_write, /* write */
+  NULL,                   /* seek */
+  watchdog_channel_ioctl, /* ioctl */
+#else
+  NULL,       /* open */
+  NULL,       /* close */
   wdog_read,  /* read */
   wdog_write, /* write */
   NULL,       /* seek */
   wdog_ioctl, /* ioctl */
+#endif
 };
 
 #ifdef CONFIG_WATCHDOG_TIMEOUT_NOTIFIER
@@ -171,6 +216,60 @@ static spinlock_t g_watchdog_capture_lock = SP_UNLOCKED;
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
+
+#ifdef CONFIG_WATCHDOG_AUTOMONITOR
+#ifdef CONFIG_WATCHDOG_AUTOMONITOR_TASKS
+/* Has an armed channel timed out?  Called by the keepalive triggers, some of
+ * which run in interrupt context.
+ */
+
+static bool watchdog_channel_expired(FAR struct watchdog_upperhalf_s *upper)
+{
+  FAR struct watchdog_user_s *user;
+  bool expired = false;
+  irqstate_t flags;
+  clock_t now;
+
+  flags = spin_lock_irqsave(&upper->slock);
+  now = clock_systime_ticks();
+
+  list_for_every_entry(&upper->users, user, struct watchdog_user_s, node)
+    {
+      if (user->armed && clock_compare(user->deadline, now))
+        {
+          _alert("%s: timeout of task %d (%s), %ju ms\n", upper->path,
+                 user->pid, user->name, (uintmax_t)TICK2MSEC(user->timeout));
+          expired = true;
+        }
+    }
+
+  spin_unlock_irqrestore(&upper->slock, flags);
+  return expired;
+}
+#endif
+
+/* Feed the lower half.  With the task supervision, only while no armed
+ * channel timed out: the hardware watchdog then resets the system.
+ */
+
+static void watchdog_automonitor_keepalive(
+                                    FAR struct watchdog_upperhalf_s *upper)
+{
+#ifdef CONFIG_WATCHDOG_AUTOMONITOR_TASKS
+  if (watchdog_channel_expired(upper))
+    {
+#  ifdef CONFIG_WATCHDOG_AUTOMONITOR_TASKS_PANIC
+      PANIC();
+#  endif
+
+      return;
+    }
+#endif
+
+  upper->lower->ops->keepalive(upper->lower);
+}
+
+#endif
 
 #ifdef CONFIG_WATCHDOG_AUTOMONITOR_BY_CAPTURE
 static void watchdog_capture_add(FAR struct watchdog_upperhalf_s *upper)
@@ -247,7 +346,6 @@ static int watchdog_automonitor_capture(int irq, FAR void *context,
                                         FAR void *arg)
 {
   FAR struct watchdog_upperhalf_s *upper = watchdog_capture_find(arg);
-  FAR struct watchdog_lowerhalf_s *lower;
 
   /* A stop operation can race with a pending interrupt.  Do not dereference
    * a removed association after automonitor has been stopped.
@@ -258,8 +356,6 @@ static int watchdog_automonitor_capture(int irq, FAR void *context,
       return 0;
     }
 
-  lower = upper->lower;
-
   if (upper->monitor)
     {
       /* Reload the hardware watchdog before dispatching optional
@@ -267,7 +363,7 @@ static int watchdog_automonitor_capture(int irq, FAR void *context,
        * callbacks must not delay the keepalive operation.
        */
 
-      lower->ops->keepalive(lower);
+      watchdog_automonitor_keepalive(upper);
 
 #ifdef CONFIG_WATCHDOG_TIMEOUT_NOTIFIER
       /* The capture callback is entered from the watchdog timeout
@@ -287,7 +383,6 @@ watchdog_automonitor_oneshot(FAR struct oneshot_lowerhalf_s *oneshot,
                              FAR void *arg)
 {
   FAR struct watchdog_upperhalf_s *upper = arg;
-  FAR struct watchdog_lowerhalf_s *lower = upper->lower;
 
   if (upper->monitor)
     {
@@ -296,7 +391,7 @@ watchdog_automonitor_oneshot(FAR struct oneshot_lowerhalf_s *oneshot,
         WATCHDOG_AUTOMONITOR_PING_INTERVAL, 0
       };
 
-      lower->ops->keepalive(lower);
+      watchdog_automonitor_keepalive(upper);
       ONESHOT_START(oneshot, &ts);
     }
 }
@@ -305,11 +400,10 @@ static bool watchdog_automonitor_timer(FAR uint32_t *next_interval_us,
                                        FAR void *arg)
 {
   FAR struct watchdog_upperhalf_s *upper = arg;
-  FAR struct watchdog_lowerhalf_s *lower = upper->lower;
 
   if (upper->monitor)
     {
-      lower->ops->keepalive(lower);
+      watchdog_automonitor_keepalive(upper);
     }
 
   return upper->monitor;
@@ -318,26 +412,30 @@ static bool watchdog_automonitor_timer(FAR uint32_t *next_interval_us,
 static void watchdog_automonitor_wdog(wdparm_t arg)
 {
   FAR struct watchdog_upperhalf_s *upper = (FAR void *)arg;
-  FAR struct watchdog_lowerhalf_s *lower = upper->lower;
 
   if (upper->monitor)
     {
-      lower->ops->keepalive(lower);
+      watchdog_automonitor_keepalive(upper);
       wd_start(&upper->wdog, WATCHDOG_AUTOMONITOR_PING_INTERVAL_TICK,
                watchdog_automonitor_wdog, (wdparm_t)upper);
     }
 }
-#elif defined(CONFIG_WATCHDOG_AUTOMONITOR_BY_WORKER)
+#elif defined(CONFIG_WATCHDOG_AUTOMONITOR_BY_LPWORK) || \
+      defined(CONFIG_WATCHDOG_AUTOMONITOR_BY_HPWORK)
 static void watchdog_automonitor_worker(FAR void *arg)
 {
   FAR struct watchdog_upperhalf_s *upper = arg;
-  FAR struct watchdog_lowerhalf_s *lower = upper->lower;
 
   if (upper->monitor)
     {
-      lower->ops->keepalive(lower);
+      watchdog_automonitor_keepalive(upper);
+#ifdef CONFIG_WATCHDOG_AUTOMONITOR_BY_HPWORK
+      work_queue(HPWORK, &upper->work, watchdog_automonitor_worker,
+                 upper, WATCHDOG_AUTOMONITOR_PING_INTERVAL_TICK);
+#else
       work_queue(LPWORK, &upper->work, watchdog_automonitor_worker,
                  upper, WATCHDOG_AUTOMONITOR_PING_INTERVAL_TICK);
+#endif
     }
 }
 #elif defined(CONFIG_WATCHDOG_AUTOMONITOR_BY_IDLE)
@@ -345,15 +443,13 @@ static void watchdog_automonitor_idle(FAR struct pm_callback_s *cb,
                                       int domain, enum pm_state_e pmstate)
 {
   FAR struct watchdog_upperhalf_s *upper;
-  FAR struct watchdog_lowerhalf_s *lower;
 
   upper = container_of(cb, struct watchdog_upperhalf_s, idle);
-  lower = upper->lower;
 
   if (domain == PM_IDLE_DOMAIN &&
       pmstate != PM_RESTORE && upper->monitor)
     {
-      lower->ops->keepalive(lower);
+      watchdog_automonitor_keepalive(upper);
     }
 }
 #endif
@@ -378,7 +474,7 @@ watchdog_automonitor_start(FAR struct watchdog_upperhalf_s *upper)
     {
 #  if defined(CONFIG_WATCHDOG_AUTOMONITOR_BY_CAPTURE)
       watchdog_capture_add(upper);
-      lower->ops->capture(lower, watchdog_automonitor_capture);
+      WD_CAPTURE(lower, watchdog_automonitor_capture);
 #  elif defined(CONFIG_WATCHDOG_AUTOMONITOR_BY_ONESHOT)
       struct timespec ts =
       {
@@ -395,7 +491,10 @@ watchdog_automonitor_start(FAR struct watchdog_upperhalf_s *upper)
 #  elif defined(CONFIG_WATCHDOG_AUTOMONITOR_BY_WDOG)
       wd_start(&upper->wdog, WATCHDOG_AUTOMONITOR_PING_INTERVAL_TICK,
                watchdog_automonitor_wdog, (wdparm_t)upper);
-#  elif defined(CONFIG_WATCHDOG_AUTOMONITOR_BY_WORKER)
+#  elif defined(CONFIG_WATCHDOG_AUTOMONITOR_BY_HPWORK)
+      work_queue(HPWORK, &upper->work, watchdog_automonitor_worker,
+                 upper, WATCHDOG_AUTOMONITOR_PING_INTERVAL_TICK);
+#  elif defined(CONFIG_WATCHDOG_AUTOMONITOR_BY_LPWORK)
       work_queue(LPWORK, &upper->work, watchdog_automonitor_worker,
                  upper, WATCHDOG_AUTOMONITOR_PING_INTERVAL_TICK);
 #  elif defined(CONFIG_WATCHDOG_AUTOMONITOR_BY_IDLE)
@@ -403,12 +502,8 @@ watchdog_automonitor_start(FAR struct watchdog_upperhalf_s *upper)
       pm_register(&upper->idle);
 #  endif
       upper->monitor = true;
-      if (lower->ops->settimeout)
-        {
-          lower->ops->settimeout(lower, WATCHDOG_AUTOMONITOR_TIMEOUT);
-        }
-
-      lower->ops->start(lower);
+      WD_SETTIMEOUT(lower, WATCHDOG_AUTOMONITOR_TIMEOUT);
+      WD_START(lower);
     }
 }
 
@@ -419,9 +514,9 @@ static void watchdog_automonitor_stop(FAR struct watchdog_upperhalf_s *upper)
   if (upper->monitor)
     {
       upper->monitor = false;
-      lower->ops->stop(lower);
+      WD_STOP(lower);
 #  if defined(CONFIG_WATCHDOG_AUTOMONITOR_BY_CAPTURE)
-      lower->ops->capture(lower, NULL);
+      WD_CAPTURE(lower, NULL);
       watchdog_capture_remove(upper);
 #  elif defined(CONFIG_WATCHDOG_AUTOMONITOR_BY_ONESHOT)
       ONESHOT_CANCEL(upper->oneshot, NULL);
@@ -429,7 +524,9 @@ static void watchdog_automonitor_stop(FAR struct watchdog_upperhalf_s *upper)
       upper->timer->ops->stop(upper->timer);
 #  elif defined(CONFIG_WATCHDOG_AUTOMONITOR_BY_WDOG)
       wd_cancel(&upper->wdog);
-#  elif defined(CONFIG_WATCHDOG_AUTOMONITOR_BY_WORKER)
+#  elif defined(CONFIG_WATCHDOG_AUTOMONITOR_BY_HPWORK)
+      work_cancel(HPWORK, &upper->work);
+#  elif defined(CONFIG_WATCHDOG_AUTOMONITOR_BY_LPWORK)
       work_cancel(LPWORK, &upper->work);
 #  elif defined(CONFIG_WATCHDOG_AUTOMONITOR_BY_IDLE)
       pm_unregister(&upper->idle);
@@ -450,104 +547,13 @@ static int wdog_notifier(FAR struct notifier_block *nb, unsigned long action,
 #ifdef CONFIG_WATCHDOG_AUTOMONITOR
       watchdog_automonitor_stop(upper);
 #else
-      return upper->lower->ops->stop(upper->lower);
+      return WD_STOP(upper->lower);
 #endif
     }
 
   return 0;
 }
 #endif
-
-/****************************************************************************
- * Name: wdog_open
- *
- * Description:
- *   This function is called whenever the watchdog timer device is opened.
- *
- ****************************************************************************/
-
-static int wdog_open(FAR struct file *filep)
-{
-  FAR struct inode                *inode = filep->f_inode;
-  FAR struct watchdog_upperhalf_s *upper = inode->i_private;
-  uint8_t                          tmp;
-  int                              ret;
-
-  wdinfo("crefs: %d\n", upper->crefs);
-
-  /* Get exclusive access to the device structures */
-
-  ret = nxmutex_lock(&upper->lock);
-  if (ret < 0)
-    {
-      goto errout;
-    }
-
-  /* Increment the count of references to the device.  If this the first
-   * time that the driver has been opened for this device, then initialize
-   * the device.
-   */
-
-  tmp = upper->crefs + 1;
-  if (tmp == 0)
-    {
-      /* More than 255 opens; uint8_t overflows to zero */
-
-      ret = -EMFILE;
-      goto errout_with_lock;
-    }
-
-  /* Save the new open count */
-
-  upper->crefs = tmp;
-  ret = OK;
-
-errout_with_lock:
-  nxmutex_unlock(&upper->lock);
-
-errout:
-  return ret;
-}
-
-/****************************************************************************
- * Name: wdog_close
- *
- * Description:
- *   This function is called when the watchdog timer device is closed.
- *
- ****************************************************************************/
-
-static int wdog_close(FAR struct file *filep)
-{
-  FAR struct inode                *inode = filep->f_inode;
-  FAR struct watchdog_upperhalf_s *upper = inode->i_private;
-  int                              ret;
-
-  wdinfo("crefs: %d\n", upper->crefs);
-
-  /* Get exclusive access to the device structures */
-
-  ret = nxmutex_lock(&upper->lock);
-  if (ret < 0)
-    {
-      goto errout;
-    }
-
-  /* Decrement the references to the driver.  If the reference count will
-   * decrement to 0, then uninitialize the driver.
-   */
-
-  if (upper->crefs > 0)
-    {
-      upper->crefs--;
-    }
-
-  nxmutex_unlock(&upper->lock);
-  ret = OK;
-
-errout:
-  return ret;
-}
 
 /****************************************************************************
  * Name: wdog_read
@@ -580,7 +586,7 @@ static ssize_t wdog_read(FAR struct file *filep, FAR char *buffer,
       return 0;
     }
 
-  ret = wdog_ioctl(filep, WDIOC_GETSTATUS, (uintptr_t)&status);
+  ret = g_wdogops.ioctl(filep, WDIOC_GETSTATUS, (uintptr_t)&status);
   if (ret < 0)
     {
       return ret;
@@ -593,8 +599,8 @@ static ssize_t wdog_read(FAR struct file *filep, FAR char *buffer,
           buflen,
           "Status       :\n"
           "  flags      : 0x%08" PRIx32 "\n"
-          "  timeout    : %" PRId32 "\n"
-          "  timeleft   : %" PRId32 "\n",
+          "  timeout    : %" PRIu32 "\n"
+          "  timeleft   : %" PRIu32 "\n",
           status.flags, status.timeout, status.timeleft
         );
   if (ret < 0)
@@ -611,6 +617,210 @@ static ssize_t wdog_read(FAR struct file *filep, FAR char *buffer,
   return ret;
 }
 
+#ifdef CONFIG_WATCHDOG_AUTOMONITOR_TASKS
+/* Has an armed channel timed out?  Such a channel stays so, even if the
+ * monitor did not notice it yet, otherwise a task that is late by less than
+ * the keepalive interval would escape by feeding, disarming or arming the
+ * channel again.  The lock must be held.
+ */
+
+static bool watchdog_channel_late(FAR struct watchdog_user_s *user)
+{
+  return user->armed && clock_compare(user->deadline, clock_systime_ticks());
+}
+
+/* Arm a channel, its timeout starts now.  The lock must be held. */
+
+static void watchdog_channel_arm(FAR struct watchdog_user_s *user)
+{
+  if (!watchdog_channel_late(user))
+    {
+      user->armed    = true;
+      user->deadline = clock_systime_ticks() + user->timeout;
+    }
+}
+
+/* Disarm a channel.  The lock must be held. */
+
+static void watchdog_channel_disarm(FAR struct watchdog_user_s *user)
+{
+  if (!watchdog_channel_late(user))
+    {
+      user->armed = false;
+    }
+}
+
+/* Restart the timeout of a channel, if it is armed.  The lock must be
+ * held.
+ */
+
+static void watchdog_channel_feed(FAR struct watchdog_user_s *user)
+{
+  if (user->armed && !watchdog_channel_late(user))
+    {
+      user->deadline = clock_systime_ticks() + user->timeout;
+    }
+}
+
+/* Each open() creates a channel */
+
+static int watchdog_channel_open(FAR struct file *filep)
+{
+  FAR struct watchdog_upperhalf_s *upper = filep->f_inode->i_private;
+  FAR struct tcb_s *tcb = nxsched_self();
+  FAR struct watchdog_user_s *user;
+  irqstate_t flags;
+
+  user = kmm_zalloc(sizeof(struct watchdog_user_s));
+  if (user == NULL)
+    {
+      return -ENOMEM;
+    }
+
+  user->pid     = tcb->pid;
+  user->timeout = MSEC2TICK(CONFIG_WATCHDOG_AUTOMONITOR_TASKS_TIMEOUT);
+  strlcpy(user->name, get_task_name(tcb), sizeof(user->name));
+
+  flags = spin_lock_irqsave(&upper->slock);
+  list_add_tail(&upper->users, &user->node);
+  watchdog_channel_arm(user);
+  spin_unlock_irqrestore(&upper->slock, flags);
+
+  filep->f_priv = user;
+  return OK;
+}
+
+/* An armed channel stays in the list and times out, see the structure */
+
+static int watchdog_channel_close(FAR struct file *filep)
+{
+  FAR struct watchdog_upperhalf_s *upper = filep->f_inode->i_private;
+  FAR struct watchdog_user_s *user = filep->f_priv;
+  irqstate_t flags;
+  bool release;
+
+  flags = spin_lock_irqsave(&upper->slock);
+  release = !user->armed;
+  if (release)
+    {
+      list_delete(&user->node);
+    }
+
+  spin_unlock_irqrestore(&upper->slock, flags);
+
+  if (release)
+    {
+      kmm_free(user);
+    }
+
+  return OK;
+}
+
+/* Feed the channel, or disarm it with a 'V' */
+
+static ssize_t watchdog_channel_write(FAR struct file *filep,
+                                      FAR const char *buffer,
+                                      size_t buflen)
+{
+  FAR struct watchdog_upperhalf_s *upper = filep->f_inode->i_private;
+  FAR struct watchdog_user_s *user = filep->f_priv;
+  irqstate_t flags;
+
+  flags = spin_lock_irqsave(&upper->slock);
+
+#ifdef CONFIG_WATCHDOG_MAGIC_V
+  if (memchr(buffer, 'V', buflen) != NULL)
+    {
+      watchdog_channel_disarm(user);
+    }
+  else
+#endif
+    {
+      watchdog_channel_feed(user);
+    }
+
+  spin_unlock_irqrestore(&upper->slock, flags);
+  return buflen;
+}
+
+/* The commands act on the channel, never on the lower half, so that no task
+ * can stop the hardware watchdog, change its timeout or replace its reset
+ * with a capture handler.
+ */
+
+static int watchdog_channel_ioctl(FAR struct file *filep, int cmd,
+                                  unsigned long arg)
+{
+  FAR struct watchdog_upperhalf_s *upper = filep->f_inode->i_private;
+  FAR struct watchdog_user_s *user = filep->f_priv;
+  FAR struct watchdog_status_s *status;
+  irqstate_t flags;
+  clock_t now;
+  int ret = OK;
+
+  switch (cmd)
+    {
+      case WDIOC_START:
+        flags = spin_lock_irqsave(&upper->slock);
+        watchdog_channel_arm(user);
+        spin_unlock_irqrestore(&upper->slock, flags);
+        break;
+
+      case WDIOC_STOP:
+        flags = spin_lock_irqsave(&upper->slock);
+        watchdog_channel_disarm(user);
+        spin_unlock_irqrestore(&upper->slock, flags);
+        break;
+
+      case WDIOC_KEEPALIVE:
+        flags = spin_lock_irqsave(&upper->slock);
+        watchdog_channel_feed(user);
+        spin_unlock_irqrestore(&upper->slock, flags);
+        break;
+
+      case WDIOC_SETTIMEOUT:
+        if (arg == 0)
+          {
+            ret = -EINVAL;
+            break;
+          }
+
+        flags = spin_lock_irqsave(&upper->slock);
+        user->timeout = MSEC2TICK(arg);
+        watchdog_channel_feed(user);
+        spin_unlock_irqrestore(&upper->slock, flags);
+        break;
+
+      case WDIOC_GETSTATUS:
+        status = (FAR struct watchdog_status_s *)((uintptr_t)arg);
+        if (status == NULL)
+          {
+            ret = -EINVAL;
+            break;
+          }
+
+        flags = spin_lock_irqsave(&upper->slock);
+        now = clock_systime_ticks();
+        status->flags    = user->armed ? WDFLAGS_ACTIVE | WDFLAGS_RESET : 0;
+        status->timeout  = TICK2MSEC(user->timeout);
+        status->timeleft = user->armed && !clock_compare(user->deadline, now)
+                           ? TICK2MSEC(user->deadline - now) : 0;
+        spin_unlock_irqrestore(&upper->slock, flags);
+        break;
+
+      case WDIOC_CAPTURE:
+        ret = -ENOSYS;
+        break;
+
+      default:
+        ret = -ENOTTY;
+        break;
+    }
+
+  return ret;
+}
+
+#else
 /****************************************************************************
  * Name: wdog_write
  *
@@ -627,7 +837,6 @@ static ssize_t wdog_write(FAR struct file *filep, FAR const char *buffer,
   FAR struct watchdog_upperhalf_s *upper;
   FAR struct watchdog_lowerhalf_s *lower;
   int err = 0;
-  int i;
 
   upper = inode->i_private;
   DEBUGASSERT(upper != NULL);
@@ -636,22 +845,25 @@ static ssize_t wdog_write(FAR struct file *filep, FAR const char *buffer,
 
   nxmutex_lock(&upper->lock);
 
-  for (i = 0; i < buflen; i++)
+  if (buflen > 0 && buffer[0] == 'V')
     {
-      if (buffer[i] == 'V')
-        {
 #ifdef CONFIG_WATCHDOG_AUTOMONITOR
-          watchdog_automonitor_stop(upper);
+      watchdog_automonitor_stop(upper);
 #else
-          err = lower->ops->stop(lower);
+      err = WD_STOP(lower);
 #endif
-          break;
-        }
     }
-
-  if (i == buflen)
+  else if (buflen > 0)
     {
-      err = lower->ops->keepalive(lower);
+#ifdef CONFIG_WATCHDOG_AUTOMONITOR
+      watchdog_automonitor_start(upper);
+#else
+      err = lower->ops->start(lower);
+#endif
+    }
+  else
+    {
+      err = WD_KEEPALIVE(lower);
     }
 
   nxmutex_unlock(&upper->lock);
@@ -700,176 +912,147 @@ static int wdog_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
 
   switch (cmd)
     {
-    /* cmd:         WDIOC_START
-     * Description: Start the watchdog timer
-     * Argument:    Ignored
-     */
+      /* cmd:         WDIOC_START
+       * Description: Start the watchdog timer
+       * Argument:    Ignored
+       */
 
-    case WDIOC_START:
-      {
+      case WDIOC_START:
+        {
 #ifdef CONFIG_WATCHDOG_AUTOMONITOR
-        watchdog_automonitor_stop(upper);
+          watchdog_automonitor_stop(upper);
 #endif
 
-        /* Start the watchdog timer, resetting the time to the current
-         * timeout
-         */
+          /* Start the watchdog timer, resetting the time to the current
+           * timeout
+           */
 
-        DEBUGASSERT(lower->ops->start); /* Required */
-        ret = lower->ops->start(lower);
-      }
-      break;
+          ret = WD_START(lower);
+        }
+        break;
 
-    /* cmd:         WDIOC_STOP
-     * Description: Stop the watchdog timer
-     * Argument:    Ignored
-     */
+      /* cmd:         WDIOC_STOP
+       * Description: Stop the watchdog timer
+       * Argument:    Ignored
+       */
 
-    case WDIOC_STOP:
-      {
-        /* Stop the watchdog timer */
+      case WDIOC_STOP:
+        {
+          /* Stop the watchdog timer */
 
-        DEBUGASSERT(lower->ops->stop); /* Required */
-        ret = lower->ops->stop(lower);
-      }
-      break;
+          ret = WD_STOP(lower);
+        }
+        break;
 
-    /* cmd:         WDIOC_GETSTATUS
-     * Description: Get the status of the watchdog timer.
-     * Argument:    A writeable pointer to struct watchdog_status_s.
-     */
+      /* cmd:         WDIOC_GETSTATUS
+       * Description: Get the status of the watchdog timer.
+       * Argument:    A writeable pointer to struct watchdog_status_s.
+       */
 
-    case WDIOC_GETSTATUS:
-      {
-        FAR struct watchdog_status_s *status;
+      case WDIOC_GETSTATUS:
+        {
+          FAR struct watchdog_status_s *status;
 
-        /* Get the current watchdog timer status */
+          /* Get the current watchdog timer status */
 
-        if (lower->ops->getstatus) /* Optional */
-          {
-            status = (FAR struct watchdog_status_s *)((uintptr_t)arg);
-            if (status)
-              {
-                ret = lower->ops->getstatus(lower, status);
-              }
-            else
-              {
-                ret = -EINVAL;
-              }
-          }
-        else
-          {
-            ret = -ENOSYS;
-          }
-      }
-      break;
+          status = (FAR struct watchdog_status_s *)((uintptr_t)arg);
+          if (status)
+            {
+              ret = WD_GETSTATUS(lower, status);
+            }
+          else
+            {
+              ret = -EINVAL;
+            }
+        }
+        break;
 
-    /* cmd:         WDIOC_SETTIMEOUT
-     * Description: Reset the watchdog timeout to this value
-     * Argument:    A 32-bit timeout value in milliseconds.
-     */
+      /* cmd:         WDIOC_SETTIMEOUT
+       * Description: Reset the watchdog timeout to this value
+       * Argument:    A 32-bit timeout value in milliseconds.
+       */
 
-    case WDIOC_SETTIMEOUT:
-      {
-        /* Set a new timeout value (and reset the watchdog timer) */
+      case WDIOC_SETTIMEOUT:
+        {
+          /* Set a new timeout value (and reset the watchdog timer) */
 
-        if (lower->ops->settimeout) /* Optional */
-          {
-            ret = lower->ops->settimeout(lower, (uint32_t)arg);
-          }
-        else
-          {
-            ret = -ENOSYS;
-          }
-      }
-      break;
+          ret = WD_SETTIMEOUT(lower, (uint32_t)arg);
+        }
+        break;
 
-    /* cmd:         WDIOC_CAPTURE
-     * Description: Do not reset.  Instead, called this handler.
-     * Argument:    A pointer to struct watchdog_capture_s.
-     */
+      /* cmd:         WDIOC_CAPTURE
+       * Description: Do not reset.  Instead, called this handler.
+       * Argument:    A pointer to struct watchdog_capture_s.
+       */
 
-    case WDIOC_CAPTURE:
-      {
-        FAR struct watchdog_capture_s *capture;
+      case WDIOC_CAPTURE:
+        {
+          FAR struct watchdog_capture_s *capture;
 
-        /* Don't reset on watchdog timer timeout; instead, call this user
-         * provider timeout handler.  NOTE:  Providing handler==NULL will
-         * restore the reset behavior.
-         */
+          /* Don't reset on watchdog timer timeout; instead, call this user
+           * provider timeout handler.  NOTE:  Providing handler==NULL will
+           * restore the reset behavior.
+           */
 
-        if (lower->ops->capture) /* Optional */
-          {
-            capture = (FAR struct watchdog_capture_s *)((uintptr_t)arg);
-            if (capture)
-              {
-                capture->oldhandler =
-                  lower->ops->capture(lower, capture->newhandler);
-                ret = OK;
-              }
-            else
-              {
-                ret = -EINVAL;
-              }
-          }
-        else
-          {
-            ret = -ENOSYS;
-          }
-      }
-      break;
+          if (lower->ops->capture) /* Optional */
+            {
+              capture = (FAR struct watchdog_capture_s *)((uintptr_t)arg);
+              if (capture)
+                {
+                  capture->oldhandler =
+                    lower->ops->capture(lower, capture->newhandler);
+                  ret = OK;
+                }
+              else
+                {
+                  ret = -EINVAL;
+                }
+            }
+          else
+            {
+              ret = -ENOSYS;
+            }
+        }
+        break;
 
-    /* cmd:         WDIOC_KEEPALIVE
-     * Description: Reset the watchdog timer ("ping", "pet the dog")
-     * Argument:    Argument: Ignored
-     */
+      /* cmd:         WDIOC_KEEPALIVE
+       * Description: Reset the watchdog timer ("ping", "pet the dog")
+       * Argument:    Argument: Ignored
+       */
 
-    case WDIOC_KEEPALIVE:
-      {
-        /* Reset the watchdog timer to the current timeout value, prevent
-         * any imminent watchdog timeouts.  This is sometimes referred as
-         * "pinging" the watchdog timer or "petting the dog".
-         */
+      case WDIOC_KEEPALIVE:
+        {
+          /* Reset the watchdog timer to the current timeout value, prevent
+           * any imminent watchdog timeouts.  This is sometimes referred as
+           * "pinging" the watchdog timer or "petting the dog".
+           */
 
-        if (lower->ops->keepalive) /* Optional */
-          {
-            ret = lower->ops->keepalive(lower);
-          }
-        else
-          {
-            ret = -ENOSYS;
-          }
-      }
-      break;
+          ret = WD_KEEPALIVE(lower);
+        }
+        break;
 
-    /* Any unrecognized IOCTL commands might be platform-specific ioctl
-     * commands
-     */
+      /* Any unrecognized IOCTL commands might be platform-specific ioctl
+       * commands
+       */
 
-    default:
-      {
-        wdinfo("Forwarding unrecognized cmd: %d arg: %ld\n", cmd, arg);
+      default:
+        {
+          wdinfo("Forwarding unrecognized cmd: %d arg: %ld\n", cmd, arg);
 
-        /* An ioctl commands that are not recognized by the "upper-half"
-         * driver are forwarded to the lower half driver through this
-         * method.
-         */
+          /* An ioctl commands that are not recognized by the "upper-half"
+           * driver are forwarded to the lower half driver through this
+           * method.
+           */
 
-        if (lower->ops->ioctl) /* Optional */
-          {
-            ret = lower->ops->ioctl(lower, cmd, arg);
-          }
-        else
-          {
-            ret = -ENOTTY;
-          }
-      }
-      break;
+          ret = WD_IOCTL(lower, cmd, arg);
+        }
+        break;
     }
 
   nxmutex_unlock(&upper->lock);
   return ret;
 }
+#endif
 
 /****************************************************************************
  * Public Functions
@@ -991,6 +1174,10 @@ FAR void *watchdog_register(FAR const char *path,
 
   nxmutex_init(&upper->lock);
   upper->lower = lower;
+#ifdef CONFIG_WATCHDOG_AUTOMONITOR_TASKS
+  spin_lock_init(&upper->slock);
+  list_initialize(&upper->users);
+#endif
 
   /* Copy the registration path */
 
@@ -1057,6 +1244,11 @@ void watchdog_unregister(FAR void *handle)
 {
   FAR struct watchdog_upperhalf_s *upper;
   FAR struct watchdog_lowerhalf_s *lower;
+#ifdef CONFIG_WATCHDOG_AUTOMONITOR_TASKS
+  FAR struct watchdog_user_s *user;
+  struct list_node users;
+  irqstate_t flags;
+#endif
 
   /* Recover the pointer to the upper-half driver state */
 
@@ -1069,12 +1261,34 @@ void watchdog_unregister(FAR void *handle)
 
 #ifdef CONFIG_WATCHDOG_AUTOMONITOR
   watchdog_automonitor_stop(upper);
+#  if defined(CONFIG_WATCHDOG_AUTOMONITOR_BY_LPWORK)
+  work_cancel_sync(LPWORK, &upper->work);
+#  elif defined(CONFIG_WATCHDOG_AUTOMONITOR_BY_HPWORK)
+  work_cancel_sync(HPWORK, &upper->work);
+#  endif
+#endif
+
+#ifdef CONFIG_WATCHDOG_AUTOMONITOR_TASKS
+  /* A keepalive trigger running in interrupt context, or on another cpu,
+   * may still walk the channels: detach them under the lock and free them
+   * outside of it.
+   */
+
+  flags = spin_lock_irqsave(&upper->slock);
+  list_move(&upper->users, &users);
+  list_initialize(&upper->users);
+  spin_unlock_irqrestore(&upper->slock, flags);
+
+  while ((user = list_remove_head_type(&users, struct watchdog_user_s,
+                                       node)) != NULL)
+    {
+      kmm_free(user);
+    }
 #endif
 
   /* Disable the watchdog timer */
 
-  DEBUGASSERT(lower->ops->stop); /* Required */
-  lower->ops->stop(lower);
+  WD_STOP(lower);
 
   /* Unregister the watchdog timer device */
 

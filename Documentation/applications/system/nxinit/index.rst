@@ -19,10 +19,21 @@ It is lightweight, supports command execution triggered by events, supports
 service/daemon management and many more.
 
 The ``init.rc`` consists of five categories of statements, all line-oriented with
-parameters separated by spaces. The content is processed by a preprocessor,
-following C language specifications for escape rules and comment formats.
+parameters separated by spaces. A line whose first character that is not
+whitespace is ``#`` is a comment. A board ``init.rc`` in ``RCSRCS`` goes
+through the C preprocessor when the board ROMFS image is built: there it can
+use ``#include``, ``#ifdef`` and C comments, and a line that starts with ``#``
+is a preprocessor directive.
 
 File path configured by ``CONFIG_SYSTEM_NXINIT_RC_FILE_PATH``.
+
+At start, NXInit sets the file mode creation mask (see ``umask()``) to the
+octal value of ``CONFIG_SYSTEM_NXINIT_UMASK``. All commands and services
+inherit it. The default is empty: NXInit keeps the mask that it got, and NuttX
+starts the first task with the mask 0. A system with file permissions
+(``CONFIG_FS_PERMISSION``) can set ``022``, as sysvinit and systemd do. Then
+the files and directories that programs create with the mode 0666 or 0777 are
+not writable by all users.
 
 1. Actions and Commands
 -----------------------
@@ -72,6 +83,16 @@ never set up at all (there is no ``/dev/console`` unless
 ``<device>`` (``CONFIG_SYSTEM_NXINIT_CONSOLE_DEV``, ``/dev/console`` by
 default, if omitted) and duplicating it onto the service's stdin, stdout
 and stderr before it is spawned.
+
+After the start, the device is also the controlling terminal of the
+service (``TIOCSCTTY`` with the PID of the service), as init and getty do
+on other systems: Ctrl-C and Ctrl-Z send ``SIGINT`` and ``SIGTSTP`` to it
+(with ``CONFIG_TTY_SIGINT`` and ``CONFIG_TTY_SIGTSTP``), and a shell finds
+its foreground process group with ``tcgetpgrp()``, so it can use job
+control. A device without these signals keeps working as before. The NSH
+``sh`` program gives up the terminal at its prompt and makes each
+foreground command the foreground process, so Ctrl-C at its prompt does
+not end it.
 
 This is required for a plain shell service (e.g. ``service console sh``)
 to actually be usable as an interactive console. It is not needed for
@@ -128,11 +149,11 @@ forwards ``setprop`` to the action manager.
 Built-in Properties
 ====================
 
-NXInit sets one built-in property on its own, before the ``boot`` event
-fires:
+NXInit sets the following built-in properties on its own:
 
-- ``sys.boot.reason``: the cause of the last board reset. It is queried
-  once at startup via ``boardctl(BOARDIOC_RESET_CAUSE, ...)``; applications
+- ``sys.boot.reason``: the cause of the last board reset, set before the
+  ``boot`` event fires. It is queried once at startup via
+  ``boardctl(BOARDIOC_RESET_CAUSE, ...)``; applications
   do not need to set it themselves. This requires
   ``CONFIG_BOARDCTL_RESET_CAUSE`` and a board-provided
   ``board_reset_cause()`` implementation.
@@ -154,7 +175,9 @@ fires:
   2. A single soft-reset reason string, for software-triggered resets
      (``BOARDIOC_RESETCAUSE_CPU_SOFT``): ``reboot``, ``assert``,
      ``kernel_panic``, ``bootloader``, ``recovery``, ``factory_reset``,
-     ``factory_reset_inquiry``, ``thermal``.
+     ``factory_reset_inquiry``, ``thermal``, ``shutdown``, ``unknown``.
+     ``shutdown`` stands for a power-off soft reset, and ``unknown`` for
+     a subreason NXInit does not recognize.
 
   Since the property is matched with ``fnmatch`` and alternatives can be
   separated with ``|``, a trigger can match on the cause, the subreason, or
@@ -168,21 +191,82 @@ fires:
       on init && property:sys.boot.reason=bootloader|recovery|thermal
           ...
 
+- ``init.trigger[.<core>]``: the key that ``trigger <event>`` writes, with
+  ``<event>`` as the value; ``on <event>`` matches it. Each init instance
+  uses its own key, so instances that share a property backend do not run
+  each other's actions:
+
+  - ``init.trigger.core<N>`` with ``CONFIG_BMP``, where ``<N>`` is the CPU
+    the instance runs on;
+  - ``init.trigger.<cpuname>`` with ``CONFIG_RPMSG_LOCAL_CPUNAME``;
+  - ``init.trigger`` otherwise.
+
+  With a shared backend, an instance can wait for another instance's event
+  through that instance's key, or trigger an event on it by setting the key.
+  For example, audio waits for ap's ``appinit``:
+
+  .. code-block::
+     :caption: init.audio.rc
+
+     on property:init.trigger.ap=appinit
+         ...
+
+  and ap triggers audio's ``appinit``:
+
+  .. code-block::
+     :caption: init.ap.rc
+
+     on boot
+         setprop init.trigger.audio appinit
+
 Commands
 ========
 The commands supported by an action fall into three types: the built-in
 commands of NXInit, the built-in commands of NSH (if NSH is enabled), and
 Builtin Apps.
 
-The following is an explanation of some of NXInit's built-in commands.
+These are the built-in commands of NXInit:
 
-- System Operations: mount/umount (mount/unmount file systems), setprop
-  (set system properties), chmod/chown (modify file permissions/owner).
-- Service Management: start/stop/restart (start/stop/restart services),
-  class_start/class_stop (batch start/stop service categories).
-- File Operations: mkdir (create directories with configurable permissions,
-  owner, and encryption settings), copy/write (copy files/write file content).
-- Others: trigger (trigger events).
+- System operations: ``mount``/``umount`` (mount/unmount file systems, see
+  below), ``set`` (set an environment variable), ``setprop`` (set a system
+  property), ``unlink`` (remove a file).
+- Service management: ``start``/``stop`` (start/stop a service),
+  ``exec_start`` (start a service and wait until it exits),
+  ``class_start``/``class_stop`` (start/stop all services of a class).
+- Programs: ``exec -- <program> [<argument>]*`` (run a program and wait until
+  it exits).
+- Others: ``trigger`` (trigger an event), and ``netinit``, ``boot``,
+  ``start_cpu``, ``board_finalinit`` and ``rptun`` when their configuration
+  options are on (``CONFIG_NETUTILS_NETINIT``, ``CONFIG_BOARDCTL_BOOT_IMAGE``,
+  ``CONFIG_BOARDCTL_START_CPU``, ``CONFIG_BOARDCTL_FINALINIT``,
+  ``CONFIG_RPTUN``).
+
+Mounting File Systems
+---------------------
+
+.. code-block::
+
+    mount <type> <device> <dir> [<flag>]* [<options>]
+    mount -t <type> [-o <options>] [<device>] <dir>
+    umount <dir>
+
+``<flag>`` is ``defaults``, ``rw``, ``ro``, ``nosuid``, ``nodev``, ``noexec``,
+``sync``, ``remount``, ``dirsync`` or ``noatime``. In both forms, ``<options>``
+is a comma-separated list of flags and file system options. For a file system
+without a device, ``<device>`` is any name that is not a device, for example
+``none``. The second form is the one of the NSH command.
+In the pseudo file system, ``<dir>`` does not need to exist: NuttX makes the
+mount point. For example:
+
+.. code-block::
+
+    on boot
+        mount tmpfs none /run
+        mount v9fs none /mnt trans=virtio,tag=host
+        mount -t hostfs -o fs=. /data
+
+A ``mount`` line in neither form fails. With ``CONFIG_DISABLE_MOUNTPOINT``,
+NXInit has no ``mount`` and ``umount`` commands.
 
 Compound Commands
 ------------------

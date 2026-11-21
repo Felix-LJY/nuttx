@@ -28,6 +28,7 @@
  ****************************************************************************/
 
 #include <nuttx/config.h>
+#include <stdbool.h>
 
 #include <nuttx/nx/nx.h>
 
@@ -89,13 +90,9 @@ typedef FAR void *NXTKWINDOW;
  * Public Data
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#  define EXTERN extern "C"
 extern "C"
 {
-#else
-#  define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -816,7 +813,6 @@ int nxtk_bitmaptoolbar(NXTKWINDOW hfwnd, FAR const struct nxgl_rect_s *dest,
                        FAR const struct nxgl_point_s *origin,
                        unsigned int stride);
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

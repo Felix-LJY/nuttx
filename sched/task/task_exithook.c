@@ -26,12 +26,15 @@
 
 #include <nuttx/config.h>
 
+#include <aio.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <signal.h>
 #include <assert.h>
 #include <nuttx/debug.h>
 #include <errno.h>
+
+#include <string.h>
 
 #include <nuttx/sched.h>
 #include <nuttx/fs/fs.h>
@@ -56,7 +59,7 @@
 
 #ifdef CONFIG_SCHED_CHILD_STATUS
 static inline void nxtask_exitstatus(FAR struct task_group_s *group,
-                                     int status)
+                                     FAR struct tcb_s *ctcb, int status)
 {
   FAR struct child_status_s *child;
 
@@ -68,7 +71,7 @@ static inline void nxtask_exitstatus(FAR struct task_group_s *group,
     {
       /* No.. Find the exit status entry for this task in the parent TCB */
 
-      child = group_find_child(group, nxsched_getpid());
+      child = group_find_child(group, ctcb->pid);
       if (child)
         {
           /* Save the exit status..  For the case of HAVE_GROUP_MEMBERS,
@@ -77,6 +80,9 @@ static inline void nxtask_exitstatus(FAR struct task_group_s *group,
            */
 
           child->ch_status = status;
+#ifdef CONFIG_SCHED_USER_IDENTITY
+          child->ch_uid    = ctcb->group->tg_uid;
+#endif
         }
     }
 
@@ -84,7 +90,7 @@ static inline void nxtask_exitstatus(FAR struct task_group_s *group,
 }
 #else
 
-#  define nxtask_exitstatus(group,status) (group)->tg_exitcode = (status);
+#  define nxtask_exitstatus(group,ctcb,status) (group)->tg_exitcode = (status);
 
 #endif /* CONFIG_SCHED_CHILD_STATUS */
 
@@ -97,7 +103,8 @@ static inline void nxtask_exitstatus(FAR struct task_group_s *group,
  ****************************************************************************/
 
 #ifdef CONFIG_SCHED_CHILD_STATUS
-static inline void nxtask_groupexit(FAR struct task_group_s *group)
+static inline void nxtask_groupexit(FAR struct task_group_s *group,
+                                    pid_t pid)
 {
   FAR struct child_status_s *child;
 
@@ -109,7 +116,7 @@ static inline void nxtask_groupexit(FAR struct task_group_s *group)
     {
       /* No.. Find the exit status entry for this task in the parent TCB */
 
-      child = group_find_child(group, nxsched_getpid());
+      child = group_find_child(group, pid);
       if (child)
         {
           /* Mark that all members of the child task group has exited */
@@ -121,7 +128,7 @@ static inline void nxtask_groupexit(FAR struct task_group_s *group)
 
 #else
 
-#  define nxtask_groupexit(group)
+#  define nxtask_groupexit(group,pid)
 
 #endif /* CONFIG_SCHED_CHILD_STATUS */
 
@@ -169,7 +176,7 @@ static inline void nxtask_sigchild(pid_t ppid, FAR struct tcb_s *ctcb,
   if ((ctcb->flags & TCB_FLAG_TTYPE_MASK) != TCB_FLAG_TTYPE_PTHREAD)
 #endif
     {
-      nxtask_exitstatus(pgrp, status);
+      nxtask_exitstatus(pgrp, ctcb, status);
     }
 
   /* But only the final exiting thread in a task group, whatever it is,
@@ -180,23 +187,35 @@ static inline void nxtask_sigchild(pid_t ppid, FAR struct tcb_s *ctcb,
     {
       /* Mark that all of the threads in the task group have exited */
 
-      nxtask_groupexit(pgrp);
+      nxtask_groupexit(pgrp, chgrp->tg_pid);
 
       /* Create the siginfo structure.  We don't actually know the cause.
        * That is a bug. Let's just say that the child task just exited
        * for now.
        */
 
+      /* Zero the whole siginfo first: sigaction-queued signals carry a
+       * si_user field that only the sigaction queue path assigns, so a
+       * stack-garbage si_user here would be memcpy'd into the pending
+       * entry and handed back to a wait() consumer.
+       */
+
+      memset(&info, 0, sizeof(siginfo_t));
       info.si_signo           = SIGCHLD;
       info.si_code            = CLD_EXITED;
       info.si_errno           = OK;
       info.si_value.sival_ptr = NULL;
       info.si_pid             = chgrp->tg_pid;
+#ifdef CONFIG_SCHED_USER_IDENTITY
+      info.si_uid             = chgrp->tg_uid;
+#else
+      info.si_uid             = 0;
+#endif
       info.si_status          = pgrp->tg_exitcode;
 
       /* Send the signal to one thread in the group */
 
-      group_signal(pgrp, &info);
+      group_signal(pgrp, &info, NULL, false);
     }
 }
 
@@ -219,15 +238,19 @@ static inline void nxtask_sigchild(FAR struct tcb_s *ptcb,
 #ifdef CONFIG_SCHED_CHILD_STATUS
       /* Save the exit status now of the main thread */
 
-      nxtask_exitstatus(ptcb->group, status);
+      nxtask_exitstatus(ptcb->group, ctcb, status);
 
 #else /* CONFIG_SCHED_CHILD_STATUS */
       /* Exit status is not retained.  Just decrement the number of
        * children from this parent.
        */
 
+      irqstate_t flags;
+
       DEBUGASSERT(ptcb->group != NULL && ptcb->group->tg_nchildren > 0);
+      flags = spin_lock_irqsave(&ptcb->group->tg_lock);
       ptcb->group->tg_nchildren--;
+      spin_unlock_irqrestore(&ptcb->group->tg_lock, flags);
 
 #endif /* CONFIG_SCHED_CHILD_STATUS */
 
@@ -236,18 +259,30 @@ static inline void nxtask_sigchild(FAR struct tcb_s *ptcb,
        * for now.
        */
 
+      /* Zero the whole siginfo first: sigaction-queued signals carry a
+       * si_user field that only the sigaction queue path assigns, so a
+       * stack-garbage si_user here would be memcpy'd into the pending
+       * entry and handed back to a wait() consumer.
+       */
+
+      memset(&info, 0, sizeof(siginfo_t));
       info.si_signo           = SIGCHLD;
       info.si_code            = CLD_EXITED;
       info.si_errno           = OK;
       info.si_value.sival_ptr = NULL;
       info.si_pid             = ctcb->group->tg_pid;
+#ifdef CONFIG_SCHED_USER_IDENTITY
+      info.si_uid             = ctcb->group->tg_uid;
+#else
+      info.si_uid             = 0;
+#endif
       info.si_status          = status;
 
       /* Send the signal.  We need to use this internal interface so that we
        * can provide the correct si_code value with the signal.
        */
 
-      nxsig_tcbdispatch(ptcb, &info);
+      nxsig_tcbdispatch(ptcb, &info, true, NULL, false);
     }
 }
 
@@ -446,6 +481,20 @@ void nxtask_exithook(FAR struct tcb_s *tcb, int status)
   nxtask_exitwakeup(tcb, status);
 
   sched_unlock();
+
+#ifndef CONFIG_DISABLE_ALL_SIGNALS
+  /* Release the signals that wait for this thread in the pending list of
+   * the group.  No new ones come: the thread is in exit processing.
+   */
+
+  nxsig_discard_threadsignals(tcb);
+#endif
+
+  /* Cancel pending AIO before the task's stack is freed, so the worker
+   * thread does not dereference a stale aiocb after this task is gone.
+   */
+
+  aio_cleanup(tcb->pid);
 
   /* Leave the task group.  Perhaps discarding any un-reaped child
    * status (no zombies here!)

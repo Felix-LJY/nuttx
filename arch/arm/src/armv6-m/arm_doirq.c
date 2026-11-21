@@ -26,6 +26,7 @@
 
 #include <nuttx/config.h>
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <assert.h>
 
@@ -34,10 +35,38 @@
 #include <nuttx/board.h>
 #include <arch/board/board.h>
 #include <sched/sched.h>
+#include "irq/irq.h"
 
 #include "arm_internal.h"
 #include "exc_return.h"
 #include "nvic.h"
+
+/****************************************************************************
+ * Private Functions
+ ****************************************************************************/
+
+#ifdef CONFIG_ARCH_HIPRI_INTERRUPT
+/****************************************************************************
+ * Name: arm_pendsv_attached
+ *
+ * Description:
+ *   With high priority interrupts, PendSV is the way a high priority
+ *   interrupt gets back into the OS, so a handler may be attached to it.
+ *   But the OS also pends PendSV itself (up_schedule_sigaction() to deliver
+ *   a signal to the running task, exception_direct()).  So PendSV is only
+ *   dispatched if a handler was attached: otherwise it would end in
+ *   irq_unexpected_isr() and a kernel panic.
+ *
+ ****************************************************************************/
+
+static inline bool arm_pendsv_attached(void)
+{
+  int ndx = IRQ_TO_NDX(NVIC_IRQ_PENDSV);
+
+  return ndx >= 0 && g_irqvector[ndx].handler != NULL &&
+         g_irqvector[ndx].handler != irq_unexpected_isr;
+}
+#endif
 
 /****************************************************************************
  * Public Functions
@@ -62,10 +91,12 @@ uint32_t *arm_doirq(int irq, uint32_t *regs)
   struct tcb_s *tcb           = *running_task;
 
   /* This judgment proves that (*running_task)->xcp.regs
-   * is invalid, and we can safely overwrite it.
+   * is invalid, and we can safely overwrite it.  SYS_restore_context
+   * issued with PRIMASK set arrives as an escalated HardFault.
    */
 
-  if (*running_task != NULL)
+  if (!((irq == NVIC_IRQ_SVCALL || irq == NVIC_IRQ_HARDFAULT) &&
+        regs[REG_R0] == SYS_restore_context))
     {
       tcb->xcp.regs = regs;
     }
@@ -82,19 +113,14 @@ uint32_t *arm_doirq(int irq, uint32_t *regs)
   if (irq == NVIC_IRQ_PENDSV)
     {
 #ifdef CONFIG_ARCH_HIPRI_INTERRUPT
-      /* Dispatch the PendSV interrupt */
+      /* Dispatch the PendSV interrupt, if a handler is attached */
 
-      irq_dispatch(irq, regs);
-#endif
-#ifdef CONFIG_ENABLE_ALL_SIGNALS
-      if (tcb->sigdeliver)
+      if (arm_pendsv_attached())
         {
-          /* Pendsv able to access running tcb with no critical section */
-
-          up_schedule_sigaction(tcb);
+          irq_dispatch(irq, regs);
         }
-
 #endif
+
       up_irq_save();
     }
   else
@@ -103,6 +129,13 @@ uint32_t *arm_doirq(int irq, uint32_t *regs)
     }
 
   tcb = this_task();
+
+#ifdef CONFIG_ENABLE_ALL_SIGNALS
+  if (tcb->sigdeliver)
+    {
+      up_schedule_sigaction(tcb);
+    }
+#endif
 
   /* Update scheduler parameters.
    * The arm-m architecture svc call will trigger an interrupt,

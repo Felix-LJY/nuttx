@@ -37,12 +37,13 @@
 #include "nvic.h"
 
 #include "stm32.h"
-#include "stm32_gpio.h"
 #include "stm32_start.h"
 
 #ifdef CONFIG_BUILD_PROTECTED
 #  include "stm32_userspace.h"
 #endif
+
+#include "stm32_mpuinit.h"
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -58,6 +59,11 @@
 #ifdef CONFIG_STM32_SRAM2_INIT
 #  define SRAM2_START  STM32_SRAM2_BASE
 #  define SRAM2_END    (SRAM2_START + STM32_SRAM2_SIZE)
+#endif
+
+#ifdef CONFIG_STM32_SRAM3_INIT
+#  define SRAM3_START  STM32_SRAM3_BASE
+#  define SRAM3_END    (SRAM3_START + STM32_SRAM3_SIZE)
 #endif
 
 #define HEAP_BASE  ((uintptr_t)_ebss + CONFIG_IDLETHREAD_STACKSIZE)
@@ -101,6 +107,13 @@ const uintptr_t g_idle_topstack = HEAP_BASE;
 
 void __start(void) noinstrument_function;
 #endif
+
+/* Called from __start before the system clock is set up.  On some STM32
+ * families it runs before .data and .bss are initialized, so it must not
+ * rely on them.  A bootloader can hand over to the ROM bootloader here.
+ */
+
+void stm32_preclock_hook(void) weak_function;
 
 /****************************************************************************
  * Public Functions
@@ -162,6 +175,20 @@ void __start(void)
     }
 #endif
 
+#ifdef CONFIG_STM32_SRAM3_INIT
+  for (dest = (uint32_t *)SRAM3_START; dest < (uint32_t *)SRAM3_END; )
+    {
+      *dest++ = 0;
+    }
+#endif
+
+  /* Let the board act before the system clock is set up. */
+
+  if (stm32_preclock_hook)
+    {
+      stm32_preclock_hook();
+    }
+
   /* Configure clocks, the FPU, GPIO and the debug UART only after .data and
    * .bss are valid.  GPIO configuration uses a spinlock stored in .bss.
    */
@@ -187,6 +214,14 @@ void __start(void)
 #endif
   showprogress('B');
 
+  /* Configure the MPU in a flat build.  Protected builds do this from
+   * stm32_userspace().
+   */
+
+#if defined(CONFIG_ARM_MPU) && !defined(CONFIG_BUILD_PROTECTED)
+  stm32_mpuinitialize();
+#endif
+
   /* For the case of the separate user-/kernel-space build, perform whatever
    * platform specific initialization of the user memory is required.
    * Normally this just means initializing the user space .data and .bss
@@ -201,6 +236,24 @@ void __start(void)
   /* Initialize onboard resources */
 
   stm32_board_initialize();
+
+#ifdef CONFIG_STM32_ICACHE
+  stm32_enable_icache();
+#elif defined(CONFIG_STM32_HAVE_ICACHE)
+  /* Disable an ICACHE left enabled by a bootloader: the OTP and RO flash
+   * areas cannot be read through it (RM0481 7.3.2).
+   */
+
+  if ((getreg32(STM32_ICACHE_CR) & ICACHE_CR_EN) != 0)
+    {
+      uint32_t regval;
+
+      regval = getreg32(STM32_ICACHE_CR);
+      regval &= ~(ICACHE_CR_EN);
+      putreg32(regval, STM32_ICACHE_CR);
+    }
+
+#endif
   showprogress('D');
 
   /* Then start NuttX */

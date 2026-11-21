@@ -48,17 +48,17 @@
 #define backtrace(b, s) sched_backtrace(_SCHED_GETTID(), b, s, 0)
 #define dump_stack()    sched_dumpstack(_SCHED_GETTID())
 
+#ifndef CONFIG_LIBC_BACKTRACE_DEPTH
+#  define CONFIG_LIBC_BACKTRACE_DEPTH 0
+#endif
+
 /****************************************************************************
  * Public Function Prototypes
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 FAR char **backtrace_symbols(FAR void *const *buffer, int size);
@@ -66,19 +66,18 @@ void backtrace_symbols_fd(FAR void *const *buffer, int size, int fd);
 int backtrace_format(FAR char *buffer, int size,
                      FAR void *backtrace[], int depth);
 
-#  if CONFIG_LIBC_BACKTRACE_BUFFSIZE > 0
-int backtrace_record(int skip);
-int backtrace_remove(int index);
-FAR void **backtrace_get(int index, FAR int *size);
+#if CONFIG_LIBC_BACKTRACE_DEPTH > 0
+FAR void *backtrace_record(int skip);
+void backtrace_remove(FAR void *entry);
+FAR void **backtrace_get(FAR void *entry, FAR int *size);
 void backtrace_dump(void);
-#  else
-#    define backtrace_record(skip) (-ENOSYS)
-#    define backtrace_remove(index) (-ENOSYS)
-#    define backtrace_get(index, size) (*(size)=0)
-#    define backtrace_dump()
-#  endif
+#else
+#  define backtrace_record(skip) (NULL)
+#  define backtrace_remove(entry)
+#  define backtrace_get(entry, size) (*(size)=0)
+#  define backtrace_dump()
+#endif
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

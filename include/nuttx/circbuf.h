@@ -62,13 +62,9 @@ struct circbuf_s
  * Public Function Prototypes
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -92,6 +88,30 @@ extern "C"
 
 int circbuf_init(FAR struct circbuf_s *circ,
                   FAR void *base, size_t bytes);
+
+/****************************************************************************
+ * Name: circbuf_reinit
+ *
+ * Description:
+ *   Reinitialize a circular buffer with a new buffer, and new size.
+ *   In case malloc & free is not reliable here, we handle buffer outside.
+ *   Will copy the old data to new buffer.
+ *
+ * Input Parameters:
+ *   circ  - Address of the circular buffer to be used.
+ *   base  - A pointer to circular buffer's internal buffer. It can be
+ *           provided by caller because sometimes the creation of buffer
+ *           is special or needs to preallocated, eg: DMA buffer.
+ *           If NULL, a buffer of the given size will be allocated.
+ *   bytes - The size of the internal buffer.
+ *
+ * Returned Value:
+ *   The previous internal buffer pointer is returned.
+ *
+ ****************************************************************************/
+
+FAR void *circbuf_reinit(FAR struct circbuf_s *circ, FAR void *base,
+                         size_t bytes);
 
 /****************************************************************************
  * Name: circbuf_resize
@@ -411,7 +431,6 @@ void circbuf_writecommit(FAR struct circbuf_s *circ, size_t writtensize);
 
 void circbuf_readcommit(FAR struct circbuf_s *circ, size_t readsize);
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

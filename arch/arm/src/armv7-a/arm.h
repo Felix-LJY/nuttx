@@ -32,6 +32,15 @@
 #define __ARCH_ARM_SRC_ARMV7_A_ARM_H
 
 /****************************************************************************
+ * Included Files
+ ****************************************************************************/
+
+#ifndef __ASSEMBLY__
+#  include <stdbool.h>
+#  include <stdint.h>
+#endif /* __ASSEMBLY__ */
+
+/****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
 
@@ -88,11 +97,8 @@
 
 #ifndef __ASSEMBLY__
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -111,7 +117,17 @@ extern "C"
 
 void arm_data_initialize(void);
 
-#undef EXTERN
+/****************************************************************************
+ * Name: arm_fault_kill
+ *
+ * Description:
+ *   End the task of a fault of user code with SIGSEGV.  Return false if
+ *   the fault is fatal.  See arm_userfault.c.
+ *
+ ****************************************************************************/
+
+bool arm_fault_kill(uint32_t *regs);
+
 #ifdef __cplusplus
 }
 #endif

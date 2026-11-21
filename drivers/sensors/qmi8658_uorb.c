@@ -43,6 +43,12 @@
  * Pre-processor Definitions
  ****************************************************************************/
 
+/* Only float data type supported now */
+
+#ifdef CONFIG_SENSORS_USE_B16
+#  error fixed-point data type not supported yet
+#endif
+
 /* QMI8658 Register Addresses */
 #define QMI8658_REG_WHOAMI        (0x00)  /* Chip ID register */
 #define QMI8658_REG_REVISION      (0x01)  /* Revision register */
@@ -358,7 +364,7 @@ static const struct sensor_ops_s g_sensor_ops =
   NULL,                   /* set_calibvalue */
   NULL,                   /* calibrate */
   NULL,                   /* get_info */
-  NULL,                   /* set_nonwakeup */
+  NULL,                   /* set_wakeup */
   NULL,                   /* control */
 };
 
@@ -667,12 +673,14 @@ static int qmi8658_config_accelerometer(FAR struct qmi8658_dev_s *priv,
     }
 
   uint8_t ctrl2_odr_val;
+
   qmi8658_readreg8(priv, QMI8658_REG_CTRL2, &ctrl2_odr_val);
   sninfo("CTRL2 after ODR config: 0x%02x\n", ctrl2_odr_val);
 
   priv->acc_odr = odr;
 
   uint8_t ctrl2_val;
+
   ret = qmi8658_readreg8(priv, QMI8658_REG_CTRL2, &ctrl2_val);
   if (ret < 0)
     {
@@ -1165,50 +1173,50 @@ static int qmi8658_get_scale_factors(FAR struct qmi8658_dev_s *priv,
 
   switch (priv->acc_range)
     {
-    case QMI8658_ACC_FS_2G:
-      factors->acc_scale = QMI8658_ACC_SCALE_2G;
-      break;
-    case QMI8658_ACC_FS_4G:
-      factors->acc_scale = QMI8658_ACC_SCALE_4G;
-      break;
-    case QMI8658_ACC_FS_8G:
-      factors->acc_scale = QMI8658_ACC_SCALE_8G;
-      break;
-    case QMI8658_ACC_FS_16G:
-      factors->acc_scale = QMI8658_ACC_SCALE_16G;
-      break;
-    default:
-      factors->acc_scale = QMI8658_ACC_SCALE_2G;
-      break;
+      case QMI8658_ACC_FS_2G:
+        factors->acc_scale = QMI8658_ACC_SCALE_2G;
+        break;
+      case QMI8658_ACC_FS_4G:
+        factors->acc_scale = QMI8658_ACC_SCALE_4G;
+        break;
+      case QMI8658_ACC_FS_8G:
+        factors->acc_scale = QMI8658_ACC_SCALE_8G;
+        break;
+      case QMI8658_ACC_FS_16G:
+        factors->acc_scale = QMI8658_ACC_SCALE_16G;
+        break;
+      default:
+        factors->acc_scale = QMI8658_ACC_SCALE_2G;
+        break;
     }
 
   switch (priv->gyro_range)
     {
-    case QMI8658_GYRO_FS_16DPS:
-      factors->gyro_scale = QMI8658_GYRO_SCALE_16DPS;
-      break;
-    case QMI8658_GYRO_FS_32DPS:
-      factors->gyro_scale = QMI8658_GYRO_SCALE_32DPS;
-      break;
-    case QMI8658_GYRO_FS_64DPS:
-      factors->gyro_scale = QMI8658_GYRO_SCALE_64DPS;
-      break;
-    case QMI8658_GYRO_FS_128DPS:
-      factors->gyro_scale = QMI8658_GYRO_SCALE_128DPS;
-      break;
-    case QMI8658_GYRO_FS_256DPS:
-      factors->gyro_scale = QMI8658_GYRO_SCALE_256DPS;
-      break;
-    case QMI8658_GYRO_FS_512DPS:
-      factors->gyro_scale = QMI8658_GYRO_SCALE_512DPS;
-      break;
-    case QMI8658_GYRO_FS_1024DPS:
-      factors->gyro_scale = QMI8658_GYRO_SCALE_1024DPS;
-      break;
+      case QMI8658_GYRO_FS_16DPS:
+        factors->gyro_scale = QMI8658_GYRO_SCALE_16DPS;
+        break;
+      case QMI8658_GYRO_FS_32DPS:
+        factors->gyro_scale = QMI8658_GYRO_SCALE_32DPS;
+        break;
+      case QMI8658_GYRO_FS_64DPS:
+        factors->gyro_scale = QMI8658_GYRO_SCALE_64DPS;
+        break;
+      case QMI8658_GYRO_FS_128DPS:
+        factors->gyro_scale = QMI8658_GYRO_SCALE_128DPS;
+        break;
+      case QMI8658_GYRO_FS_256DPS:
+        factors->gyro_scale = QMI8658_GYRO_SCALE_256DPS;
+        break;
+      case QMI8658_GYRO_FS_512DPS:
+        factors->gyro_scale = QMI8658_GYRO_SCALE_512DPS;
+        break;
+      case QMI8658_GYRO_FS_1024DPS:
+        factors->gyro_scale = QMI8658_GYRO_SCALE_1024DPS;
+        break;
 
-    default:
-      factors->gyro_scale = QMI8658_GYRO_SCALE_64DPS;
-      break;
+      default:
+        factors->gyro_scale = QMI8658_GYRO_SCALE_64DPS;
+        break;
     }
 
   factors->temp_scale = QMI8658_TEMP_SCALE;
@@ -1360,6 +1368,7 @@ static int qmi8658_activate(FAR struct sensor_lowerhalf_s *lower,
       if (priv->interval > 0)
         {
           uint32_t delay = priv->interval / USEC_PER_TICK;
+
           if (sensor_idx == QMI8658_ACCEL_IDX)
             {
               ret = work_queue(HPWORK, &priv->work, qmi8658_accel_worker,
@@ -1491,6 +1500,7 @@ static int qmi8658_fetch(FAR struct sensor_lowerhalf_s *lower,
   if (sensor_idx == QMI8658_ACCEL_IDX)
     {
       struct sensor_accel accel;
+
       ret = qmi8658_read_imu(&dev->base, &accel, NULL);
       if (ret < 0)
         {
@@ -1508,6 +1518,7 @@ static int qmi8658_fetch(FAR struct sensor_lowerhalf_s *lower,
   else if (sensor_idx == QMI8658_GYRO_IDX)
     {
       struct sensor_gyro gyro;
+
       ret = qmi8658_read_imu(&dev->base, NULL, &gyro);
       if (ret < 0)
         {
@@ -1562,6 +1573,7 @@ static void qmi8658_accel_worker(FAR void *arg)
   if (priv->enabled && priv->interval > 0)
     {
       uint32_t delay = priv->interval / USEC_PER_TICK;
+
       work_queue(HPWORK, &priv->work, qmi8658_accel_worker, priv, delay);
     }
 
@@ -1611,6 +1623,7 @@ static void qmi8658_gyro_worker(FAR void *arg)
   if (priv->enabled && priv->interval > 0)
     {
       uint32_t delay = priv->interval / USEC_PER_TICK;
+
       work_queue(HPWORK, &priv->work, qmi8658_gyro_worker, priv, delay);
     }
 

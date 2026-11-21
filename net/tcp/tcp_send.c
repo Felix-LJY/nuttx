@@ -105,16 +105,20 @@ static inline FAR struct tcp_hdr_s *tcp_header(FAR struct net_driver_s *dev)
 }
 
 /****************************************************************************
- * Name: tcp_sendcommon
+ * Name: tcp_fill_header
  *
  * Description:
- *   We're done with the input processing. We are now ready to send a reply
- *   Our job is to fill in all the fields of the TCP and IP headers before
- *   calculating the checksum and finally send the packet.
+ *   Fill in the sequence and acknowledgment numbers, the ports, the receive
+ *   window and the urgent pointer of an outgoing TCP header, and start the
+ *   retransmission timer if there is unacknowledged data and the segment
+ *   takes sequence space.
  *
  * Input Parameters:
- *   dev  - The device driver structure to use in the send operation
- *   conn - The TCP connection structure holding connection information
+ *   dev   - The device driver structure to use in the send operation
+ *   conn  - The TCP connection structure holding connection information
+ *   tcp   - The TCP header to fill in
+ *   timer - True if the segment carries data, SYN or FIN.  A segment
+ *           without them (an ACK) does not restart the timer.
  *
  * Returned Value:
  *   None
@@ -124,9 +128,9 @@ static inline FAR struct tcp_hdr_s *tcp_header(FAR struct net_driver_s *dev)
  *
  ****************************************************************************/
 
-static void tcp_sendcommon(FAR struct net_driver_s *dev,
-                           FAR struct tcp_conn_s *conn,
-                           FAR struct tcp_hdr_s *tcp)
+void tcp_fill_header(FAR struct net_driver_s *dev,
+                     FAR struct tcp_conn_s *conn,
+                     FAR struct tcp_hdr_s *tcp, bool timer)
 {
   /* Set TCP sequence numbers and port numbers */
 
@@ -149,7 +153,13 @@ static void tcp_sendcommon(FAR struct net_driver_s *dev,
     }
   else
     {
-      if (conn->tx_unacked != 0)
+      /* Restart the retransmission timer with a segment that takes
+       * sequence space.  An ACK does not: while the peer sends data, each
+       * of its segments gets an ACK, and a lost segment of ours would never
+       * be sent again.
+       */
+
+      if (conn->tx_unacked != 0 && timer)
         {
           conn->timeout = false;
           tcp_update_retrantimer(conn, conn->rto);
@@ -159,6 +169,13 @@ static void tcp_sendcommon(FAR struct net_driver_s *dev,
 
       uint32_t rcvseq = tcp_getsequence(conn->rcvseq);
       uint32_t recvwndo = tcp_get_recvwindow(dev, conn);
+
+      /* Do not shrink the window (RFC 9293 SHLD-14) */
+
+      if (TCP_SEQ_LT(rcvseq + recvwndo, conn->rcv_adv))
+        {
+          recvwndo = TCP_SEQ_SUB(conn->rcv_adv, rcvseq);
+        }
 
       /* Update the Receiver Window */
 
@@ -176,6 +193,33 @@ static void tcp_sendcommon(FAR struct net_driver_s *dev,
 
   tcp->urgp[0] = 0;
   tcp->urgp[1] = 0;
+}
+
+/****************************************************************************
+ * Name: tcp_sendcommon
+ *
+ * Description:
+ *   We're done with the input processing. We are now ready to send a reply
+ *   Our job is to fill in all the fields of the TCP and IP headers before
+ *   calculating the checksum and finally send the packet.
+ *
+ * Input Parameters:
+ *   dev  - The device driver structure to use in the send operation
+ *   conn - The TCP connection structure holding connection information
+ *
+ * Returned Value:
+ *   None
+ *
+ * Assumptions:
+ *   Called with the network locked.
+ *
+ ****************************************************************************/
+
+static void tcp_sendcommon(FAR struct net_driver_s *dev,
+                           FAR struct tcp_conn_s *conn,
+                           FAR struct tcp_hdr_s *tcp, bool timer)
+{
+  tcp_fill_header(dev, conn, tcp, timer);
 
   /* Update device buffer length before setup the IP header */
 
@@ -333,7 +377,9 @@ void tcp_send(FAR struct net_driver_s *dev, FAR struct tcp_conn_s *conn,
       tcp->tcpoffset = (TCP_HDRLEN / 4) << 4;
     }
 
-  tcp_sendcommon(dev, conn, tcp);
+  tcp_sendcommon(dev, conn, tcp,
+                 len > tcpip_hdrsize(conn) ||
+                 (flags & (TCP_SYN | TCP_FIN)) != 0);
 
 #if defined(CONFIG_NET_STATISTICS) && \
     defined(CONFIG_NET_TCP_DEBUG_DROP_SEND)
@@ -471,6 +517,7 @@ void tcp_reset(FAR struct net_driver_s *dev, FAR struct tcp_conn_s *conn)
   else
     {
       uint32_t ackno;
+
       tcp->flags = TCP_RST | TCP_ACK;
       tcp_setsequence(tcp->seqno, 0);
       ackno = tcp_addsequence(tcp->ackno, acklen);
@@ -678,7 +725,7 @@ void tcp_synack(FAR struct net_driver_s *dev, FAR struct tcp_conn_s *conn,
 
   /* Complete the common portions of the TCP message */
 
-  tcp_sendcommon(dev, conn, tcp);
+  tcp_sendcommon(dev, conn, tcp, (ack & (TCP_SYN | TCP_FIN)) != 0);
 }
 
 /****************************************************************************

@@ -38,7 +38,9 @@
  * Pre-processor Definitions
  ****************************************************************************/
 
-#define CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC  62500000
+/* QEMU counts the PMU cycle counter (PMCCNTR_EL0) at 1 GHz */
+
+#define CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC  1000000000
 
 /****************************************************************************
  * Public Function Prototypes
@@ -46,13 +48,9 @@
 
 #ifndef __ASSEMBLY__
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -74,7 +72,6 @@ extern "C"
 
 void qemu_board_initialize(void);
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

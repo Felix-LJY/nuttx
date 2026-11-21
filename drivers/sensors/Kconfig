@@ -1,3 +1,24 @@
+############################################################################
+# drivers/sensors/Kconfig
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.  The
+# ASF licenses this file to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance with the
+# License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
+############################################################################
 #
 # For a description of the syntax of this configuration file,
 # see the file kconfig-language.txt in the NuttX tools repository.
@@ -105,6 +126,14 @@ config SENSORS_FAKESENSOR
 		x,y,z
 		2.1234,3.23443,2.23456
 		...
+
+config FAKESENSOR_SCHED_PRIORITY
+	int "fakesensor thread sched priority"
+	default 100
+	depends on SENSORS_FAKESENSOR
+	---help---
+		Priority of the kernel thread that reads the csv file and
+		pushes the fake sensor data.
 
 config SENSORS_GOLDFISH_GNSS
 	bool "Goldfish GNSS Support"
@@ -242,6 +271,22 @@ config SENSORS_BH1749NUC_THREAD_STACKSIZE
 endif # SENSORS_BH1749NUC_UORB
 
 endif # SENSORS_BH1749NUC
+
+config SENSORS_BH1745NUC
+	bool "Rohm BH1745NUC Color Sensor support"
+	default n
+	select I2C
+	---help---
+		Enable driver support for the Rohm BH1745NUC color sensor.
+
+if SENSORS_BH1745NUC
+
+config BH1745NUC_I2C_FREQUENCY
+	int "BH1745NUC I2C frequency"
+	default 400000
+	range 1 400000
+
+endif # SENSORS_BH1745NUC
 
 config SENSORS_BH1750FVI
 	bool "Rohm BH1750FVI Ambient Light Sensor support"
@@ -722,6 +767,23 @@ config SENSORS_BME688_THREAD_STACKSIZE
 
 endif # SENSORS_BME688
 
+config SENSORS_CCS811
+	bool "ams CCS811 Gas Sensor"
+	default n
+	select I2C
+	---help---
+		Enable driver for the ams CCS811 digital gas sensor for monitoring
+		indoor air quality (eCO2 and TVOC).
+
+if SENSORS_CCS811
+
+config CCS811_I2C_FREQUENCY
+	int "CCS811 I2C frequency"
+	default 100000
+	range 1 400000
+
+endif # SENSORS_CCS811
+
 config SENSORS_DHTXX
 	bool "DHTxx humidity/temperature Sensor support"
 	default n
@@ -833,6 +895,7 @@ config SENSORS_HTS221
 	bool "STMicro HTS221 humidity sensor"
 	default n
 	select I2C
+	select SCHED_LPWORK
 	---help---
 		Enable driver support for the STMicro HTS221 humidity sensor.
 
@@ -842,18 +905,6 @@ config HTS221_I2C_FREQUENCY
 	int "HTS221 I2C frequency"
 	default 400000
 	range 1 400000
-
-config HTS221_DEBUG
-	bool "Debug support for the HTS221"
-	default n
-	---help---
-		Enables debug features for the HTS221
-
-config HTS221_NPOLLWAITERS
-	int "Number of waiters to poll"
-	default 1
-	---help---
-		Number of waiters to poll
 
 endif # SENSORS_HTS221
 
@@ -1201,6 +1252,22 @@ config LSM9DS1_I2C_FREQUENCY
 	range 1 400000
 	depends on SENSORS_LSM9DS1 || SENSORS_LSM9DS1_UORB
 
+config SENSORS_LPS22HB
+	bool "STMicro LPS22HB pressure sensor"
+	default n
+	select I2C
+	---help---
+		Enable driver support for the STMicro LPS22HB barometer sensor.
+
+if SENSORS_LPS22HB
+
+config LPS22HB_I2C_FREQUENCY
+	int "LPS22HB I2C frequency"
+	default 400000
+	range 1 400000
+
+endif # SENSORS_LPS22HB
+
 config SENSORS_LPS25H
 	bool "STMicro LPS25H pressure sensor"
 	default n
@@ -1253,6 +1320,25 @@ config SENSORS_INA226
 	select I2C
 	---help---
 		Enable driver support for the Texas Instruments INA226/INA230 power monitor.
+
+config SENSORS_INA226_UORB
+	bool "INA226 UORB Interface"
+	default n
+	depends on SENSORS_INA226 && UORB
+	---help---
+		Build the sensor framework version of this driver rather than
+		the character device one.  The part then publishes voltage,
+		current and power as uORB topics that the common sensor tools
+		can read, instead of a node returning a structure only code
+		written for this part understands.
+
+		All three come from one reading and share its timestamp, so
+		the power is the product of a voltage and a current measured
+		at the same instant rather than at three different ones.
+
+		The two versions cannot be built together and take different
+		arguments, so a board choosing this must call
+		ina226_register_uorb() rather than ina226_register().
 
 config INA226_I2C_FREQUENCY
 	int "INA226 I2C frequency"
@@ -1507,6 +1593,15 @@ config SENSORS_ADXL362_THREAD_STACKSIZE
 
 endif # SENSORS_ADXL362
 
+config SENSORS_ADXL367
+	bool "Analog Devices ADXL367 accelerometer"
+	default n
+	select I2C
+	---help---
+		Enable the ADXL367 I2C accelerometer driver using the sensor
+		framework. Supports +/-2 g acceleration and die temperature,
+		with output data rates from 12.5 to 400 Hz.
+
 config SENSORS_ADXL372
 	bool "Analog Devices ADXL372 Sensor support"
 	default n
@@ -1646,6 +1741,8 @@ config SENSORS_MPU6050
 	depends on I2C
 	---help---
 		Enable uORB driver support for Invensense MPU6050 6-axis MotionTracker device over I2C.
+		The register compatible TDK MPU6886 is detected by its WHO_AM_I value and
+		supported as well.
 
 if SENSORS_MPU6050
 
@@ -1951,6 +2048,50 @@ config SCD41_DEBUG
 
 endif # SENSORS_SCD41
 
+config SENSORS_SCL3300
+	bool "Murata SCL3300 3-axis inclinometer"
+	default n
+	select SPI
+	---help---
+		Enable the uORB driver for the Murata SCL3300-D01 3-axis
+		inclinometer with SPI interface. Publishes sensor_inclinometer
+		and, optionally, sensor_accel topics. The operation mode and the
+		idle power policy are set by the board (struct scl3300_config_s)
+		and can be changed at run time with ioctls.
+
+if SENSORS_SCL3300
+
+config SENSORS_SCL3300_ACCEL
+	bool "Also publish the accelerometer topic"
+	default y
+
+config SENSORS_SCL3300_SPI_FREQUENCY
+	int "SPI frequency (Hz)"
+	default 2000000
+	range 100000 8000000
+
+config SENSORS_SCL3300_POLL
+	bool "Poll the sensor from a kernel thread"
+	default y
+	---help---
+		The SCL3300 has no data-ready interrupt pin, so polling is the
+		normal mode. When disabled, data is only read on fetch().
+
+if SENSORS_SCL3300_POLL
+
+config SENSORS_SCL3300_POLL_INTERVAL
+	int "Default polling interval in microseconds"
+	default 10000
+	range 500 4294967295
+
+config SENSORS_SCL3300_THREAD_STACKSIZE
+	int "Worker thread stack size"
+	default 1024
+
+endif # SENSORS_SCL3300_POLL
+
+endif # SENSORS_SCL3300
+
 config SENSORS_SGP30
 	bool "Sensirion SGP30 Gas Platform sensor"
 	default n
@@ -2037,6 +2178,24 @@ config SHT3X_DEBUG
 		Enables debug features for the SHT3x
 
 endif # SENSORS_SHT3X
+
+config SENSORS_SHTC3
+	bool "Sensirion SHTC3 Sensor"
+	depends on I2C
+	---help---
+		Enable driver support for the Sensirion SHTC3
+		temperature and humidity sensor.
+
+if SENSORS_SHTC3
+
+config SHTC3_I2C_FREQUENCY
+	int "SHTC3 I2C Frequency"
+	default 400000
+
+endif # SENSORS_SHTC3
+
+
+
 
 config SENSORS_SHT4X
 	bool "Sensirion SHT4x temperature and humidity sensor"
@@ -2353,6 +2512,24 @@ config SENSORS_TMP112_UORB
 		are reported correctly rather than as large positive ones.
 
 endif #SENSORS_TMP112
+
+config SENSORS_TC74
+	bool "Microchip TC74 Temperature Sensor support"
+	default n
+	select I2C
+	---help---
+		Enable driver support for the Microchip TC74 digital temperature sensor.
+
+if SENSORS_TC74
+
+config TC74_I2C_FREQUENCY
+	int "TC74 I2C frequency"
+	default 100000
+	range 1 100000
+	---help---
+		I2C clock frequency for the TC74 sensor. Default is 100 kHz.
+
+endif # SENSORS_TC74
 
 config SENSORS_QMI8658
 	bool "QST QMI8658 6-Axis IMU Sensor support"

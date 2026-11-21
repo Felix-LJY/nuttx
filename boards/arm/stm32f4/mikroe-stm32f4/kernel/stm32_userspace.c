@@ -94,12 +94,21 @@ const struct userspace_s userspace locate_data(".userspace") =
 
   /* Signal handler trampoline */
 
+#ifdef CONFIG_ENABLE_ALL_SIGNALS
   .signal_handler   = up_signal_handler,
+#endif
 
   /* User-space work queue support (declared in include/nuttx/wqueue.h) */
 
 #ifdef CONFIG_LIBC_USRWORK
   .work_usrstart    = work_usrstart,
+#endif
+
+  /* Builtin support */
+
+#ifdef CONFIG_BUILTIN
+  .builtin_count    = &g_builtin_count,
+  .builtins         = &g_builtins[0],
 #endif
 };
 

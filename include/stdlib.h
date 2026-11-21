@@ -34,6 +34,12 @@
 #include <stdint.h>
 #include <limits.h>
 
+/* alloca() is also visible with <stdlib.h>, as in glibc and the BSDs:
+ * programs use it with only <stdlib.h>.
+ */
+
+#include <alloca.h>
+
 /****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
@@ -67,7 +73,7 @@
 #ifdef CONFIG_DISABLE_ENVIRON
 #  define environ NULL
 #else
-#  define environ get_environ_ptr()
+#  define environ (*get_environ_ptr())
 #endif
 
 #if defined(CONFIG_FS_LARGEFILE)
@@ -137,13 +143,9 @@ typedef struct lldiv_s lldiv_t;
  * Public Function Prototypes
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /* Random number generation */
@@ -151,7 +153,7 @@ extern "C"
 void      srand(unsigned int seed);
 int       rand(void);
 int       rand_r(FAR unsigned int *seedp);
-void      lcong48(FAR unsigned short int param[7]);
+void      lcong48(FAR unsigned short int [7]);
 FAR unsigned short int *seed48(FAR unsigned short int seed16v[3]);
 void      srand48(long int seedval);
 long int  jrand48(FAR unsigned short int xsubi[3]);
@@ -163,18 +165,24 @@ double    drand48(void);
 double    erand48(FAR unsigned short int xsubi[3]);
 #  endif
 
-#define   srandom(s) srand(s)
+void      srandom(unsigned int seed);
 long      random(void);
 
 void      arc4random_buf(FAR void *bytes, size_t nbytes);
 uint32_t  arc4random(void);
 
+/* System load */
+
+#ifdef CONFIG_HAVE_DOUBLE
+int       getloadavg(FAR double loadavg[], int nelem);
+#endif
+
 /* Environment variable support */
 
-FAR char **get_environ_ptr(void);
+FAR char ***get_environ_ptr(void);
 FAR char *getenv(FAR const char *name);
 FAR char *secure_getenv(FAR const char *name);
-int       putenv(FAR const char *string);
+int       putenv(FAR char *string);
 int       clearenv(void);
 int       setenv(FAR const char *name, FAR const char *value, int overwrite);
 int       unsetenv(FAR const char *name);
@@ -246,7 +254,9 @@ void      free(FAR void *);
 FAR void *realloc(FAR void *, size_t) realloc_like(2);
 FAR void *reallocarray(FAR void *, size_t, size_t) realloc_like2(2, 3);
 FAR void *memalign(size_t, size_t) malloc_like1(2);
+#ifndef NUTTX_NO_EXTENSIONS /* See nuttx/compiler.h */
 FAR void *zalloc(size_t) malloc_like1(1);
+#endif
 FAR void *calloc(size_t, size_t) malloc_like2(1, 2);
 FAR void *aligned_alloc(size_t, size_t) malloc_like1(2);
 int       posix_memalign(FAR void **, size_t, size_t);
@@ -258,10 +268,7 @@ int       posix_openpt(int oflag);
 FAR char *ptsname(int fd);
 int       ptsname_r(int fd, FAR char *buf, size_t buflen);
 int       unlockpt(int fd);
-
-/* int grantpt(int fd); Not implemented */
-
-#define grantpt(fd) (0)
+int       grantpt(int fd);
 #endif
 
 /* Arithmetic */
@@ -278,6 +285,9 @@ lldiv_t   lldiv(long long number, long long denom);
 
 FAR char *mktemp(FAR char *path_template);
 int       mkstemp(FAR char *path_template);
+int       mkostemp(FAR char *path_template, int flags);
+int       mkstemps(FAR char *path_template, int suffixlen);
+int       mkostemps(FAR char *path_template, int suffixlen, int flags);
 FAR char *mkdtemp(FAR char *path_template);
 
 /* Sorting */
@@ -323,7 +333,6 @@ fortify_function(realpath) FAR char *realpath(FAR const char *path,
 }
 #endif
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

@@ -108,6 +108,7 @@ endif()
 
 if(CONFIG_PROFILE_ALL)
   add_compile_options(-pg)
+  list(APPEND COMPILE_ONLY_FLAGS -pg)
 endif()
 
 if(CONFIG_MM_UBSAN_ALL)
@@ -166,12 +167,12 @@ if(CONFIG_ARM_THUMB)
   # interpreted as Thumb code, either add a `.thumb' directive to the source or
   # pass the -mthumb option directly to the assembler by prefixing it with -Wa.
 
-  add_compile_options(-Wa,-mthumb)
+  add_compile_options($<$<COMPILE_LANGUAGE:ASM>:-Wa,-mthumb>)
 
   # Outputs an implicit IT block when there is a conditional instruction without
   # an enclosing IT block.
 
-  add_compile_options(-Wa,-mimplicit-it=always)
+  add_compile_options($<$<COMPILE_LANGUAGE:ASM>:-Wa,-mimplicit-it=always>)
 endif()
 
 # Optimization of unused sections
@@ -195,6 +196,14 @@ endif()
 
 if(CONFIG_DEBUG_SYMBOLS)
   add_compile_options(${CONFIG_DEBUG_SYMBOLS_LEVEL})
+endif()
+
+if(CONFIG_PIC)
+  # Reserve r9 across the base firmware so callbacks into module code arrive
+  # with the module's data base intact. ELF applications are excluded because
+  # they receive r9 via -mpic-register=r9.
+  add_compile_options(
+    $<$<NOT:$<BOOL:$<TARGET_PROPERTY:ELF_BINARY>>>:-ffixed-r9>)
 endif()
 
 add_compile_options(

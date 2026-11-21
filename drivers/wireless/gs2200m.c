@@ -49,8 +49,11 @@
 
 #include <nuttx/ascii.h>
 #include <nuttx/arch.h>
+#include <nuttx/fs/fs.h>
 #include <nuttx/spi/spi.h>
 #include <nuttx/kmalloc.h>
+#include <nuttx/lib/lib.h>
+#include <nuttx/poll.h>
 #include <nuttx/wqueue.h>
 #include <nuttx/mutex.h>
 #include <nuttx/signal.h>
@@ -175,7 +178,7 @@ struct notif_q_s
 struct gs2200m_dev_s
 {
   FAR char             *path;
-  FAR struct pollfd    *pfd;
+  FAR struct pollfd_s  *pfd;
   struct notif_q_s     notif_q;
   FAR struct spi_dev_s *spi;
   struct work_s        irq_work;
@@ -206,7 +209,7 @@ static ssize_t gs2200m_write(FAR struct file *filep, FAR const char *buff,
                              size_t len);
 static int     gs2200m_ioctl(FAR struct file *filep, int cmd,
                              unsigned long arg);
-static int     gs2200m_poll(FAR struct file *filep, FAR struct pollfd *fds,
+static int     gs2200m_poll(FAR struct file *filep, FAR struct pollfd_s *fds,
                             bool setup);
 
 /* Interrupt handler and work queue handler */
@@ -1067,18 +1070,18 @@ static void _parse_pkt_in_s0(FAR struct pkt_ctx_s *pkt_ctx,
 {
   switch (*(pkt_ctx->ptr))
     {
-    case ASCII_CR:
-    case ASCII_LF:
-      break;
+      case ASCII_CR:
+      case ASCII_LF:
+        break;
 
-    case ASCII_ESC:
-      pkt_ctx->state = PKT_ESC_START;
-      break;
+      case ASCII_ESC:
+        pkt_ctx->state = PKT_ESC_START;
+        break;
 
-    default:
-      pkt_ctx->head = pkt_ctx->ptr;
-      pkt_ctx->state = PKT_EVENT;
-      break;
+      default:
+        pkt_ctx->head = pkt_ctx->ptr;
+        pkt_ctx->state = PKT_EVENT;
+        break;
     }
 }
 
@@ -1330,29 +1333,29 @@ static enum pkt_type_e _parse_pkt(FAR uint8_t *p, uint16_t len,
     {
       switch (pkt_ctx.state)
         {
-        case PKT_START:
-          _parse_pkt_in_s0(&pkt_ctx, pkt_dat);
-          break;
+          case PKT_START:
+            _parse_pkt_in_s0(&pkt_ctx, pkt_dat);
+            break;
 
-        case PKT_EVENT:
-          _parse_pkt_in_s1(&pkt_ctx, pkt_dat);
-          break;
+          case PKT_EVENT:
+            _parse_pkt_in_s1(&pkt_ctx, pkt_dat);
+            break;
 
-        case PKT_ESC_START:
-          _parse_pkt_in_s2(&pkt_ctx, pkt_dat);
-          break;
+          case PKT_ESC_START:
+            _parse_pkt_in_s2(&pkt_ctx, pkt_dat);
+            break;
 
-        case PKT_BULK_DATA_TCP:
-          _parse_pkt_in_s3(&pkt_ctx, pkt_dat);
-          break;
+          case PKT_BULK_DATA_TCP:
+            _parse_pkt_in_s3(&pkt_ctx, pkt_dat);
+            break;
 
-        case PKT_BULK_DATA_UDP:
-          _parse_pkt_in_s4(&pkt_ctx, pkt_dat);
-          break;
+          case PKT_BULK_DATA_UDP:
+            _parse_pkt_in_s4(&pkt_ctx, pkt_dat);
+            break;
 
-        default:
-          PANIC();
-          break;
+          default:
+            PANIC();
+            break;
         }
     }
 
@@ -2209,6 +2212,7 @@ static enum pkt_type_e gs2200m_get_cstatus(FAR struct gs2200m_dev_s *dev,
       int  p[2];
       char type[8];
       char mode[8];
+
       memset(type, 0, sizeof(type));
       memset(mode, 0, sizeof(mode));
       n = sscanf(pkt_dat.msg[i], "%c %7s %6s %d %d %d.%d.%d.%d",
@@ -2233,6 +2237,7 @@ static enum pkt_type_e gs2200m_get_cstatus(FAR struct gs2200m_dev_s *dev,
           else
             {
               char addr[20];
+
               msg->addr.sin_port = HTONS(p[1]);
               snprintf(addr, sizeof(addr),
                        "%d.%d.%d.%d", a[0], a[1], a[2], a[3]);
@@ -2879,7 +2884,7 @@ static int gs2200m_ioctl_ifreq(FAR struct gs2200m_dev_s *dev,
                );
         break;
 
-    case SIOCSIFADDR:
+      case SIOCSIFADDR:
         memcpy(&dev->net_dev.d_ipaddr,
                &inaddr->sin_addr, sizeof(inaddr->sin_addr)
                );
@@ -2911,6 +2916,7 @@ static int gs2200m_ioctl_ifreq(FAR struct gs2200m_dev_s *dev,
   if (false == getreq && OK == ret)
     {
       char inetaddr[INET_ADDRSTRLEN];
+
       memcpy(&in[0], &dev->net_dev.d_ipaddr, sizeof(in[0]));
       memcpy(&in[1], &dev->net_dev.d_netmask, sizeof(in[1]));
       memcpy(&in[2], &dev->net_dev.d_draddr, sizeof(in[2]));
@@ -3097,7 +3103,7 @@ static int gs2200m_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
  * Name: gs2200m_poll
  ****************************************************************************/
 
-static int gs2200m_poll(FAR struct file *filep, FAR struct pollfd *fds,
+static int gs2200m_poll(FAR struct file *filep, FAR struct pollfd_s *fds,
                         bool setup)
 {
   FAR struct inode *inode;

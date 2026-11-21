@@ -63,11 +63,8 @@ struct xcptcontext
 };
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -84,7 +81,7 @@ extern "C"
  * such value for each processor that can receive an interrupt.
  */
 
-EXTERN volatile xcpt_reg_t *g_current_regs[CONFIG_SMP_NCPUS];
+extern volatile xcpt_reg_t *g_current_regs[CONFIG_SMP_NCPUS];
 
 /****************************************************************************
  * Public Function Prototypes
@@ -138,6 +135,15 @@ static inline_function void up_set_current_regs(xcpt_reg_t *regs)
   g_current_regs[0] = regs;
 #endif
 }
+
+/* Return program counter */
+
+#ifdef __GNUC__
+#  define up_getpc() \
+    ({ __label__ __here; __here: (unsigned long)&&__here; })
+#else
+#  define up_getpc() ((uintptr_t)0)
+#endif
 
 /* Return the current value of the stack pointer */
 
@@ -196,7 +202,6 @@ static inline_function bool up_interrupt_context(void)
 #define up_getusrsp(regs) \
     ((uintptr_t)((xcpt_reg_t *)(regs))[JB_SP])
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

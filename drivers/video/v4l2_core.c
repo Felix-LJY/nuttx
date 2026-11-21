@@ -28,6 +28,7 @@
 #include <errno.h>
 
 #include <nuttx/kmalloc.h>
+#include <nuttx/poll.h>
 #include <nuttx/video/video.h>
 
 /****************************************************************************
@@ -47,7 +48,7 @@ static int v4l2_ioctl(FAR struct file *filep,
 static int v4l2_mmap(FAR struct file *filep,
                      FAR struct mm_map_entry_s *map);
 static int v4l2_poll(FAR struct file *filep,
-                     FAR struct pollfd *fds, bool setup);
+                     FAR struct pollfd_s *fds, bool setup);
 #ifndef CONFIG_DISABLE_PSEUDOFS_OPERATIONS
 static int v4l2_unlink(FAR struct inode *inode);
 #endif
@@ -493,6 +494,17 @@ static int v4l2_ioctl(FAR struct file *filep,
         return v4l2->vops->encoder_cmd(filep,
                              (FAR struct v4l2_encoder_cmd *)arg);
 
+#ifdef CONFIG_DMA_SHARED_BUFFER
+      case VIDIOC_EXPBUF:
+        if (v4l2->vops->expbuf == NULL)
+          {
+            break;
+          }
+
+        return v4l2->vops->expbuf(filep,
+                             (FAR struct v4l2_exportbuffer *)arg);
+#endif
+
       default:
         verr("Unrecognized cmd: %d\n", cmd);
         break;
@@ -516,7 +528,7 @@ static int v4l2_mmap(FAR struct file *filep,
 }
 
 static int v4l2_poll(FAR struct file *filep,
-                     FAR struct pollfd *fds, bool setup)
+                     FAR struct pollfd_s *fds, bool setup)
 {
   FAR struct inode *inode = filep->f_inode;
   FAR struct v4l2_s *v4l2 = inode->i_private;

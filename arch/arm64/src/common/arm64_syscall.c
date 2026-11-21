@@ -27,9 +27,11 @@
 #include <nuttx/config.h>
 
 #include <inttypes.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
 #include <assert.h>
+#include <errno.h>
 #include <nuttx/debug.h>
 #include <syscall.h>
 
@@ -42,6 +44,22 @@
 #include "arm64_fatal.h"
 #include "sched/sched.h"
 #include "signal/signal.h"
+
+/****************************************************************************
+ * Pre-processor Definitions
+ ****************************************************************************/
+
+/* From user mode, the only reserved system call that is allowed is the
+ * return from a signal handler that the kernel dispatched.  Without full
+ * signal support the kernel dispatches no handler, so none is allowed.
+ */
+
+#ifdef CONFIG_ENABLE_ALL_SIGNALS
+#  define USER_SIGRETURN(tcb, cmd) \
+     ((cmd) == SYS_signal_handler_return && (tcb)->xcp.sigreturn != 0)
+#else
+#  define USER_SIGRETURN(tcb, cmd) false
+#endif
 
 /****************************************************************************
  * Private Types
@@ -110,7 +128,7 @@ uintptr_t dispatch_syscall(unsigned int nbr, uintptr_t parm1,
 
   /* Valid system call ? */
 
-  if (x0 > SYS_maxsyscall)
+  if (x0 >= SYS_maxsyscall)
     {
       /* Nope, get out */
 
@@ -179,6 +197,15 @@ uint64_t *arm64_syscall(uint64_t *regs)
   /* The SYSCALL command is in x0 on entry.  Parameters follow in x1..x7 */
 
   cmd = regs[REG_X0];
+
+#ifdef CONFIG_BUILD_KERNEL
+  if ((regs[REG_SPSR] & SPSR_MODE_MASK) == SPSR_MODE_EL0T &&
+      !USER_SIGRETURN(tcb, cmd))
+    {
+      regs[REG_X0] = -ENOSYS;
+      return regs;
+    }
+#endif
 
   /* if cmd == SYS_restore_context (*running_task)->xcp.regs is valid
    * should not be overwritten

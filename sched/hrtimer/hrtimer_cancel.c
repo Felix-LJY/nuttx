@@ -74,34 +74,52 @@
 
 int hrtimer_cancel(FAR hrtimer_t *hrtimer)
 {
-  FAR hrtimer_t *first;
   irqstate_t flags;
-  int ret;
+  int        ret;
 
   DEBUGASSERT(hrtimer != NULL);
 
   /* Acquire the lock and seize the ownership of the hrtimer queue. */
 
-  flags = write_seqlock_irqsave(&g_hrtimer_lock);
+  flags = hrtimer_lock();
 
   /* Ensure no core can write the hrtimer. */
 
   ret = hrtimer_cancel_running(hrtimer);
 
+  /* Update the expired time to ensure the cancelled timer will return 0
+   * in hrtimer_gettime.
+   */
+
+  hrtimer->expired = hrtimer_last_expired();
+
   if (hrtimer_is_pending(hrtimer))
     {
-      /* Update the hardware timer if the queue head changed. */
+      uint64_t prev_expired = hrtimer_next_expired();
+      uint64_t next_expired;
 
-      if (hrtimer_remove(hrtimer))
+      /* Update the expired time to ensure the cancelled timer will return 0
+       * in hrtimer_gettime.
+       */
+
+      hrtimer->expired = hrtimer_last_expired();
+
+      hrtimer_remove(hrtimer);
+
+      /* Reprogram the hardware timer only if the earliest expiration
+       * changed.
+       */
+
+      next_expired = hrtimer_next_expired();
+      if (prev_expired != next_expired)
         {
-          first = hrtimer_get_first();
-          hrtimer_reprogram(first->expired);
+          hrtimer_reprogram(next_expired);
         }
     }
 
   /* Release the lock and give up the ownership of the hrtimer queue. */
 
-  write_sequnlock_irqrestore(&g_hrtimer_lock, flags);
+  hrtimer_unlock(flags);
   return ret;
 }
 
@@ -141,7 +159,7 @@ int hrtimer_cancel_sync(FAR hrtimer_t *hrtimer)
     {
       /* Wait until all the timer callbacks finish. */
 
-       hrtimer_wait(hrtimer);
+      hrtimer_wait(hrtimer);
     }
 
   return ret;

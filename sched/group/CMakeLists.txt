@@ -22,6 +22,8 @@
 
 set(SRCS
     group_create.c
+    group_rlimit.c
+    group_umask.c
     group_join.c
     group_leave.c
     group_setupidlefiles.c
@@ -31,6 +33,10 @@ set(SRCS
 
 if(NOT CONFIG_DISABLE_ALL_SIGNALS)
   list(APPEND SRCS group_signal.c)
+endif()
+
+if(CONFIG_SCHED_PROCESS_GROUPS)
+  list(APPEND SRCS group_pgrp.c)
 endif()
 
 if(CONFIG_SCHED_HAVE_PARENT)

@@ -86,6 +86,11 @@ void up_schedule_sigaction(struct tcb_s *tcb)
   struct tcb_s *rtcb = running_task();
   uint32_t      ipsr = getipsr();
 
+  if (tcb->xcp.saved_regs != NULL)
+    {
+      return;
+    }
+
   /* First, handle some special cases when the signal is
    * being delivered to the currently executing task.
    */
@@ -134,6 +139,8 @@ void up_schedule_sigaction(struct tcb_s *tcb)
       tcb->xcp.regs[REG_LR]         = EXC_RETURN_THREAD;
       tcb->xcp.regs[REG_EXC_RETURN] = EXC_RETURN_THREAD;
       tcb->xcp.regs[REG_CONTROL]    = getcontrol() & ~CONTROL_NPRIV;
+#else
+      tcb->xcp.regs[REG_LR]         = 0; /* Avoid backtracing back. */
 #endif
     }
 }

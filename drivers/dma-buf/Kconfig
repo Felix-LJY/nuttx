@@ -1,0 +1,56 @@
+############################################################################
+# drivers/dma-buf/Kconfig
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.  The
+# ASF licenses this file to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance with the
+# License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
+############################################################################
+#
+# For a description of the syntax of this configuration file,
+# see the file kconfig-language.txt in the NuttX tools repository.
+#
+
+config DMA_SHARED_BUFFER
+	bool
+	default n
+	---help---
+		This option enables the framework for buffer-sharing between
+		multiple drivers. A buffer is associated with a file using driver
+		APIs extension; the file's descriptor can then be passed on to other
+		driver.
+
+config DMABUF_HEAPS
+	bool "DMA-BUF Userland Memory Heaps"
+	default n
+	select DMA_SHARED_BUFFER
+	---help---
+		Choose this option to enable the DMA-BUF userland memory heaps.
+		This options creates per heap chardevs in /dev/dma_heap/ which
+		allows userspace to allocate dma-bufs that can be shared
+		between drivers.
+
+config DMABUF_SYSTEM_HEAP_RESERVE_SIZE
+	int "DMA-BUF system heap reserved region size"
+	default 0
+	depends on DMABUF_HEAPS
+	---help---
+		Reserve a private region at startup for system DMA-BUF
+		allocations.  All system heap allocations then come from this
+		region, and an allocation fails when the region has insufficient
+		space.
+
+		A value of zero keeps the existing public heap allocation path.

@@ -86,8 +86,17 @@
                                                  * IN: None
                                                  * OUT: struct dac_info_s * */
 
+/* COMP */
+
+#define ANIOC_COMP_ENABLE       _ANIOC(0x000d)  /* Enable comparator
+                                                 * IN: None
+                                                 * OUT: None */
+#define ANIOC_COMP_DISABLE      _ANIOC(0x000e)  /* Disable comparator
+                                                 * IN: None
+                                                 * OUT: None */
+
 #define AN_FIRST          0x0001          /* First common command */
-#define AN_NCMDS          12              /* Number of common commands */
+#define AN_NCMDS          14              /* Number of common commands */
 
 /* User defined ioctl commands are also supported. These will be forwarded
  * by the upper-half driver to the lower-half driver via the ioctl()
@@ -161,19 +170,20 @@
 #define AN_MCP445X_FIRST  (AN_POT_FIRST + AN_POT_NCMDS)
 #define AN_MCP445X_NCMDS  2
 
+/* See arch/arm/src/rm57/rm57_adc.h */
+
+#define AN_RM57_FIRST     (AN_MCP445X_FIRST + AN_MCP445X_NCMDS)
+#define AN_RM57_NCMDS     13
+
 /****************************************************************************
  * Public Function Prototypes
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

@@ -1,6 +1,8 @@
 /****************************************************************************
  * boards/arm/rp23xx/pimoroni-pico-plus-2-w/src/rp23xx_boardinitialize.c
  *
+ * SPDX-License-Identifier: Apache-2.0
+ *
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.  The
@@ -70,7 +72,7 @@ void rp23xx_boardearlyinitialize(void)
 
   /* Nothing to do for the LED: it hangs off the CYW43439 wireless chip
    * rather than an RP2350 pin, and cannot be touched this early.  See
-   * src/rp23xx_userleds.c.
+   * common/src/rp23xx_cyw43439_userleds.c.
    */
 }
 

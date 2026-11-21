@@ -38,7 +38,6 @@
 #include <nuttx/board.h>
 #include <nuttx/symtab.h>
 #include <nuttx/rptun/rptun.h>
-#include <nuttx/syslog/syslog_rpmsg.h>
 
 #include "sim_internal.h"
 #ifdef CONFIG_SIM_HCISOCKET
@@ -55,10 +54,6 @@ char **g_argv;
 /****************************************************************************
  * Private Data
  ****************************************************************************/
-
-#ifdef CONFIG_SYSLOG_RPMSG
-static char g_logbuffer[4096];
-#endif
 
 #ifdef CONFIG_ALLSYMS
 extern struct symtab_s g_allsyms[];
@@ -113,7 +108,7 @@ static void allsyms_relocate(void)
  *
  ****************************************************************************/
 
-#ifdef CONFIG_SIM_ASAN
+#if defined(CONFIG_SIM_ASAN) || defined(CONFIG_MM_KASAN_SIM)
 noprofile_function const char *__asan_default_options(void)
 {
   return "abort_on_error=1"
@@ -227,10 +222,6 @@ int main(int argc, char **argv, char **envp)
 
 #ifdef CONFIG_ALLSYMS
   allsyms_relocate();
-#endif
-
-#ifdef CONFIG_SYSLOG_RPMSG
-  syslog_rpmsg_init_early(g_logbuffer, sizeof(g_logbuffer));
 #endif
 
   /* Start NuttX */

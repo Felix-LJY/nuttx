@@ -33,6 +33,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <nuttx/debug.h>
+#include <nuttx/poll.h>
 
 #include <netpacket/packet.h>
 
@@ -58,7 +59,7 @@ static int        pkt_bind(FAR struct socket *psock,
                            FAR const struct sockaddr *addr,
                            socklen_t addrlen);
 static int        pkt_netpoll(FAR struct socket *psock,
-                              FAR struct pollfd *fds, bool setup);
+                              FAR struct pollfd_s *fds, bool setup);
 static int        pkt_close(FAR struct socket *psock);
 
 /****************************************************************************
@@ -108,6 +109,7 @@ static int pkt_sockif_alloc(FAR struct socket *psock)
    */
 
   FAR struct pkt_conn_s *conn = pkt_alloc();
+
   if (conn == NULL)
     {
       /* Failed to reserve a connection structure */
@@ -126,14 +128,15 @@ static int pkt_sockif_alloc(FAR struct socket *psock)
 
   conn->type = psock->s_proto;
 
+#if CONFIG_NET_RECV_BUFSIZE > 0
+  conn->rcvbufs = CONFIG_NET_RECV_BUFSIZE;
+#endif
 #ifdef CONFIG_NET_PKT_WRITE_BUFFERS
 #  if CONFIG_NET_SEND_BUFSIZE > 0
   conn->sndbufs = CONFIG_NET_SEND_BUFSIZE;
 #  endif
   nxsem_init(&conn->sndsem, 0, 0);
 #endif
-
-  nxrmutex_init(&conn->sconn.s_lock);
 
   /* Save the pre-allocated connection in the socket structure */
 
@@ -309,7 +312,7 @@ static int pkt_bind(FAR struct socket *psock,
  *
  ****************************************************************************/
 
-static int pkt_netpoll(FAR struct socket *psock, FAR struct pollfd *fds,
+static int pkt_netpoll(FAR struct socket *psock, FAR struct pollfd_s *fds,
                        bool setup)
 {
   /* Check if we are setting up or tearing down the poll */
@@ -363,10 +366,6 @@ static int pkt_close(FAR struct socket *psock)
           if (conn->crefs <= 1)
             {
               conn_dev_lock(&conn->sconn, dev);
-
-              /* Yes... free any read-ahead data */
-
-              iob_free_queue(&conn->readahead);
 
 #ifdef CONFIG_NET_PKT_WRITE_BUFFERS
               /* Free write buffer callback. */

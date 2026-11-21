@@ -26,6 +26,7 @@
 
 #include <nuttx/debug.h>
 
+#include <nuttx/clock.h>
 #include <nuttx/kmalloc.h>
 #include <nuttx/semaphore.h>
 #include <nuttx/video/fb.h>
@@ -37,9 +38,15 @@
  * Pre-processor Definitions
  ****************************************************************************/
 
-#define VIRTIO_GPU_BPP          32
-#define VIRTIO_GPU_FB_FMT       FB_FMT_RGB32
-#define VIRTIO_GPU_FMT          VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM
+#ifdef CONFIG_DRIVERS_VIRTIO_GPU_RGB565
+#  define VIRTIO_GPU_BPP        16
+#  define VIRTIO_GPU_FB_FMT     FB_FMT_RGB16_565
+#  define VIRTIO_GPU_FMT        VIRTIO_GPU_FORMAT_B5G6R5_UNORM
+#else
+#  define VIRTIO_GPU_BPP        32
+#  define VIRTIO_GPU_FB_FMT     FB_FMT_RGB32
+#  define VIRTIO_GPU_FMT        VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM
+#endif
 
 #define VIRTIO_GPU_CTL          0
 #define VIRTIO_GPU_NUM          1
@@ -49,7 +56,7 @@
 #define VIRTIO_GPU_MAX_NENTS    4
 
 #define VIRTIO_GPU_FB_NUMS      2
-#define VIRTIO_GPU_VSYNC_PERIOD 16
+#define VIRTIO_GPU_VSYNC_PERIOD_MS 16
 
 #define VIRTIO_GPU_MAP_ERR(e)   ((e) == VIRTIO_GPU_RESP_ERR_OUT_OF_MEMORY ? \
                                 -ENOMEM : -EINVAL)
@@ -123,6 +130,7 @@ static int virtio_gpu_flush_resource(FAR struct virtio_gpu_priv_s *priv,
                                      int width, int height);
 static int virtio_gpu_probe(FAR struct virtio_device *vdev);
 static void virtio_gpu_remove(FAR struct virtio_device *vdev);
+static void virtio_gpu_dump(FAR struct virtio_device *vdev);
 static int virtio_gpu_getvideoinfo(FAR struct fb_vtable_s *vtable,
                                    FAR struct fb_videoinfo_s *vinfo);
 static int virtio_gpu_getplaneinfo(FAR struct fb_vtable_s *vtable,
@@ -144,10 +152,10 @@ static int virtio_gpu_flush_output(FAR struct fb_vtable_s *vtable,
 
 static struct virtio_driver g_virtio_gpu_driver =
 {
-  .node   = LIST_INITIAL_VALUE(g_virtio_gpu_driver.node), /* node */
-  .device = VIRTIO_ID_GPU,                                /* device id */
-  .probe  = virtio_gpu_probe,                             /* probe */
-  .remove = virtio_gpu_remove,                            /* remove */
+  .device = VIRTIO_ID_GPU,     /* device id */
+  .probe  = virtio_gpu_probe,  /* probe */
+  .remove = virtio_gpu_remove, /* remove */
+  .dump   = virtio_gpu_dump,   /* dump */
 };
 
 static FAR struct virtio_gpu_priv_s *g_virtio_gpu[VIRTIO_GPU_MAX_DISP];
@@ -164,6 +172,7 @@ static FAR void *virtio_gpu_zalloc_cmd(FAR struct virtio_gpu_priv_s *priv)
 {
   irqstate_t flags = spin_lock_irqsave(&priv->lock);
   FAR union virtio_gpu_cmd_u *cmd = priv->freecmd;
+
   if (cmd != NULL)
     {
       priv->freecmd = cmd->next;
@@ -192,6 +201,7 @@ static void virtio_gpu_free_cmd(FAR struct virtio_gpu_priv_s *priv,
 {
   FAR union virtio_gpu_cmd_u *node = cmd;
   irqstate_t flags = spin_lock_irqsave(&priv->lock);
+
   node->next = priv->freecmd;
   priv->freecmd = node;
   spin_unlock_irqrestore(&priv->lock, flags);
@@ -228,7 +238,7 @@ static int virtio_gpu_send_cmd(FAR struct virtqueue *vq,
         {
           virtqueue_kick(vq);
           spin_unlock_irqrestore(&priv->lock, flags);
-          nxsem_wait(&sem);
+          nxsem_wait_uninterruptible(&sem);
         }
       else
         {
@@ -586,9 +596,10 @@ static void virtio_gpu_vsync_loop(FAR void *arg)
 static void virtio_gpu_vsync_interrupt(FAR void *arg)
 {
   FAR struct virtio_gpu_priv_s *priv = (FAR struct virtio_gpu_priv_s *)arg;
+
   virtio_gpu_vsync_loop(arg);
   work_queue(HPWORK, &priv->work, virtio_gpu_vsync_interrupt,
-             arg, VIRTIO_GPU_VSYNC_PERIOD);
+             arg, MSEC2TICK(VIRTIO_GPU_VSYNC_PERIOD_MS));
 }
 
 /****************************************************************************
@@ -607,7 +618,11 @@ static int virtio_gpu_init_fbmem(FAR struct virtio_device *vdev,
   priv->stride = priv->xres * VIRTIO_GPU_BPP >> 3;
   fblen = priv->stride * priv->yres;
 
+#ifdef CONFIG_BUILD_PROTECTED
+  priv->fbmem = (FAR uint8_t *)kumm_calloc(fblen * fb_count, 16);
+#else
   priv->fbmem = (FAR uint8_t *)virtio_zalloc_buf(vdev, fblen * fb_count, 16);
+#endif
   if (priv->fbmem == NULL)
     {
       vrterr("ERROR: Failed to allocate frame buffer memory");
@@ -646,7 +661,11 @@ static int virtio_gpu_init_fbmem(FAR struct virtio_device *vdev,
   return ret;
 
 error:
+#ifdef CONFIG_BUILD_PROTECTED
+  kumm_free(priv->fbmem);
+#else
   virtio_free_buf(vdev, priv->fbmem);
+#endif
   return ret;
 }
 
@@ -729,7 +748,7 @@ static int virtio_gpu_probe(FAR struct virtio_device *vdev)
     }
 
   work_queue(HPWORK, &priv->work, virtio_gpu_vsync_interrupt,
-             priv, VIRTIO_GPU_VSYNC_PERIOD);
+             priv, MSEC2TICK(VIRTIO_GPU_VSYNC_PERIOD_MS));
 
   return ret;
 
@@ -756,6 +775,25 @@ static void virtio_gpu_remove(FAR struct virtio_device *vdev)
   g_virtio_gpu[priv->display] = NULL;
   virtio_free_buf(vdev, priv->fbmem);
   kmm_free(priv);
+}
+
+/****************************************************************************
+ * Name: virtio_gpu_dump
+ ****************************************************************************/
+
+static void virtio_gpu_dump(FAR struct virtio_device *vdev)
+{
+  FAR struct virtio_gpu_priv_s *priv = vdev->priv;
+
+  syslog(LOG_EMERG, "    display=%d, resolution=%dx%d, "
+         "stride=%d B, fblen=%zu B\n",
+         priv->display, priv->xres, priv->yres,
+         priv->stride, priv->fblen);
+  syslog(LOG_EMERG, "    fb_count=%d, bpp=%d, format=%s, "
+         "vsync=%d ms\n",
+         VIRTIO_GPU_FB_NUMS, VIRTIO_GPU_BPP,
+         VIRTIO_GPU_BPP == 16 ? "RGB565" : "RGB32",
+         VIRTIO_GPU_VSYNC_PERIOD_MS);
 }
 
 /****************************************************************************

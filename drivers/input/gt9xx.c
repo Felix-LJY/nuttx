@@ -31,6 +31,7 @@
 
 #include <nuttx/config.h>
 
+#include <sys/param.h>
 #include <sys/types.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -43,10 +44,12 @@
 
 #include <nuttx/arch.h>
 #include <nuttx/kmalloc.h>
+#include <nuttx/poll.h>
 #include <nuttx/signal.h>
 #include <nuttx/i2c/i2c_master.h>
 #include <nuttx/input/touchscreen.h>
 #include <nuttx/input/gt9xx.h>
+#include <nuttx/mutex.h>
 
 /****************************************************************************
  * Pre-Processor Definitions
@@ -98,7 +101,7 @@ struct gt9xx_dev_s
 
   /* Poll Waiters for device */
 
-  FAR struct pollfd *fds[CONFIG_INPUT_GT9XX_NPOLLWAITERS];
+  FAR struct pollfd_s *fds[CONFIG_INPUT_GT9XX_NPOLLWAITERS];
 };
 
 /****************************************************************************
@@ -109,7 +112,7 @@ static int gt9xx_open(FAR struct file *filep);
 static int gt9xx_close(FAR struct file *filep);
 static ssize_t gt9xx_read(FAR struct file *filep, FAR char *buffer,
                           size_t buflen);
-static int gt9xx_poll(FAR struct file *filep, FAR struct pollfd *fds,
+static int gt9xx_poll(FAR struct file *filep, FAR struct pollfd_s *fds,
                       bool setup);
 
 /****************************************************************************
@@ -196,7 +199,7 @@ static int gt9xx_i2c_read(FAR struct gt9xx_dev_s *dev,
     }
   };
 
-  const int msgv_len = sizeof(msgv) / sizeof(msgv[0]);
+  const int msgv_len = nitems(msgv);
 
   iinfo("reg=0x%x, buflen=%zu\n", reg, buflen);
   DEBUGASSERT(dev && dev->i2c && buf);
@@ -265,7 +268,7 @@ static int gt9xx_i2c_write(FAR struct gt9xx_dev_s *dev,
     }
   };
 
-  const int msgv_len = sizeof(msgv) / sizeof(msgv[0]);
+  const int msgv_len = nitems(msgv);
 
   iinfo("reg=0x%x, val=%d\n", reg, val);
   DEBUGASSERT(dev && dev->i2c);
@@ -751,7 +754,7 @@ static int gt9xx_close(FAR struct file *filep)
  *
  ****************************************************************************/
 
-static int gt9xx_poll(FAR struct file *filep, FAR struct pollfd *fds,
+static int gt9xx_poll(FAR struct file *filep, FAR struct pollfd_s *fds,
                       bool setup)
 {
   FAR struct gt9xx_dev_s *priv;
@@ -825,7 +828,7 @@ static int gt9xx_poll(FAR struct file *filep, FAR struct pollfd *fds,
     {
       /* If Poll Teardown: Remove the poll setup */
 
-      FAR struct pollfd **slot = (FAR struct pollfd **)fds->priv;
+      FAR struct pollfd_s **slot = (FAR struct pollfd_s **)fds->priv;
 
       DEBUGASSERT(slot != NULL);
 

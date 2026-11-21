@@ -27,98 +27,28 @@
 #include <nuttx/debug.h>
 #include <errno.h>
 #include <stdio.h>
+#include <sys/param.h>
 
 #include <nuttx/fs/fs.h>
 #include <nuttx/fs/ioctl.h>
 #include <nuttx/semaphore.h>
 #include <nuttx/spinlock.h>
 #include <nuttx/virtio/virtio.h>
+#include <nuttx/virtio/virtio-blk.h>
 #include <nuttx/init.h>
 
 #include "virtio-blk.h"
 
 /****************************************************************************
- * Pre-processor Definitions
- ****************************************************************************/
-
-#define VIRTIO_BLK_REQ_HEADER_SIZE  sizeof(struct virtio_blk_req_s)
-#define VIRTIO_BLK_RESP_HEADER_SIZE sizeof(struct virtio_blk_resp_s)
-
-/* Block feature bits */
-
-#define VIRTIO_BLK_F_RO             5  /* Disk is read-only */
-#define VIRTIO_BLK_F_BLK_SIZE       6  /* Block size of disk is available */
-#define VIRTIO_BLK_F_FLUSH          9  /* Cache flush command support */
-
-/* Block request type */
-
-#define VIRTIO_BLK_T_IN             0  /* READ */
-#define VIRTIO_BLK_T_OUT            1  /* WRITE */
-#define VIRTIO_BLK_T_FLUSH          4  /* FLUSH */
-
-/* Block request return status */
-
-#define VIRTIO_BLK_S_OK             0
-#define VIRTIO_BLK_S_IOERR          1
-#define VIRTIO_BLK_S_UNSUPP         2
-
-/* Block device sector size */
-
-#define VIRTIO_BLK_SECTOR_BITS      9
-#define VIRTIO_BLK_SECTOR_SIZE      (1UL << VIRTIO_BLK_SECTOR_BITS)
-
-/****************************************************************************
  * Private Types
  ****************************************************************************/
-
-/* Block request out header */
-
-begin_packed_struct struct virtio_blk_req_s
-{
-  uint32_t type;
-  uint32_t reserved;
-  uint64_t sector;
-} end_packed_struct;
-
-/* Block request in header */
-
-begin_packed_struct struct virtio_blk_resp_s
-{
-  uint8_t status;
-} end_packed_struct;
-
-begin_packed_struct struct virtio_blk_config_s
-{
-  uint64_t capacity;
-  uint32_t size_max;
-  uint32_t seg_max;
-  uint16_t cylinders; /* block geometry */
-  uint8_t  heads;     /* block geometry */
-  uint8_t  sectors;   /* block geometry */
-  uint32_t blk_size;
-  uint8_t  physical_block_exp;
-  uint8_t  alignment_offset;
-  uint16_t min_io_size;
-  uint32_t opt_io_size;
-  uint8_t  writeback;
-  uint8_t  unused0;
-  uint16_t num_queues;
-  uint32_t max_discard_sectors;
-  uint32_t max_discard_seg;
-  uint32_t discard_sector_alignment;
-  uint32_t max_write_zeroes_sectors;
-  uint32_t max_write_zeroes_seg;
-  uint8_t  write_zeroes_may_unmap;
-  uint8_t  unused1[3];
-  uint32_t max_secure_erase_sectors;
-  uint32_t max_secure_erase_seg;
-  uint32_t secure_erase_sector_alignment;
-} end_packed_struct;
 
 struct virtio_blk_priv_s
 {
   FAR struct virtio_device     *vdev;           /* Virtio device */
   spinlock_t                    lock;           /* Lock */
+  sem_t                         waitsem;        /* Wait for descriptors */
+  unsigned int                  nwait;          /* Number of the waiters */
   uint64_t                      nsectors;       /* Sectore numbers */
   uint32_t                      block_size;     /* Block size */
   char                          name[NAME_MAX]; /* Device name */
@@ -130,6 +60,9 @@ struct virtio_blk_priv_s
 
 /* BLK block_operations functions and they helper function */
 
+static ssize_t virtio_blk_rdwr_one(FAR struct virtio_blk_priv_s *priv,
+                                   FAR void *buf, blkcnt_t sector,
+                                   size_t nsectors, bool write);
 static ssize_t virtio_blk_rdwr(FAR struct virtio_blk_priv_s *priv,
                                FAR void *buffer, blkcnt_t startsector,
                                unsigned int nsectors, bool write);
@@ -155,6 +88,7 @@ static void virtio_blk_uninit(FAR struct virtio_blk_priv_s *priv);
 static void virtio_blk_done(FAR struct virtqueue *vq);
 static int  virtio_blk_probe(FAR struct virtio_device *vdev);
 static void virtio_blk_remove(FAR struct virtio_device *vdev);
+static void virtio_blk_dump(FAR struct virtio_device *vdev);
 
 /****************************************************************************
  * Private Data
@@ -162,10 +96,10 @@ static void virtio_blk_remove(FAR struct virtio_device *vdev);
 
 static struct virtio_driver g_virtio_blk_driver =
 {
-  LIST_INITIAL_VALUE(g_virtio_blk_driver.node), /* node */
-  VIRTIO_ID_BLOCK,                              /* device id */
-  virtio_blk_probe,                             /* probe */
-  virtio_blk_remove,                            /* remove */
+  VIRTIO_ID_BLOCK,   /* device id */
+  virtio_blk_probe,  /* probe */
+  virtio_blk_remove, /* remove */
+  virtio_blk_dump,   /* dump */
 };
 
 static const struct block_operations g_virtio_blk_bops =
@@ -220,6 +154,220 @@ static void virtio_blk_wait_complete(FAR struct virtqueue *vq,
 }
 
 /****************************************************************************
+ * Name: virtio_blk_wait_desc
+ *
+ * Description:
+ *   virtqueue_add_buffer() does not check the number of free descriptors:
+ *   wait until the queue has enough of them.  Called with priv->lock held,
+ *   returns with it held.
+ *
+ ****************************************************************************/
+
+static int virtio_blk_wait_desc(FAR struct virtio_blk_priv_s *priv,
+                                FAR struct virtqueue *vq, int needed,
+                                FAR irqstate_t *flags)
+{
+  FAR sem_t *sem;
+  int ret;
+
+  while (vq->vq_free_cnt < needed)
+    {
+      if (up_interrupt_context() || OSINIT_IS_PANIC())
+        {
+          /* No wait here: complete the finished requests by polling */
+
+          sem = virtqueue_get_buffer(vq, NULL, NULL);
+          if (sem != NULL)
+            {
+              nxsem_post(sem);
+            }
+
+          for (; priv->nwait > 0; priv->nwait--)
+            {
+              nxsem_post(&priv->waitsem);
+            }
+
+          continue;
+        }
+
+      priv->nwait++;
+      spin_unlock_irqrestore(&priv->lock, *flags);
+      ret = nxsem_wait_uninterruptible(&priv->waitsem);
+      *flags = spin_lock_irqsave(&priv->lock);
+      if (ret < 0)
+        {
+          return ret;
+        }
+    }
+
+  return OK;
+}
+
+/****************************************************************************
+ * Name: virtio_blk_rdwr_one
+ *
+ * Description:
+ *   Transfer a single chunk, sized to the shared memory a bounce transport
+ *   can map at once. Map req/data/resp, submit, wait, then unmap.
+ *
+ * Returned Value:
+ *   The number of sectors transferred (> 0) on success, or a negated errno
+ *   on failure (-ENOMEM when the buffers cannot be mapped).
+ *
+ ****************************************************************************/
+
+static ssize_t virtio_blk_rdwr_one(FAR struct virtio_blk_priv_s *priv,
+                                   FAR void *buf, blkcnt_t sector,
+                                   size_t nsectors, bool write)
+{
+  FAR struct virtio_device *vdev = priv->vdev;
+  FAR struct virtqueue *vq = vdev->vrings_info[0].vq;
+  FAR struct virtqueue_buf vb[3];
+  struct virtio_blk_resp_s resp;
+  struct virtio_blk_req_s req;
+  enum virtio_dma_map datadir;
+  FAR void *reqmap;
+  FAR void *respmap;
+  FAR void *datamap;
+  size_t maxsectors;
+  size_t datalen;
+  size_t chunk;
+  irqstate_t flags;
+  sem_t respsem;
+  ssize_t ret;
+  int readnum;
+
+  datadir = write ? VIRTIO_DMA_TO_DEVICE : VIRTIO_DMA_FROM_DEVICE;
+
+  /* Build the block request for this chunk */
+
+  req.type     = write ? VIRTIO_BLK_T_OUT : VIRTIO_BLK_T_IN;
+  req.reserved = 0;
+  req.sector   = (sector * priv->block_size) >> VIRTIO_BLK_SECTOR_BITS;
+  resp.status  = VIRTIO_BLK_S_IOERR;
+
+  /* Map the data payload first, reserving one block for the tiny req/resp
+   * headers. The data buffer is the largest and the one likely to fail
+   * under carveout contention, so mapping it first means a failure costs no
+   * header bounce alloc/free churn. The reserved block (one sector, far
+   * larger than the two headers plus their alignment) keeps the later
+   * header maps from failing. A bounce transport returns -ENOMEM when it
+   * cannot satisfy a map.
+   */
+
+  maxsectors = virtio_free_largest(vdev) / priv->block_size;
+  if (maxsectors <= 1)
+    {
+      /* Need at least one sector for data plus one block for headers */
+
+      return -ENOMEM;
+    }
+
+  maxsectors -= 1;
+  chunk   = MIN(nsectors, maxsectors);
+  datalen = chunk * priv->block_size;
+  ret = virtio_map_buf(vdev, buf, datalen, datadir, &datamap);
+  if (ret < 0)
+    {
+      return ret;
+    }
+
+  ret = virtio_map_buf(vdev, &req, sizeof(req), VIRTIO_DMA_TO_DEVICE,
+                       &reqmap);
+  if (ret < 0)
+    {
+      goto out_data;
+    }
+
+  ret = virtio_map_buf(vdev, &resp, sizeof(resp), VIRTIO_DMA_FROM_DEVICE,
+                       &respmap);
+  if (ret < 0)
+    {
+      goto out_req;
+    }
+
+  nxsem_init(&respsem, 0, 0);
+
+  /* Fill the virtqueue buffer:
+   * Buffer 0: the block out header;
+   * Buffer 1: the read/write buffer;
+   * Buffer 2: the block in header, return the status.
+   */
+
+  vb[0].buf = reqmap;
+  vb[0].len = VIRTIO_BLK_REQ_HEADER_SIZE;
+  vb[1].buf = datamap;
+  vb[1].len = datalen;
+  vb[2].buf = respmap;
+  vb[2].len = VIRTIO_BLK_RESP_HEADER_SIZE;
+  readnum = write ? 2 : 1;
+
+  flags = spin_lock_irqsave(&priv->lock);
+  if (up_interrupt_context())
+    {
+      virtqueue_disable_cb(vq);
+    }
+
+  ret = virtio_blk_wait_desc(priv, vq, nitems(vb), &flags);
+  if (ret >= 0)
+    {
+      ret = virtqueue_add_buffer(vq, vb, readnum, 3 - readnum, &respsem);
+    }
+
+  if (ret < 0)
+    {
+      if (up_interrupt_context())
+        {
+          virtqueue_enable_cb(vq);
+        }
+
+      spin_unlock_irqrestore(&priv->lock, flags);
+      vrterr("virtqueue_add_buffer failed, ret=%zd\n", ret);
+      goto out_resp;
+    }
+
+  virtqueue_kick(vq);
+  spin_unlock_irqrestore(&priv->lock, flags);
+
+  /* Wait for the request completion */
+
+  virtio_blk_wait_complete(vq, &respsem);
+
+  if (up_interrupt_context())
+    {
+      virtqueue_enable_cb_lock(vq, &priv->lock);
+    }
+
+  ret = chunk;
+
+out_resp:
+
+  /* unmap copies the device-written status back into resp; only after that
+   * is resp.status valid (on a bouncing transport resp is a bounce buffer).
+   */
+
+  virtio_unmap_buf(vdev, &resp, sizeof(resp), VIRTIO_DMA_FROM_DEVICE,
+                   respmap);
+out_req:
+  virtio_unmap_buf(vdev, &req, sizeof(req), VIRTIO_DMA_TO_DEVICE, reqmap);
+
+  if (ret >= 0 && resp.status != VIRTIO_BLK_S_OK)
+    {
+      vrterr("%s Error\n", write ? "Write" : "Read");
+      ret = -EIO;
+    }
+
+out_data:
+
+  /* On failure copy nothing back: a bounce holds no device data then, and
+   * the caller's buffer must stay as it was.
+   */
+
+  virtio_unmap_buf(vdev, buf, ret >= 0 ? datalen : 0, datadir, datamap);
+  return ret;
+}
+
+/****************************************************************************
  * Name: virtio_blk_rdwr
  *
  * Description:
@@ -231,73 +379,33 @@ static ssize_t virtio_blk_rdwr(FAR struct virtio_blk_priv_s *priv,
                                FAR void *buffer, blkcnt_t startsector,
                                unsigned int nsectors, bool write)
 {
-  FAR struct virtio_device *vdev = priv->vdev;
-  FAR struct virtqueue *vq = vdev->vrings_info[0].vq;
-  FAR struct virtqueue_buf vb[3];
-  struct virtio_blk_resp_s resp;
-  struct virtio_blk_req_s req;
-  irqstate_t flags;
-  sem_t respsem;
-  ssize_t ret;
-  int readnum;
+  blkcnt_t sector = startsector;
+  FAR uint8_t *buf = buffer;
+  ssize_t ret = 0;
 
-  nxsem_init(&respsem, 0, 0);
-
-  /* Build the block request */
-
-  req.type     = write ? VIRTIO_BLK_T_OUT : VIRTIO_BLK_T_IN;
-  req.reserved = 0;
-  req.sector   = startsector * priv->block_size >> VIRTIO_BLK_SECTOR_BITS;
-  resp.status  = VIRTIO_BLK_S_IOERR;
-
-  /* Fill the virtqueue buffer:
-   * Buffer 0: the block out header;
-   * Buffer 1: the read/write buffer;
-   * Buffer 2: the block in header, return the status.
+  /* The data payload may exceed what the transport can map at once, so
+   * transfer it in chunks of virtio_free_largest(). Without a limit (MMIO/
+   * PCI without CONFIG_ARCH_ADDRENV) this runs as a single pass.
    */
 
-  vb[0].buf = &req;
-  vb[0].len = VIRTIO_BLK_REQ_HEADER_SIZE;
-  vb[1].buf = buffer;
-  vb[1].len = nsectors * priv->block_size;
-  vb[2].buf = &resp;
-  vb[2].len = VIRTIO_BLK_RESP_HEADER_SIZE;
-  readnum = write ? 2 : 1;
-
-  if (up_interrupt_context())
+  while (nsectors > 0)
     {
-      virtqueue_disable_cb_lock(vq, &priv->lock);
+      /* Return the error even after good chunks: bchlib counts any
+       * non-negative result as all nsectors done.
+       */
+
+      ret = virtio_blk_rdwr_one(priv, buf, sector, nsectors, write);
+      if (ret < 0)
+        {
+          return ret;
+        }
+
+      buf      += ret * priv->block_size;
+      sector   += ret;
+      nsectors -= ret;
     }
 
-  flags = spin_lock_irqsave(&priv->lock);
-  ret = virtqueue_add_buffer(vq, vb, readnum, 3 - readnum, &respsem);
-  if (ret < 0)
-    {
-      spin_unlock_irqrestore(&priv->lock, flags);
-      vrterr("virtqueue_add_buffer failed, ret=%zd\n", ret);
-      goto err;
-    }
-
-  virtqueue_kick(vq);
-  spin_unlock_irqrestore(&priv->lock, flags);
-
-  /* Wait for the request completion */
-
-  virtio_blk_wait_complete(vq, &respsem);
-
-  if (resp.status != VIRTIO_BLK_S_OK)
-    {
-      vrterr("%s Error\n", write ? "Write" : "Read");
-      ret = -EIO;
-    }
-
-err:
-  if (up_interrupt_context())
-    {
-      virtqueue_enable_cb_lock(vq, &priv->lock);
-    }
-
-  return ret >= 0 ? nsectors : ret;
+  return sector - startsector;
 }
 
 /****************************************************************************
@@ -402,7 +510,7 @@ static int virtio_blk_geometry(FAR struct inode *inode,
 }
 
 /****************************************************************************
- * Name: virtio_blk_ioctl
+ * Name: virtio_blk_flush
  ****************************************************************************/
 
 static int virtio_blk_flush(FAR struct virtio_blk_priv_s *priv)
@@ -412,11 +520,11 @@ static int virtio_blk_flush(FAR struct virtio_blk_priv_s *priv)
   FAR struct virtqueue_buf vb[2];
   struct virtio_blk_resp_s resp;
   struct virtio_blk_req_s req;
+  FAR void *reqmap;
+  FAR void *respmap;
   irqstate_t flags;
   sem_t respsem;
   int ret;
-
-  nxsem_init(&respsem, 0, 0);
 
   /* Build the block request */
 
@@ -425,17 +533,40 @@ static int virtio_blk_flush(FAR struct virtio_blk_priv_s *priv)
   req.sector   = 0;
   resp.status  = VIRTIO_BLK_S_IOERR;
 
-  vb[0].buf = &req;
+  /* Map the headers so a bouncing transport can reach them */
+
+  ret = virtio_map_buf(vdev, &req, sizeof(req), VIRTIO_DMA_TO_DEVICE,
+                       &reqmap);
+  if (ret < 0)
+    {
+      return ret;
+    }
+
+  ret = virtio_map_buf(vdev, &resp, sizeof(resp), VIRTIO_DMA_FROM_DEVICE,
+                       &respmap);
+  if (ret < 0)
+    {
+      goto out_req;
+    }
+
+  nxsem_init(&respsem, 0, 0);
+
+  vb[0].buf = reqmap;
   vb[0].len = VIRTIO_BLK_REQ_HEADER_SIZE;
-  vb[1].buf = &resp;
+  vb[1].buf = respmap;
   vb[1].len = VIRTIO_BLK_RESP_HEADER_SIZE;
 
   flags = spin_lock_irqsave(&priv->lock);
-  ret = virtqueue_add_buffer(vq, vb, 1, 1, &respsem);
+  ret = virtio_blk_wait_desc(priv, vq, nitems(vb), &flags);
+  if (ret >= 0)
+    {
+      ret = virtqueue_add_buffer(vq, vb, 1, 1, &respsem);
+    }
+
   if (ret < 0)
     {
       spin_unlock_irqrestore(&priv->lock, flags);
-      return ret;
+      goto out_resp;
     }
 
   virtqueue_kick(vq);
@@ -443,8 +574,20 @@ static int virtio_blk_flush(FAR struct virtio_blk_priv_s *priv)
 
   /* Wait for the request completion */
 
-  nxsem_wait_uninterruptible(&respsem);
-  if (resp.status != VIRTIO_BLK_S_OK)
+  virtio_blk_wait_complete(vq, &respsem);
+
+out_resp:
+
+  /* unmap copies the device-written status back into resp; only after that
+   * is resp.status valid (on a bouncing transport resp is a bounce buffer).
+   */
+
+  virtio_unmap_buf(vdev, &resp, sizeof(resp), VIRTIO_DMA_FROM_DEVICE,
+                   respmap);
+out_req:
+  virtio_unmap_buf(vdev, &req, sizeof(req), VIRTIO_DMA_TO_DEVICE, reqmap);
+
+  if (ret >= 0 && resp.status != VIRTIO_BLK_S_OK)
     {
       vrterr("Flush Error\n");
       ret = -EIO;
@@ -487,6 +630,8 @@ static void virtio_blk_done(FAR struct virtqueue *vq)
 {
   FAR struct virtio_blk_priv_s *priv = vq->vq_dev->priv;
   FAR sem_t *respsem;
+  irqstate_t flags;
+  unsigned int nwait;
 
   for (; ; )
     {
@@ -497,6 +642,18 @@ static void virtio_blk_done(FAR struct virtqueue *vq)
         }
 
       nxsem_post(respsem);
+    }
+
+  /* The replies gave descriptors back: the waiting requests try again */
+
+  flags = spin_lock_irqsave(&priv->lock);
+  nwait = priv->nwait;
+  priv->nwait = 0;
+  spin_unlock_irqrestore(&priv->lock, flags);
+
+  while (nwait-- > 0)
+    {
+      nxsem_post(&priv->waitsem);
     }
 }
 
@@ -514,6 +671,7 @@ static int virtio_blk_init(FAR struct virtio_blk_priv_s *priv,
   priv->vdev = vdev;
   vdev->priv = priv;
   spin_lock_init(&priv->lock);
+  nxsem_init(&priv->waitsem, 0, 0);
 
   /* Initialize the virtio device */
 
@@ -609,8 +767,28 @@ static int virtio_blk_probe(FAR struct virtio_device *vdev)
 err_with_init:
   virtio_blk_uninit(priv);
 err_with_priv:
+  nxsem_destroy(&priv->waitsem);
   kmm_free(priv);
   return ret;
+}
+
+/****************************************************************************
+ * Name: virtio_blk_dump
+ ****************************************************************************/
+
+static void virtio_blk_dump(FAR struct virtio_device *vdev)
+{
+  FAR struct virtio_blk_priv_s *priv = vdev->priv;
+  uint64_t capacity_mb = (priv->nsectors * priv->block_size) >> 20;
+
+  syslog(LOG_EMERG, "  BLK Info:\n");
+  syslog(LOG_EMERG, "    device   : %s\n", priv->name);
+  syslog(LOG_EMERG, "    sectors  : %" PRIu64 "\n", priv->nsectors);
+  syslog(LOG_EMERG, "    blksize  : %" PRIu32 " B\n", priv->block_size);
+  syslog(LOG_EMERG, "    capacity : %" PRIu64 " MB\n", capacity_mb);
+  syslog(LOG_EMERG, "    features : ro=%d flush=%d\n",
+         virtio_has_feature(vdev, VIRTIO_BLK_F_RO),
+         virtio_has_feature(vdev, VIRTIO_BLK_F_FLUSH));
 }
 
 /****************************************************************************
@@ -623,6 +801,7 @@ static void virtio_blk_remove(FAR struct virtio_device *vdev)
 
   unregister_driver(priv->name);
   virtio_blk_uninit(priv);
+  nxsem_destroy(&priv->waitsem);
   kmm_free(priv);
 }
 

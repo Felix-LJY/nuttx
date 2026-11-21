@@ -71,7 +71,7 @@ int mac802154_req_data(MACHANDLE mac,
 
   /* Check the required frame size */
 
-  if (frame->io_len > IEEE802154_MAX_PHY_PACKET_SIZE)
+  if (frame->io_len > IEEE802154_MAX_FRAME_SIZE)
     {
       return -E2BIG;
     }
@@ -248,7 +248,7 @@ int mac802154_req_data(MACHANDLE mac,
        */
 
       wlwarn("WARNING: mac802154_txdesc_alloc failed: %d\n", ret);
-      goto errout_with_lock;
+      return ret;
     }
 
   /* Set the offset to 0 to include the header ( we do not want to
@@ -350,7 +350,7 @@ int mac802154_req_data(MACHANDLE mac,
 
 errout_with_txdesc:
 
-  /* Free TX the descriptor, but preserve the IOB. */
+  /* Free the TX descriptor and its confirm, but preserve the IOB */
 
   txdesc->frame = NULL;
   mac802154_txdesc_free(priv, txdesc);

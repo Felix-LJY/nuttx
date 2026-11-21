@@ -1,8 +1,8 @@
-=============
-HiFive1 Rev B
-=============
+====================
+SiFive HiFive1 Rev B
+====================
 
-.. tags:: arch:riscv, vendor:sifive, experimental
+.. tags:: arch:risc-v, chip:fe310, vendor:sifive
 
 .. todo::
 

@@ -437,7 +437,7 @@ static inline void rcc_enableahb4(void)
 #if STM32_NGPIO > 7
              | RCC_AHB4ENR_GPIOHEN
 #endif
-#if STM32_NGPIO > 8
+#if (STM32_NGPIO > 8) && (defined(CONFIG_STM32_HAVE_GPIOI))
              | RCC_AHB4ENR_GPIOIEN
 #endif
 #if STM32_NGPIO > 9
@@ -630,6 +630,7 @@ static inline void rcc_enableapb3(void)
    */
 
   uint32_t rcc_gcr = getreg32(STM32_RCC_GCR);
+
   rcc_gcr |= RCC_GCR_WW1RSC;
   putreg32(rcc_gcr, STM32_RCC_GCR);
   regval |= RCC_APB3ENR_WWDG1EN;
@@ -768,8 +769,8 @@ void stm32_stdclockconfig(void)
     }
 #endif
 
-#ifdef CONFIG_STM32_HSI48
-  /* Enable HSI48 */
+#if defined(CONFIG_STM32_HSI48) || defined(CONFIG_STM32_RNG)
+  /* Enable HSI48, also the RNG kernel clock (RNGSEL reset value) */
 
   regval  = getreg32(STM32_RCC_CR);
   regval |= RCC_CR_HSI48ON;
@@ -813,7 +814,7 @@ void stm32_stdclockconfig(void)
       /* Set PCLK1 */
 
       regval = getreg32(STM32_RCC_D2CFGR);
-      regval &= ~RCC_D2CFGR_D2PPRE2_MASK;
+      regval &= ~RCC_D2CFGR_D2PPRE1_MASK;
       regval |= STM32_RCC_D2CFGR_D2PPRE1;
       putreg32(regval, STM32_RCC_D2CFGR);
 

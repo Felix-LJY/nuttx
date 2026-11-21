@@ -33,6 +33,7 @@
 #include <stdint.h>
 
 #include <nuttx/compiler.h>
+#include <nuttx/irq.h>
 #include <nuttx/signal.h>
 #include <nuttx/wdog.h>
 #include <nuttx/spinlock.h>
@@ -44,6 +45,14 @@
  ****************************************************************************/
 
 #define PT_FLAGS_PREALLOCATED 0x01u /* Timer comes from a pool of preallocated timers */
+
+/* Timers on the CPU-time clocks need the run time of the threads */
+
+#if CONFIG_SCHED_CRITMONITOR_MAXTIME_THREAD >= 0
+#  define timer_is_cputime(t) \
+     (((t)->pt_clock & CLOCK_MASK) == CLOCK_PROCESS_CPUTIME_ID || \
+      ((t)->pt_clock & CLOCK_MASK) == CLOCK_THREAD_CPUTIME_ID)
+#endif
 
 /****************************************************************************
  * Public Types
@@ -59,7 +68,7 @@ struct posix_timer_s
   uint8_t          pt_flags;       /* See PT_FLAGS_* definitions */
   uint8_t          pt_crefs;       /* Reference count */
   pid_t            pt_owner;       /* Creator of timer */
-  int              pt_overrun;     /* Overrun time */
+  int              pt_overrun;     /* Overruns since the last signal */
   clock_t          pt_delay;       /* If non-zero, used to reset repetitive timers */
   clock_t          pt_expected;    /* Expected absolute time */
   struct wdog_s    pt_wdog;        /* The watchdog that provides the timing */
@@ -96,6 +105,11 @@ void timer_initialize(void);
 void timer_deleteall(pid_t pid);
 int timer_release(FAR struct posix_timer_s *timer);
 FAR struct posix_timer_s *timer_gethandle(timer_t timerid);
+
+#if CONFIG_SCHED_CRITMONITOR_MAXTIME_THREAD >= 0
+void timer_cpu_gettime(FAR struct posix_timer_s *timer,
+                       FAR struct timespec *ts);
+#endif
 
 #endif /* CONFIG_DISABLE_POSIX_TIMERS */
 #endif /* __SCHED_TIMER_TIMER_H */

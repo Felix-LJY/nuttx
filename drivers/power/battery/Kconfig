@@ -1,3 +1,24 @@
+############################################################################
+# drivers/power/battery/Kconfig
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.  The
+# ASF licenses this file to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance with the
+# License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
+############################################################################
 #
 # For a description of the syntax of this configuration file,
 # see the file kconfig-language.txt in the NuttX tools repository.
@@ -93,12 +114,55 @@ config AXP202_LDO4_VOLTAGE
 			1250 1300 1400 1500 1600 1700 1800 1900
 			2000 2500 2700 2800 3000 3100 3200 3300 mV.
 
+config GD30BC2416
+	bool "GD30BC2416 Battery charger support"
+	default n
+	select I2C
+	select I2C_GD30BC2416
+	select SCHED_HPWORK
+	depends on BATTERY_CHARGER
+	---help---
+		The GigaDevice GD30BC2416 is a single-cell switching battery
+		charger with a 5 V boost converter, an I2C interface and an ADC
+		for the battery voltage.
+
+config I2C_GD30BC2416
+	bool
+
+config GD30BC2416_CHARGE
+	bool "Enable the charge at initialization"
+	default n
+	depends on GD30BC2416
+	---help---
+		The charge is disabled when the GD30BC2416 powers up.  Enable it
+		when the driver is initialized.  Otherwise it can be enabled
+		later with the BATIO_OPRTN_CHARGE operation.
+
 config MCP73871
 	bool "Microchip MCP73871 Battery charger support"
 	default n
 	depends on BATTERY_CHARGER
 	---help---
 		A simple driver to report MCP73871 status.
+
+config LTC4013
+	bool "Analog Devices LTC4013 Battery charger support"
+	default n
+	depends on BATTERY_CHARGER
+	---help---
+		Lower half driver for the LTC4013 multi-chemistry battery charger
+		controller.  The chip has no digital interface: the driver enables
+		it, sets its charge algorithm and reads its status through board
+		callbacks.  The charge voltage is set by a board callback that
+		programs the feedback network, or it is fixed by the hardware.
+
+config NPM1100
+	bool "Nordic nPM1100 PMIC battery charger support"
+	default n
+	depends on BATTERY_CHARGER
+	---help---
+		A simple driver to report Nordic nPM1100 PMIC charge status from
+		its CHG/ERR GPIOs (the nPM1100 has no register interface).
 
 config BATTERY_GAUGE
 	bool "Battery Fuel Gauge support"

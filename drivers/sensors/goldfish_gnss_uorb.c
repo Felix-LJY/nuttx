@@ -31,8 +31,10 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <string.h>
+#include <sys/param.h>
 
 #include <nuttx/debug.h>
+#include <nuttx/fs/fs.h>
 #include <nuttx/kmalloc.h>
 #include <nuttx/kthread.h>
 #include <nuttx/nuttx.h>
@@ -91,6 +93,7 @@ static inline int goldfish_gnss_write_pipe(FAR struct file *pipe,
   while (size > 0)
     {
       int n = file_write(pipe, p, size);
+
       if (n < 0)
         {
           return n;
@@ -147,6 +150,7 @@ static int goldfish_gnss_activate(FAR struct gnss_lowerhalf_s *gnss,
 {
   FAR struct goldfish_gnss_s *priv =
     container_of(gnss, struct goldfish_gnss_s, gnss);
+
   priv->running = enabled;
 
   return OK;
@@ -195,6 +199,15 @@ int goldfish_gnss_init(int devno, uint32_t batch_number)
   FAR struct goldfish_gnss_s *gnss;
   FAR char *argv[2];
   char arg1[32];
+  uint32_t nbuffer[] =
+  {
+    [SENSOR_GNSS_IDX_GNSS] = batch_number,
+    [SENSOR_GNSS_IDX_GNSS_SATELLITE] = batch_number,
+    [SENSOR_GNSS_IDX_GNSS_MEASUREMENT] = batch_number,
+    [SENSOR_GNSS_IDX_GNSS_CLOCK] = batch_number,
+    [SENSOR_GNSS_IDX_GNSS_GEOFENCE] = batch_number,
+  };
+
   int ret;
 
   /* Alloc memory for sensor */
@@ -232,5 +245,5 @@ int goldfish_gnss_init(int devno, uint32_t batch_number)
 
   gnss->gnss.ops = &g_goldfish_gnss_ops;
 
-  return gnss_register(&gnss->gnss, devno, batch_number);
+  return gnss_register(&gnss->gnss, devno, nbuffer, nitems(nbuffer));
 }

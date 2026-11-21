@@ -30,12 +30,15 @@
 #include <nuttx/debug.h>
 #include <errno.h>
 #include <stdio.h>
+#include <sys/param.h>
 
 #include <nuttx/arch.h>
+#include <nuttx/fs/fs.h>
 #include <nuttx/kmalloc.h>
 #include <nuttx/pci/pci.h>
 
 #ifdef CONFIG_CAN_KVASER_CHARDEV
+#  include <nuttx/can.h>
 #  include <nuttx/can/can.h>
 #endif
 
@@ -302,6 +305,7 @@ static void kvaser_putreg_sja(FAR struct kvaser_sja_s *priv,
                               uint8_t value)
 {
   uintptr_t addr = priv->base + offset;
+
   pci_write_io_byte(priv->pcidev, addr, value);
 }
 
@@ -328,6 +332,7 @@ static void kvaser_putreg_s5920(FAR struct kvaser_driver_s *priv,
                                 uint32_t value)
 {
   uintptr_t addr = priv->s5920_base + offset;
+
   pci_write_io_dword(priv->pcidev, addr, value);
 }
 
@@ -658,20 +663,19 @@ static int kvaser_chrdev_send(FAR struct can_dev_s *dev,
       return -EBUSY;
     }
 
-  /* Get data bytes for this frame */
-
-  bytes = can_dlc2bytes(msg->cm_hdr.ch_dlc);
-
 #ifdef CONFIG_CAN_FD
   /* Drop CAN FD frames */
 
-  if (bytes > 8 || msg->cm_hdr.ch_edl ||
-      msg->cm_hdr.ch_brs || msg->cm_hdr.ch_esi)
+  if (msg->cm_hdr.ch_edl || msg->cm_hdr.ch_brs || msg->cm_hdr.ch_esi)
     {
       canerr("ERROR: CAN FD frames not supported\n");
       return -ENOTSUP;
     }
 #endif
+
+  /* Get data bytes for this frame, DLC 9..15 means 8 bytes */
+
+  bytes = MIN(msg->cm_hdr.ch_dlc, CAN_MAX_DLEN);
 
   /* Set up the DLC */
 
@@ -851,11 +855,16 @@ static void kvaser_chardev_receive(FAR struct kvaser_sja_s *priv)
 #ifdef CONFIG_CAN_ERRORS
       hdr.ch_error = 0;
 #endif
+#ifdef CONFIG_CAN_FD
+      hdr.ch_edl   = 0;
+      hdr.ch_brs   = 0;
+      hdr.ch_esi   = 0;
+#endif
       hdr.ch_tcf   = 0;
 
-      /* Get data */
+      /* Get data, DLC 9..15 means 8 bytes */
 
-      for (i = 0; i < can_dlc2bytes(hdr.ch_dlc); i++)
+      for (i = 0; i < MIN(hdr.ch_dlc, CAN_MAX_DLEN); i++)
         {
           data[i] = kvaser_getreg_sja(priv, dreg + i);
         }
@@ -1206,6 +1215,14 @@ static FAR netpkt_t *kvaser_sock_recv(FAR struct netdev_lowerhalf_s *dev)
   st = kvaser_getreg_sja(priv, SJA1000_STATUS_REG);
   if ((st & SJA1000_RX_BUF_ST) == 0)
     {
+      /* RX FIFO drained. Clear any data overrun, otherwise the SJA1000
+       * drops every further received frame until it is cleared. Also
+       * re-enable the RX interrupt that the ISR masked.
+       */
+
+      kvaser_putreg_sja(priv, SJA1000_CMD_REG, SJA1000_CLR_OVERRUN);
+      kvaser_rxint(priv, true);
+
 #ifdef CONFIG_NET_CAN_ERRORS
       /* Check for errors */
 
@@ -1221,6 +1238,13 @@ static FAR netpkt_t *kvaser_sock_recv(FAR struct netdev_lowerhalf_s *dev)
   if (!pkt)
     {
       canerr("alloc pkt_new failed\n");
+
+      /* Drop the frame and re-enable the RX interrupt, so that the next
+       * frame in the RX FIFO is received when a packet is available again.
+       */
+
+      kvaser_putreg_sja(priv, SJA1000_CMD_REG, SJA1000_RELEASE_BUF);
+      kvaser_rxint(priv, true);
       return NULL;
     }
 
@@ -1229,9 +1253,11 @@ static FAR netpkt_t *kvaser_sock_recv(FAR struct netdev_lowerhalf_s *dev)
 
   regval = kvaser_getreg_sja(priv, SJA1000_DATA_0_REG);
 
-  /* Get the DLC */
+  /* Get the DLC.  A classic frame carries at most 8 data bytes, also with
+   * DLC 9..15.
+   */
 
-  frame->can_dlc = (regval & SJA1000_FI_DLC_MASK);
+  frame->can_dlc = MIN(regval & SJA1000_FI_DLC_MASK, CAN_MAX_DLEN);
 
   /* Get the CAN identifier. */
 
@@ -1258,11 +1284,14 @@ static FAR netpkt_t *kvaser_sock_recv(FAR struct netdev_lowerhalf_s *dev)
       canerr("ERROR: Received message with extended"
              " identifier.  Dropped\n");
 
-      /* Release RX buffer */
+      /* Release RX buffer and re-enable the RX interrupt for the next
+       * frame in the RX FIFO
+       */
 
       kvaser_putreg_sja(priv, SJA1000_CMD_REG, SJA1000_RELEASE_BUF);
+      kvaser_rxint(priv, true);
 
-      netpkt_free(dev, pkt);
+      netpkt_free(dev, pkt, NETPKT_RX);
       return NULL;
 #endif
     }
@@ -1276,7 +1305,7 @@ static FAR netpkt_t *kvaser_sock_recv(FAR struct netdev_lowerhalf_s *dev)
 
   /* Get data */
 
-  for (i = 0; i < can_dlc2bytes(frame->can_dlc); i++)
+  for (i = 0; i < frame->can_dlc; i++)
     {
       frame->data[i] = kvaser_getreg_sja(priv, dreg + i);
     }
@@ -1417,10 +1446,16 @@ static void kvaser_sock_interrupt(FAR struct kvaser_driver_s *priv)
               continue;
             }
 
-          /* RX ready */
+          /* RX ready. The SJA1000 RX interrupt is level triggered (it stays
+           * asserted while the RX FIFO is non-empty), and we process RX in a
+           * deferred poll, so leaving it enabled here makes the ISR re-fire
+           * continuously and starve the poll thread until the FIFO overruns.
+           * Mask it; kvaser_sock_recv() re-enables it once the FIFO drains.
+           */
 
           if (st & KVASER_SOCK_RXINT)
             {
+              kvaser_rxint(&priv->sja[i], false);
               netdev_lower_rxready(&priv->sja[i].dev);
             }
 
@@ -1663,12 +1698,6 @@ static int kvaser_probe(FAR struct pci_device_s *dev)
       netdev->quota[NETPKT_RX] = KVASER_RX_QUOTA;
       netdev->ops = &g_kvaser_net_ops;
 
-      /* Put the interface in the down state.  This usually amounts to
-       * resetting the device and/or calling kvaser_sock_ifdown().
-       */
-
-      kvaser_sock_ifdown(&priv->sja[i].dev);
-
       /* Register the network interface. */
 
       ret = netdev_lower_register(netdev, NET_LL_CAN);
@@ -1677,6 +1706,12 @@ static int kvaser_probe(FAR struct pci_device_s *dev)
           pcierr("ERROR: failed to register count=%d, %d\n", i, ret);
           goto errout;
         }
+
+      /* Put the interface in the down state.  This usually amounts to
+       * resetting the device and/or calling kvaser_sock_ifdown().
+       */
+
+      kvaser_sock_ifdown(&priv->sja[i].dev);
 #endif
     }
 

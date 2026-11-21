@@ -32,6 +32,7 @@
 #include <assert.h>
 #include <errno.h>
 
+#include <nuttx/fs/fs.h>
 #include <nuttx/mqueue.h>
 
 #include "inode/inode.h"
@@ -113,9 +114,13 @@ int file_mq_unlink(FAR const char *mq_name)
 
   /* Get the inode for this message queue. */
 
-  SETUP_SEARCH(&desc, fullpath, false);
+  ret = inode_search_setup(&desc, fullpath, false);
+  if (ret < 0)
+    {
+      return ret;
+    }
 
-  ret = inode_find(&desc);
+  ret = inode_find(&desc, &inode);
   if (ret < 0)
     {
       /* There is no inode that includes in this path */
@@ -124,8 +129,6 @@ int file_mq_unlink(FAR const char *mq_name)
     }
 
   /* Get the search results */
-
-  inode = desc.node;
 
   /* Verify that what we found is, indeed, a message queue */
 
@@ -172,7 +175,7 @@ int file_mq_unlink(FAR const char *mq_name)
 
   inode_unlock();
   mq_inode_release(inode);
-  RELEASE_SEARCH(&desc);
+  inode_search_release(&desc);
 #ifdef CONFIG_FS_NOTIFY
   notify_unlink(fullpath);
 #endif
@@ -185,7 +188,7 @@ errout_with_inode:
   inode_release(inode);
 
 errout_with_search:
-  RELEASE_SEARCH(&desc);
+  inode_search_release(&desc);
   return ret;
 }
 

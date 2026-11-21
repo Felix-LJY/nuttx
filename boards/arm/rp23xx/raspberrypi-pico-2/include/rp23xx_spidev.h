@@ -1,6 +1,8 @@
 /****************************************************************************
  * boards/arm/rp23xx/raspberrypi-pico-2/include/rp23xx_spidev.h
  *
+ * SPDX-License-Identifier: Apache-2.0
+ *
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.  The
@@ -37,13 +39,9 @@
  * Public Data
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -60,7 +58,6 @@ extern "C"
 
 int board_spidev_initialize(int bus);
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

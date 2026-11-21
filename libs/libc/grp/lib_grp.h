@@ -54,18 +54,15 @@
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 #ifdef CONFIG_LIBC_GROUP_FILE
 /* Data for non-reentrant group functions */
 
-EXTERN struct group g_group;
-EXTERN char g_group_buffer[GRPBUF_RESERVE_SIZE];
+extern struct group g_group;
+extern char g_group_buffer[GRPBUF_RESERVE_SIZE];
 #endif
 
 /****************************************************************************
@@ -83,11 +80,12 @@ int grp_findby_name(FAR const char *gname, FAR struct group *entry,
                     FAR char *buffer, size_t buflen);
 int grp_findby_gid(gid_t gid, FAR struct group *entry, FAR char *buffer,
                    size_t buflen);
+int grp_findby_index(int index, FAR struct group *entry, FAR char *buffer,
+                     size_t buflen);
 int grp_findby_user(FAR const char *user, gid_t group,
                     FAR gid_t *grouplist, int maxgroups, FAR int *count);
 #endif
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

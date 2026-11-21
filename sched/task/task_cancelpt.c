@@ -93,7 +93,7 @@ bool nxnotify_cancellation(FAR struct tcb_s *tcb)
 {
   FAR struct tls_info_s *tls = nxsched_get_tls(tcb);
   irqstate_t flags;
-  bool ret = false;
+  bool ret = true;
 
   /* We need perform the following operations from within a critical section
    * because it can compete with interrupt level activity.
@@ -103,7 +103,8 @@ bool nxnotify_cancellation(FAR struct tcb_s *tcb)
 
   /* We only notify the cancellation if (1) the thread has not disabled
    * cancellation, (2) the thread uses the deferred cancellation mode,
-   * (3) the thread is waiting within a cancellation point.
+   * and is waiting within a cancellation point, (3) the thread uses the
+   * asynchronous cancellation mode and currently blocked.
    */
 
   /* Check to see if this task has the non-cancelable bit set. */
@@ -125,35 +126,53 @@ bool nxnotify_cancellation(FAR struct tcb_s *tcb)
        */
 
       tls->tl_cpstate |= CANCEL_FLAG_CANCEL_PENDING;
-      ret = true;
     }
 
 #ifdef CONFIG_CANCELLATION_POINTS
-  /* Check if this task supports deferred cancellation */
+  /* Handle deferred cancellation, and asynchronous cancellation of a
+   * blocked thread.  The caller cancels a thread with asynchronous
+   * cancellation that is not blocked.
+   */
 
-  if (!ret && (tls->tl_cpstate & CANCEL_FLAG_CANCEL_ASYNC) == 0u)
+  else if (((tls->tl_cpstate & CANCEL_FLAG_CANCEL_ASYNC) == 0u ||
+           (tcb->task_state >= FIRST_BLOCKED_STATE &&
+            tcb->task_state <= LAST_BLOCKED_STATE)))
     {
-      /* Then we cannot cancel the task asynchronously. */
-
-      ret = true;
-
       /* Mark the cancellation as pending. */
 
       tls->tl_cpstate |= CANCEL_FLAG_CANCEL_PENDING;
 
-      /* If the task is waiting at a cancellation point, then notify of the
-       * cancellation thereby waking the task up with an ECANCELED error.
+      /* Treat a blocked thread with asynchronous cancellation as if it
+       * waited at a cancellation point, so that it is woken below.
+       */
+
+      if ((tls->tl_cpstate & CANCEL_FLAG_CANCEL_ASYNC) != 0u)
+        {
+          tls->tl_cpcount = 1;
+        }
+
+      /* If the task is within a cancellation point, wake it up with
+       * ECANCELED.
        */
 
       if (tls->tl_cpcount > 0)
         {
           /* If the thread is blocked waiting for a semaphore, then the
-           * thread must be unblocked to handle the cancellation.
+           * thread must be unblocked to handle the cancellation.  As for a
+           * signal, not an uninterruptible wait in a system call: its
+           * memory can still be in use.  The wait of pthread_join() still
+           * ends.  Else the cancellation acts when the thread leaves the
+           * cancellation point.
            */
 
           if (tcb->task_state == TSTATE_WAIT_SEM)
             {
-              nxsem_wait_irq(tcb, ECANCELED);
+              if ((tcb->flags & TCB_FLAG_SYSCALL) == 0 ||
+                  (tcb->flags & TCB_FLAG_UNINTERRUPTIBLE) == 0 ||
+                  tcb->waitobj == &tcb->join_sem)
+                {
+                  nxsem_wait_irq(tcb, ECANCELED);
+                }
             }
 
           /* If the thread is blocked waiting on a signal, then the
@@ -199,6 +218,19 @@ bool nxnotify_cancellation(FAR struct tcb_s *tcb)
 #endif
     }
 #endif
+
+  else
+    {
+      /* None of the conditions are met: The thread is not non-cancelable,
+       * and it's not in deferred cancellation mode (or in asynchronous
+       * cancellation mode but not blocked).
+       * We don't need to deliver the cancellation notification at this time.
+       * Return false to indicate that the cancellation notification
+       * was not needed.
+       */
+
+      ret = false;
+    }
 
   leave_critical_section(flags);
   return ret;

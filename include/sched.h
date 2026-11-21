@@ -31,7 +31,6 @@
 
 #include <sys/types.h>
 #include <stdint.h>
-#include <stdbool.h>
 #include <strings.h>
 #include <time.h>
 
@@ -43,11 +42,11 @@
 
 /* POSIX-like scheduling policies */
 
-#define SCHED_NORMAL              0  /* Alias to SCHED_OTHER */
-#define SCHED_OTHER               0  /* Map to SCHED_FIFO or SCHED_RR */
-#define SCHED_FIFO                1  /* FIFO priority scheduling policy */
-#define SCHED_RR                  2  /* Round robin scheduling policy */
-#define SCHED_SPORADIC            3  /* Sporadic scheduling policy */
+#define SCHED_FIFO                0  /* FIFO priority scheduling policy */
+#define SCHED_RR                  1  /* Round robin scheduling policy */
+#define SCHED_SPORADIC            2  /* Sporadic scheduling policy */
+#define SCHED_OTHER               3  /* Map to SCHED_FIFO or SCHED_RR */
+#define SCHED_NORMAL              3  /* Alias to SCHED_OTHER */
 #define SCHED_BATCH               4  /* Batch scheduling policy */
 #define SCHED_IDLE                5  /* Idle scheduling policy */
 
@@ -69,7 +68,9 @@
 
 /* Pthread definitions ******************************************************/
 
-#define PTHREAD_KEYS_MAX          CONFIG_TLS_NELEM
+#ifndef PTHREAD_KEYS_MAX
+#  define PTHREAD_KEYS_MAX        CONFIG_TLS_NELEM
+#endif
 
 /* CPU affinity mask helpers ************************************************/
 
@@ -97,7 +98,7 @@
 
 /* int CPU_COUNT(FAR const cpu_set_t *set); */
 
-#define CPU_COUNT(s) popcountl(*s)
+#define CPU_COUNT(s) popcountl(*(s))
 
 /* void CPU_AND(FAR cpu_set_t *destset, FAR const cpu_set_t *srcset1,
  *              FAR const cpu_set_t *srcset2);
@@ -125,11 +126,11 @@
 
 /* FAR cpu_set_t *CPU_ALLOC(int num_cpus); */
 
-#define CPU_ALLOC(n) (FAR cpu_set_t *)malloc(sizeof(cpu_set_t));
+#define CPU_ALLOC(n) ((FAR cpu_set_t *)malloc(sizeof(cpu_set_t)))
 
 /* void CPU_FREE(cpu_set_t *set); */
 
-#define CPU_FREE(s) free(s)
+#define CPU_FREE(s) free((FAR void *)(s))
 
 /* size_t CPU_ALLOC_SIZE(int num_cpus); */
 
@@ -137,7 +138,7 @@
 
 /* void CPU_ZERO_S(size_t setsize, FAR cpu_set_t *set); */
 
-#define CPU_ZERO_S(n,s) CPU_ZERO_S(s)
+#define CPU_ZERO_S(n,s) CPU_ZERO(s)
 
 /* void CPU_SET_S(int cpu, size_t setsize, FAR cpu_set_t *set); */
 
@@ -208,13 +209,9 @@ struct sched_param
  ****************************************************************************/
 
 #ifndef __ASSEMBLY__
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -240,10 +237,10 @@ void   task_testcancel(void);
 /* Task Scheduling Interfaces (based on POSIX APIs) */
 
 int    sched_getcpu(void);
-int    sched_setparam(pid_t pid, FAR const struct sched_param *param);
-int    sched_getparam(pid_t pid, FAR struct sched_param *param);
+int    sched_setparam(pid_t pid, FAR const struct sched_param *);
+int    sched_getparam(pid_t pid, FAR struct sched_param *);
 int    sched_setscheduler(pid_t pid, int policy,
-                          FAR const struct sched_param *param);
+                          FAR const struct sched_param *);
 int    sched_getscheduler(pid_t pid);
 int    sched_yield(void);
 int    sched_get_priority_max(int policy);
@@ -271,7 +268,7 @@ int    sched_lockcount(void);
 
 /* Queries */
 
-bool   sched_idletask(void);
+uint8_t sched_idletask(void);
 
 /* Task Backtrace */
 
@@ -283,7 +280,6 @@ void   sched_dumpstack(pid_t tid);
 #  define sched_dumpstack(tid)
 #endif
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

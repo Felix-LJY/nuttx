@@ -32,13 +32,12 @@
  * Public Data
  ****************************************************************************/
 
+#ifdef CONFIG_SMP
 /* Array of pointers to currently running high-resolution timers
  * for each CPU in SMP configurations. Index corresponds to CPU ID.
  */
 
-#ifdef CONFIG_SMP
 uintptr_t g_hrtimer_running[CONFIG_SMP_NCPUS];
-#endif
 
 /* Global spinlock protecting the high-resolution timer subsystem.
  *
@@ -48,6 +47,7 @@ uintptr_t g_hrtimer_running[CONFIG_SMP_NCPUS];
  */
 
 seqcount_t g_hrtimer_lock = SEQLOCK_INITIALIZER;
+#endif /* CONFIG_SMP */
 
 /* HRTimer queue for all active high-resolution timers.
  *
@@ -58,28 +58,13 @@ seqcount_t g_hrtimer_lock = SEQLOCK_INITIALIZER;
  * both configurations.
  */
 
-struct hrtimer_s g_hrtimer_guard =
-{
-#ifdef CONFIG_HRTIMER_TREE
-  { NULL },
-#else
-  { &g_hrtimer_list, &g_hrtimer_list },
-#endif
-  NULL,
-  INT64_MAX
-};
+uint64_t g_hrtimer_last_expired;
 
 #ifdef CONFIG_HRTIMER_TREE
-struct hrtimer_tree_s g_hrtimer_tree =
-{
-  &g_hrtimer_guard
-};
-struct FAR hrtimer_s *g_hrtimer_head = &g_hrtimer_guard;
+struct hrtimer_tree_s g_hrtimer_tree;
+struct FAR hrtimer_s *g_hrtimer_head;
 #else
-struct list_node g_hrtimer_list =
-{
-  &g_hrtimer_guard.node, &g_hrtimer_guard.node
-};
+struct list_node g_hrtimer_list = LIST_INITIAL_VALUE(g_hrtimer_list);
 #endif
 
 /****************************************************************************

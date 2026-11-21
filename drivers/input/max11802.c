@@ -100,7 +100,7 @@ static ssize_t max11802_read(FAR struct file *filep, FAR char *buffer,
                              size_t len);
 static int max11802_ioctl(FAR struct file *filep, int cmd,
                           unsigned long arg);
-static int max11802_poll(FAR struct file *filep, FAR struct pollfd *fds,
+static int max11802_poll(FAR struct file *filep, FAR struct pollfd_s *fds,
                          bool setup);
 
 /****************************************************************************
@@ -518,7 +518,7 @@ static void max11802_worker(FAR void *arg)
        * after the loss of contact is sampled.
        */
 
-       priv->sample.contact = CONTACT_UP;
+      priv->sample.contact = CONTACT_UP;
     }
 
   /* It is a pen down event.  If the last loss-of-contact event has not been
@@ -556,6 +556,7 @@ static void max11802_worker(FAR void *arg)
        */
 
       int readycount = 0;
+
       do
         {
 #ifdef CONFIG_MAX11802_SWAPXY
@@ -950,6 +951,7 @@ static int max11802_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
       case TSIOC_SETFREQUENCY:  /* arg: Pointer to uint32_t frequency value */
         {
           FAR uint32_t *ptr = (FAR uint32_t *)((uintptr_t)arg);
+
           DEBUGASSERT(priv->config != NULL && ptr != NULL);
           priv->config->frequency = SPI_SETFREQUENCY(priv->spi, *ptr);
         }
@@ -958,6 +960,7 @@ static int max11802_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
       case TSIOC_GETFREQUENCY:  /* arg: Pointer to uint32_t frequency value */
         {
           FAR uint32_t *ptr = (FAR uint32_t *)((uintptr_t)arg);
+
           DEBUGASSERT(priv->config != NULL && ptr != NULL);
           *ptr = priv->config->frequency;
         }
@@ -976,7 +979,7 @@ static int max11802_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
  * Name: max11802_poll
  ****************************************************************************/
 
-static int max11802_poll(FAR struct file *filep, FAR struct pollfd *fds,
+static int max11802_poll(FAR struct file *filep, FAR struct pollfd_s *fds,
                         bool setup)
 {
   FAR struct inode *inode;
@@ -1045,7 +1048,8 @@ static int max11802_poll(FAR struct file *filep, FAR struct pollfd *fds,
     {
       /* This is a request to tear down the poll. */
 
-      FAR struct pollfd **slot = (FAR struct pollfd **)fds->priv;
+      FAR struct pollfd_s **slot = (FAR struct pollfd_s **)fds->priv;
+
       DEBUGASSERT(slot != NULL);
 
       /* Remove all memory of the poll setup */

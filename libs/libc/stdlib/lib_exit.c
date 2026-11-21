@@ -35,8 +35,11 @@
 
 #include <nuttx/tls.h>
 #include <nuttx/pthread.h>
+#include <nuttx/lib/elf.h>
 
-#if defined(CONFIG_BUILD_FLAT) || !defined(__KERNEL__)
+#include "libc.h"
+
+#ifndef __KERNEL__
 
 /****************************************************************************
  * Private Data
@@ -100,13 +103,34 @@ void exit(int status)
 
   tls_cleanup_popall(tls_get_info());
 
+  /* Run the registered exit functions.  They run before the destructors
+   * of the thread-specific data, which they may still use.
+   */
+
+  atexit_call_exitfuncs(status, false);
+
 #if defined(CONFIG_TLS_NELEM) && CONFIG_TLS_NELEM > 0
   tls_destruct();
 #endif
 
-  /* Run the registered exit functions */
+#ifdef CONFIG_TLS_EMUTLS
+  /* Then free the copies of its __thread variables */
 
-  atexit_call_exitfuncs(status, false);
+  if (g_tls_emutls_destruct != NULL)
+    {
+      g_tls_emutls_destruct();
+    }
+#endif
+
+#if defined(CONFIG_LIBC_DLFCN) && defined(CONFIG_BUILD_PROTECTED)
+  /* Close what dlopen() left open.  The kernel cannot reach this registry.
+   * A flat build does it in the kernel, after the last thread.  A kernel
+   * build has no registry in user space.
+   */
+
+  libelf_removeall(task_modules_lock());
+  task_modules_unlock();
+#endif
 
 #if defined(CONFIG_TLS_TASK_NELEM) && CONFIG_TLS_TASK_NELEM > 0
   task_tls_destruct();
@@ -151,13 +175,24 @@ void quick_exit(int status)
 
   tls_cleanup_popall(tls_get_info());
 
+  /* Run the registered exit functions.  They run before the destructors
+   * of the thread-specific data, which they may still use.
+   */
+
+  atexit_call_exitfuncs(status, true);
+
 #if defined(CONFIG_TLS_NELEM) && CONFIG_TLS_NELEM > 0
   tls_destruct();
 #endif
 
-  /* Run the registered exit functions */
+#ifdef CONFIG_TLS_EMUTLS
+  /* Then free the copies of its __thread variables */
 
-  atexit_call_exitfuncs(status, true);
+  if (g_tls_emutls_destruct != NULL)
+    {
+      g_tls_emutls_destruct();
+    }
+#endif
 
   /* Then perform the exit */
 

@@ -26,6 +26,7 @@
 
 #include <nuttx/config.h>
 
+#include <sys/param.h>
 #include <assert.h>
 #include <errno.h>
 #include <string.h>
@@ -95,7 +96,9 @@ ssize_t psock_recvfrom(FAR struct socket *psock, FAR void *buf, size_t len,
 
   ret = psock_recvmsg(psock, &msg, flags);
   if (ret >= 0 && fromlen != NULL)
-    *fromlen = msg.msg_namelen;
+    {
+      *fromlen = msg.msg_namelen;
+    }
 
   return ret;
 }
@@ -160,6 +163,9 @@ ssize_t recvfrom(int sockfd, FAR void *buf, size_t len, int flags,
 #ifdef CONFIG_BUILD_KERNEL
   struct sockaddr_storage kaddr;
   FAR struct sockaddr *ufrom;
+  FAR socklen_t *ufromlen;
+  socklen_t kfromlen = 0;
+  socklen_t kfromsize = 0;
   FAR void *kbuf;
   FAR void *ubuf;
 #endif
@@ -185,9 +191,23 @@ ssize_t recvfrom(int sockfd, FAR void *buf, size_t len, int flags,
 
   /* Copy the address data to kernel, store the original user pointer */
 
+  ufromlen = fromlen;
   if ((ufrom = from) != NULL)
     {
+      /* A socket type can return no address, and the kernel copy of the
+       * address has a fixed size.  The program can also change its length
+       * while this call waits.
+       */
+
+      memset(&kaddr, 0, sizeof(kaddr));
+      if (fromlen != NULL)
+        {
+          kfromlen = MIN(*fromlen, sizeof(kaddr));
+          kfromsize = kfromlen;
+        }
+
       from = (FAR struct sockaddr *)&kaddr;
+      fromlen = &kfromlen;
     }
 #endif
 
@@ -204,14 +224,24 @@ ssize_t recvfrom(int sockfd, FAR void *buf, size_t len, int flags,
     }
 
 #ifdef CONFIG_BUILD_KERNEL
-  memcpy(ubuf, buf, len);
+  if (ret > 0)
+    {
+      memcpy(ubuf, buf, ret);
+    }
+
   kmm_free(kbuf);
 
-  /* Copy the address back to user */
+  /* Copy the address back to user.  The length that the socket gives can
+   * be larger than the buffer: then the address is cut, as in a flat build.
+   */
 
-  if (ufrom)
+  if (ret >= 0 && ufrom)
     {
-      memcpy(ufrom, &kaddr, *fromlen);
+      memcpy(ufrom, &kaddr, MIN(kfromlen, kfromsize));
+      if (ufromlen != NULL)
+        {
+          *ufromlen = kfromlen;
+        }
     }
 
 errout_with_cancelpt:

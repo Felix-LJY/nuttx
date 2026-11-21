@@ -112,9 +112,7 @@
 /* Special value for tv_nsec field of timespec */
 
 #define UTIME_NOW     ((1l << 30) - 1l)
-#ifndef __cplusplus
-#  define UTIME_OMIT  ((1l << 30) - 2l)
-#endif
+#define UTIME_OMIT    ((1l << 30) - 2l)
 
 /* The following macros are required by POSIX to achieve backward
  * compatibility with earlier versions of struct stat.
@@ -163,13 +161,9 @@ struct stat
  * Public Function Prototypes
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 int mkdir(FAR const char *pathname, mode_t mode);
@@ -187,16 +181,20 @@ int chmod(FAR const char *path, mode_t mode);
 int lchmod(FAR const char *path, mode_t mode);
 int fchmod(int fd, mode_t mode);
 int fchmodat(int dirfd, FAR const char *path, mode_t mode, int flags);
-int utimens(FAR const char *path, const struct timespec times[2]);
 int utimensat(int dirfd, FAR const char *path,
               const struct timespec times[2], int flags);
-int lutimens(FAR const char *path, const struct timespec times[2]);
 int futimens(int fd, const struct timespec times[2]);
+
+/* Non-standard: not with NUTTX_NO_EXTENSIONS, see nuttx/compiler.h */
+
+#ifndef NUTTX_NO_EXTENSIONS
+int utimens(FAR const char *path, const struct timespec times[2]);
+int lutimens(FAR const char *path, const struct timespec times[2]);
+#endif
 
 mode_t umask(mode_t mask);
 mode_t getumask(void);
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

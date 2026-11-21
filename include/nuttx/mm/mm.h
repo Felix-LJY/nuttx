@@ -33,6 +33,8 @@
 #include <sys/types.h>
 #include <stdbool.h>
 #include <malloc.h>
+#include <signal.h>
+#include <string.h>
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -132,12 +134,27 @@
 #  define USR_HEAP g_mmheap
 #endif
 
+/* MM_INTERNAL_HEAP() selects the heaps whose failed allocations mm_malloc()
+ * reports.  The heap of a process in the kernel build is not one of them:
+ * it starts small, and a failed allocation makes it grow with sbrk() (see
+ * umm_memalign.c).  The user allocator reports a failure of sbrk() (the
+ * warning and CONFIG_MM_PANIC_ON_FAILURE).
+ */
+
 #ifdef CONFIG_MM_KERNEL_HEAP
-#  define KRN_HEAP               g_kmmheap
-#  define MM_INTERNAL_HEAP(heap) ((heap) == USR_HEAP || (heap) == g_kmmheap)
+#  define KNR_HEAP g_kmmheap
+#  if defined(CONFIG_ARCH_ADDRENV) && defined(CONFIG_BUILD_KERNEL)
+#    define MM_INTERNAL_HEAP(heap) ((heap) == g_kmmheap)
+#  else
+#    define MM_INTERNAL_HEAP(heap) ((heap) == USR_HEAP || (heap) == g_kmmheap)
+#  endif
 #else
-#  define KRN_HEAP               USR_HEAP
-#  define MM_INTERNAL_HEAP(heap) ((heap) == USR_HEAP)
+#  define KNR_HEAP USR_HEAP
+#  if defined(CONFIG_ARCH_ADDRENV) && defined(CONFIG_BUILD_KERNEL)
+#    define MM_INTERNAL_HEAP(heap) 0
+#  else
+#    define MM_INTERNAL_HEAP(heap) ((heap) == USR_HEAP)
+#  endif
 #endif
 
 #if CONFIG_MM_BACKTRACE >= 0
@@ -154,7 +171,7 @@
     ((node) != NULL && (dump)->pid == (node)->pid)
 #  define MM_DUMP_LEAK(dump, node) \
     ((node) != NULL && (dump)->pid == PID_MM_LEAK && (node)->pid >= 0 && \
-     nxsched_get_tcb((node)->pid) == NULL)
+     kill((node)->pid, 0) != 0)
 #else
 #  define MM_DUMP_ALLOC(dump,node)  ((dump)->pid == PID_MM_ALLOC)
 #  define MM_DUMP_SEQNO(dump,node)  (true)
@@ -186,16 +203,16 @@ struct mm_heap_s; /* Forward reference */
 
 struct mm_heap_config_s
 {
-  /* If heap == NULL, means use the heap memory ([start, start + size])
+  /* If allocheap == false, means use the heap memory ([start, start + size])
    * to construct the heap struct.
-   * If heap != NULL, means malloc struct mm_heap_s from this heap.
+   * If allocheap == true, means malloc struct mm_heap_s from this heap.
    */
 
-  FAR struct mm_heap_s *heap;
-  FAR const char       *name;
-  FAR void             *start;
-  size_t                size;
-  bool                  nokasan;
+  FAR const char *name;
+  FAR void       *start;
+  size_t          size;
+  bool            nokasan;
+  bool            allocheap;
 };
 
 struct mempool_init_s
@@ -212,13 +229,9 @@ struct mempool_init_s
  * Public Data
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 #ifdef CONFIG_MM_BACKTRACE_SEQNO
@@ -251,13 +264,13 @@ extern unsigned long g_mm_seqno;
 #if defined(CONFIG_BUILD_FLAT) || !defined(__KERNEL__)
 /* Otherwise, the user heap data structures are in common .bss */
 
-EXTERN FAR struct mm_heap_s *g_mmheap;
+extern FAR struct mm_heap_s *g_mmheap;
 #endif
 
 #ifdef CONFIG_MM_KERNEL_HEAP
 /* This is the kernel heap */
 
-EXTERN FAR struct mm_heap_s *g_kmmheap;
+extern FAR struct mm_heap_s *g_kmmheap;
 #endif
 
 /****************************************************************************
@@ -492,12 +505,11 @@ void kmm_checkcorruption(void);
 /* Functions contained in fs_procfspressure.c *******************************/
 
 #ifdef CONFIG_FS_PROCFS_INCLUDE_PRESSURE
-void mm_notify_pressure(size_t remaining, size_t largest);
+void mm_notify_pressure(FAR struct mm_heap_s *heap);
 #else
-#  define mm_notify_pressure(remaining, largest)
+#  define mm_notify_pressure(heap)
 #endif
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

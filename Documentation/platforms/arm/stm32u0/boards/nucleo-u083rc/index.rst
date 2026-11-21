@@ -2,7 +2,7 @@
 ST Nucleo U083RC
 ================
 
-.. tags:: chip:stm32, chip:stm32u0, chip:stm32u083
+.. tags:: arch:arm, chip:stm32u0, part:stm32u083, vendor:st
 
 The Nucleo U083RC is a member of the Nucleo-64 board family.
 
@@ -49,7 +49,7 @@ Enabled features:
 
 - Quadrature encoder on TIM3 (PA6/PA7, D12/D11)
 
-- Timer driver on TIM6 (/dev/timer0)
+- Timer driver on TIM6 (/dev/timer6)
 
 - IWDG and WWDG watchdogs
 

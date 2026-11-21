@@ -66,12 +66,11 @@ FAR void *malloc(size_t size)
   ret = mm_malloc(USR_HEAP, size);
   if (ret == NULL)
     {
-      set_errno(ENOMEM);
+      umm_set_errno(ENOMEM);
     }
   else
     {
-      mm_notify_pressure(mm_heapfree(USR_HEAP),
-                         mm_heapfree_largest(USR_HEAP));
+      mm_notify_pressure(USR_HEAP);
     }
 
   return ret;

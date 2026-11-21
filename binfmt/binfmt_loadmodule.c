@@ -26,15 +26,18 @@
 
 #include <nuttx/config.h>
 
+#include <sys/stat.h>
 #include <sched.h>
 #include <nuttx/debug.h>
 #include <errno.h>
+#include <string.h>
 
 #include <nuttx/lib/lib.h>
 #include <nuttx/envpath.h>
 #include <nuttx/sched.h>
 #include <nuttx/kmalloc.h>
 #include <nuttx/binfmt/binfmt.h>
+#include <nuttx/fs/fs.h>
 
 #include "binfmt.h"
 
@@ -89,8 +92,8 @@ static int load_default_priority(FAR struct binary_s *bin)
  *
  * Description:
  *   Load a module into memory, bind it to an exported symbol table, and
- *   prep the module for execution.  filename is known to be an absolute
- *   path to the file to be loaded.
+ *   prep the module for execution.  filename is the path to the file to
+ *   be loaded: absolute, or relative to the current working directory.
  *
  * Returned Value:
  *   Zero (OK) is returned on success; a negated errno value is returned on
@@ -102,6 +105,8 @@ static int load_absmodule(FAR struct binary_s *bin, FAR const char *filename,
                           FAR const struct symtab_s *exports, int nexports)
 {
   FAR struct binfmt_s *binfmt;
+  struct stat buf;
+  int first = -ENOEXEC;
   int ret = -ENOENT;
 
   binfo("Loading %s\n", filename);
@@ -128,13 +133,31 @@ static int load_absmodule(FAR struct binary_s *bin, FAR const char *filename,
           strlcpy(bin->fname, filename, sizeof(bin->fname));
 #endif
 
-          /* Save the unload method for use by unload_module */
+          /* Save the unload method for use by unload_module.  A handler
+           * without one that loaded another module through load_module()
+           * (a script loads its interpreter) keeps that module's method.
+           */
 
-          bin->unload = binfmt->unload;
+          if (binfmt->unload != NULL)
+            {
+              bin->unload = binfmt->unload;
+            }
+
           binfmt_dumpmodule(bin);
           break;
         }
-      else if (ret == -EACCES)
+
+      /* -ENOEXEC is the "not my format" of a handler.  Keep the first other
+       * error (a missing file, or -ENOMEM from a handler that knew the
+       * format): the next handlers must not hide it.
+       */
+
+      if (first == -ENOEXEC && ret != -ENOEXEC)
+        {
+          first = ret;
+        }
+
+      if (ret == -EACCES)
         {
           /* Access explicitly denied -- stop here; do not let a fallback
            * loader bypass the execute-permission check that already ran.
@@ -144,7 +167,25 @@ static int load_absmodule(FAR struct binary_s *bin, FAR const char *filename,
         }
     }
 
-  return ret;
+  if (ret == OK)
+    {
+      return OK;
+    }
+
+  /* A handler that is not for this format need not look at the file, so
+   * only here do we know if a missing file is the reason.
+   */
+
+  if (first == -ENOEXEC)
+    {
+      ret = nx_stat(filename, &buf, 1);
+      if (ret < 0)
+        {
+          return ret;
+        }
+    }
+
+  return first;
 }
 
 /****************************************************************************
@@ -176,6 +217,10 @@ int load_module(FAR struct binary_s *bin, FAR const char *filename,
   if (bin && filename)
 #endif
     {
+      /* The libraries the program needs go here */
+
+      list_initialize(&bin->libraries);
+
       /* Set the default priority of the new program. */
 
       ret = load_default_priority(bin);
@@ -184,12 +229,23 @@ int load_module(FAR struct binary_s *bin, FAR const char *filename,
           return ret;
         }
 
-      /* Were we given a relative path?  Or an absolute path to the file to
-       * be loaded?  Absolute paths start with '/'.
+      /* An empty file name names no file (POSIX: ENOENT).  It is not a
+       * bare file name to search for in PATH.
+       */
+
+      if (filename[0] == '\0')
+        {
+          return -ENOENT;
+        }
+
+      /* A bare file name (no '/') is searched for in PATH.  Any other path
+       * is used as given: an absolute path, or a path relative to the
+       * current working directory, as POSIX specifies for a name that
+       * contains a '/'.
        */
 
 #ifdef CONFIG_LIBC_ENVPATH
-      if (filename[0] != '/')
+      if (strchr(filename, '/') == NULL)
         {
           FAR char *fullpath;
           ENVPATH_HANDLE handle;
@@ -229,8 +285,8 @@ int load_module(FAR struct binary_s *bin, FAR const char *filename,
       else
 #endif
         {
-          /* We already have the one and only absolute path to the file to
-           * be loaded.
+          /* We already have the one and only path to the file to be
+           * loaded.
            */
 
           ret = load_absmodule(bin, filename, exports, nexports);

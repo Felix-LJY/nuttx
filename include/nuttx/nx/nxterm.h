@@ -28,6 +28,7 @@
  ****************************************************************************/
 
 #include <nuttx/config.h>
+#include <stdbool.h>
 
 #include <nuttx/fs/ioctl.h>
 #include <nuttx/nx/nx.h>
@@ -266,13 +267,9 @@ struct nxtermioc_resize_s
  * Public Data
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#  define EXTERN extern "C"
 extern "C"
 {
-#else
-#  define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -380,7 +377,6 @@ NXTERM nxtool_register(NXTKWINDOW hfwnd, FAR struct nxterm_window_s *wndo,
 
 int nxterm_ioctl_tap(int cmd, uintptr_t arg);
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

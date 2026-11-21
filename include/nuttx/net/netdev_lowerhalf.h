@@ -28,6 +28,7 @@
  ****************************************************************************/
 
 #include <nuttx/config.h>
+#include <stdbool.h>
 #include <nuttx/compiler.h>
 #include <nuttx/spinlock.h>
 #include <nuttx/atomic.h>
@@ -89,10 +90,11 @@ enum netpkt_type_e
 
 enum netdev_rx_e
 {
-  NETDEV_RX_WORK,      /* Use work queue thread */
-  NETDEV_RX_DIRECT,    /* Directly based on the current thread */
-  NETDEV_RX_THREAD,    /* Upper half dedicated thread */
-  NETDEV_RX_THREAD_RSS /* RSS mode, upper half thread */
+  NETDEV_RX_WORK,       /* Use work queue thread */
+  NETDEV_RX_DIRECT,     /* Directly based on the current thread */
+  NETDEV_RX_THREAD,     /* Upper half dedicated thread */
+  NETDEV_RX_THREAD_RSS, /* RSS mode, upper half thread */
+  NETDEV_RX_DEFAULT     /* Inherit real device rxtype for vlan */
 };
 
 /* This structure is the generic form of state structure used by lower half
@@ -109,6 +111,8 @@ enum netdev_rx_e
 
 struct netdev_ops_s;
 struct wireless_ops_s;
+struct phy_device_s;
+
 struct netdev_lowerhalf_s
 {
   FAR const struct netdev_ops_s *ops;
@@ -123,6 +127,7 @@ struct netdev_lowerhalf_s
 
   FAR atomic_t *quota_ptr; /* Shared quota, ignore `quota` if ptr is set */
   atomic_t quota[NETPKT_TYPENUM];
+  bool txdone;
 
   uint8_t rxtype;
   uint8_t priority;
@@ -133,6 +138,10 @@ struct netdev_lowerhalf_s
    * Fields that lowerhalf should never touch (used by upper half):
    *   d_ifup, d_ifdown, d_txavail, d_addmac, d_rmmac, d_ioctl, d_private
    */
+
+#ifdef CONFIG_NET_PHYLIB
+  FAR struct phy_device_s *phydev;
+#endif
 
   struct net_driver_s netdev;
 };
@@ -180,6 +189,20 @@ struct netdev_ops_s
   /* reclaim - try to reclaim packets sent by netdev. */
 
   CODE void (*reclaim)(FAR struct netdev_lowerhalf_s *dev);
+
+#ifdef CONFIG_NET_NETPOLL
+  /* txpoll - Complete pending transmissions and free the finished TX
+   *          packets, so their TX quota can be reused.
+   *
+   *   Used only by netpoll, which may run with interrupts disabled and
+   *   without the network stack (e.g. on the panic path), where the
+   *   driver's TX-done interrupt cannot run.  It must not depend on
+   *   interrupts or on the upper half.  It is separate from reclaim,
+   *   which is called by the upper half in normal context.
+   */
+
+  CODE void (*txpoll)(FAR struct netdev_lowerhalf_s *dev);
+#endif
 };
 
 /* This structure is a set of wireless handlers, leave unsupported operations
@@ -328,7 +351,7 @@ void netdev_lower_txdone(FAR struct netdev_lowerhalf_s *dev);
  *
  ****************************************************************************/
 
-#define netdev_lower_quota_load(dev, type) atomic_read(&dev->quota[type])
+#define netdev_lower_quota_load(dev, type) atomic_read(&(dev)->quota_ptr[type])
 
 /****************************************************************************
  * Name: netdev_lower_vlan_add
@@ -366,6 +389,61 @@ int netdev_lower_vlan_add(FAR struct netdev_lowerhalf_s *dev, uint16_t vid,
  ****************************************************************************/
 
 int netdev_lower_vlan_del(FAR struct netdev_lowerhalf_s *dev, uint16_t vid);
+#endif
+
+/****************************************************************************
+ * Name: netdev_lower_get
+ *
+ * Description:
+ *   Get the lower half of a network device.
+ *
+ * Input Parameters:
+ *   dev - The network device
+ *
+ * Returned Value:
+ *   The lower half device driver structure, or NULL if the device is not
+ *   managed by the upper half network driver (e.g. legacy drivers).
+ *
+ ****************************************************************************/
+
+FAR struct netdev_lowerhalf_s *
+netdev_lower_get(FAR struct net_driver_s *dev);
+
+/****************************************************************************
+ * Name: netdev_lower_input
+ *
+ * Description:
+ *   Pass a packet to the network stack as if the device had received it.
+ *   Used by virtual devices (bridge) that get their packets from another
+ *   device.
+ *
+ * Input Parameters:
+ *   dev - The lower half device driver structure
+ *   pkt - The packet, owned by the network stack from now on
+ *
+ ****************************************************************************/
+
+void netdev_lower_input(FAR struct netdev_lowerhalf_s *dev,
+                        FAR netpkt_t *pkt);
+
+/****************************************************************************
+ * Name: netdev_lower_bridge_set
+ *
+ * Description:
+ *   Make the device a port of a bridge, or release it from the bridge.
+ *   The packets received by a bridge port are given to the bridge instead
+ *   of the network stack.
+ *
+ * Input Parameters:
+ *   dev  - The lower half device driver structure
+ *   port - The bridge port, or NULL to release the device
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_NET_BRIDGE
+struct bridge_port_s;
+void netdev_lower_bridge_set(FAR struct netdev_lowerhalf_s *dev,
+                             FAR struct bridge_port_s *port);
 #endif
 
 /****************************************************************************

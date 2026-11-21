@@ -1,6 +1,8 @@
 ############################################################################
 # libs/libbuiltin/compiler-rt/Make.defs
 #
+# SPDX-License-Identifier: Apache-2.0
+#
 # Licensed to the Apache Software Foundation (ASF) under one or more
 # contributor license agreements.  See the NOTICE file distributed with
 # this work for additional information regarding copyright ownership.  The
@@ -56,6 +58,7 @@ compiler-rt-$(COMPILER_RT_VERSION).src.tar.xz:
 compiler-rt/compiler-rt: compiler-rt-$(COMPILER_RT_VERSION).src.tar.xz
 	$(Q) tar -xf $<
 	$(Q) mv compiler-rt-$(COMPILER_RT_VERSION).src $@
+	$(Q) patch -p1 -d $@ < compiler-rt/0001-compiler-rt-profile-Build-__gcov_fork-only-with-fork.patch
 	$(call DELDIR, $<)
 
 compiler-rt: compiler-rt/compiler-rt

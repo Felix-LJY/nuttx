@@ -32,8 +32,10 @@
 #include <sched.h>
 #include <assert.h>
 #include <errno.h>
+#include <limits.h>
 
 #include <nuttx/cancelpt.h>
+#include <nuttx/fs/uio.h>
 
 #include "inode/inode.h"
 #include "vfs.h"
@@ -87,18 +89,6 @@ static ssize_t file_readv_compat(FAR struct file *filep,
       if (iov[i].iov_len == 0)
         {
           continue;
-        }
-
-      /* Sanity check to avoid total length overflow */
-
-      if (SSIZE_MAX - ntotal < iov[i].iov_len)
-        {
-          if (ntotal > 0)
-            {
-              break;
-            }
-
-          return -EINVAL;
         }
 
       nread = inode->u.i_ops->read(filep, iov[i].iov_base,
@@ -159,16 +149,18 @@ ssize_t file_readv(FAR struct file *filep,
                    FAR const struct iovec *iov, int iovcnt)
 {
   FAR struct inode *inode;
-  ssize_t ret;
+  size_t len = 0;
+  ssize_t ret = -EBADF;
+  int i;
 
   DEBUGASSERT(filep);
   inode = filep->f_inode;
 
   /* Check buffer count and pointer for iovec */
 
-  if (iovcnt == 0)
+  if (iovcnt <= 0 || iovcnt > IOV_MAX)
     {
-      return 0;
+      return -EINVAL;
     }
 
   if (iov == NULL)
@@ -182,20 +174,24 @@ ssize_t file_readv(FAR struct file *filep,
    * kernel builds will fail to load elf binaries found at 0.
    */
 
-#if !defined(CONFIG_BUILD_KERNEL) || CONFIG_ARCH_TEXT_VBASE != 0
-
-  /* Are all iov_base accessible? */
-
-  for (ret = 0; ret < iovcnt; ret++)
+  for (i = 0; i < iovcnt; i++)
     {
-      if (iov[ret].iov_base == NULL)
+      if (SSIZE_MAX - len < iov[i].iov_len)
+        {
+          return -EINVAL;
+        }
+
+      len += iov[i].iov_len;
+
+#if !defined(CONFIG_BUILD_KERNEL) || CONFIG_ARCH_TEXT_VBASE != 0
+      /* Are all iov_base accessible? */
+
+      if (iov[i].iov_base == NULL && iov[i].iov_len != 0)
         {
           return -EFAULT;
         }
-    }
 #endif
-
-  ret = -EBADF;
+    }
 
   /* Was this file opened for read access? */
 
@@ -203,7 +199,7 @@ ssize_t file_readv(FAR struct file *filep,
     {
       /* No.. File is not read-able */
 
-      ret = -EACCES;
+      return -EBADF;
     }
 
   /* Is a driver or mountpoint registered? If so, does it support the read
@@ -213,12 +209,13 @@ ssize_t file_readv(FAR struct file *filep,
    * signature and position in the operations vtable.
    */
 
-  else if (inode != NULL && inode->u.i_ops)
+  if (inode != NULL && inode->u.i_ops)
     {
       clock_t start_time;
 
       FS_PROFILE_START(start_time);
 
+#ifdef CONFIG_FS_UIO
       if (inode->u.i_ops->readv)
         {
           struct uio uio;
@@ -229,7 +226,9 @@ ssize_t file_readv(FAR struct file *filep,
               ret = inode->u.i_ops->readv(filep, &uio);
             }
         }
-      else if (inode->u.i_ops->read)
+      else
+#endif
+      if (inode->u.i_ops->read)
         {
           ret = file_readv_compat(filep, iov, iovcnt);
         }
@@ -274,12 +273,87 @@ ssize_t file_readv(FAR struct file *filep,
 
 ssize_t file_read(FAR struct file *filep, FAR void *buf, size_t nbytes)
 {
-  struct iovec iov;
+  FAR struct inode *inode;
+  ssize_t ret = -EBADF;
 
-  iov.iov_base = buf;
-  iov.iov_len = nbytes;
+  DEBUGASSERT(filep);
+  inode = filep->f_inode;
 
-  return file_readv(filep, &iov, 1);
+#ifdef CONFIG_FS_UIO
+  if (inode == NULL || inode->u.i_ops == NULL ||
+      inode->u.i_ops->read == NULL)
+    {
+      struct iovec iov;
+
+      iov.iov_base = buf;
+      iov.iov_len = nbytes;
+
+      return file_readv(filep, &iov, 1);
+    }
+#endif
+
+  /* Was this file opened for read access? */
+
+  if ((filep->f_oflags & O_ACCMODE) == O_WRONLY)
+    {
+      /* No.. File is not read-able */
+
+      return -EBADF;
+    }
+
+  if (nbytes == 0)
+    {
+      return 0;
+    }
+
+  if (nbytes > SSIZE_MAX)
+    {
+      return -EINVAL;
+    }
+
+  /* -------------------- DO NOT REMOVE --------------------
+   * Only for kernel builds with CONFIG_ARCH_TEXT_VBASE == 0.
+   * In this case we have to allow the NULL buffer otherwise
+   * kernel builds will fail to load elf binaries found at 0.
+   */
+
+#if !defined(CONFIG_BUILD_KERNEL) || CONFIG_ARCH_TEXT_VBASE != 0
+  if (buf == NULL)
+    {
+      return -EFAULT;
+    }
+#endif
+
+  /* Is a driver or mountpoint registered? If so, does it support the read
+   * method?
+   * If yes, then let it perform the read.
+   */
+
+  if (inode != NULL && inode->u.i_ops)
+    {
+      clock_t start_time;
+
+      FS_PROFILE_START(start_time);
+
+      if (inode->u.i_ops->read)
+        {
+          ret = inode->u.i_ops->read(filep, buf, nbytes);
+        }
+
+      FS_PROFILE_STOP(start_time, g_fs_profile.total_read_time,
+                      g_fs_profile.reads);
+    }
+
+  /* Return the number of bytes read (or possibly an error code) */
+
+#ifdef CONFIG_FS_NOTIFY
+  if (ret > 0)
+    {
+      notify_read(filep);
+    }
+#endif
+
+  return ret;
 }
 
 /****************************************************************************
@@ -348,11 +422,23 @@ ssize_t nx_readv(int fd, FAR const struct iovec *iov, int iovcnt)
 
 ssize_t nx_read(int fd, FAR void *buf, size_t nbytes)
 {
-  struct iovec iov;
+  FAR struct file *filep;
+  ssize_t ret;
 
-  iov.iov_base = buf;
-  iov.iov_len = nbytes;
-  return nx_readv(fd, &iov, 1);
+  /* First, get the file structure.  Note that on failure,
+   * file_get() will return the errno.
+   */
+
+  ret = file_get(fd, &filep);
+  if (ret >= 0)
+    {
+      /* Then let file_read do all of the work. */
+
+      ret = file_read(filep, buf, nbytes);
+      file_put(filep);
+    }
+
+  return ret;
 }
 
 /****************************************************************************
@@ -412,9 +498,21 @@ ssize_t readv(int fd, FAR const struct iovec *iov, int iovcnt)
 
 ssize_t read(int fd, FAR void *buf, size_t nbytes)
 {
-  struct iovec iov;
+  ssize_t ret;
 
-  iov.iov_base = buf;
-  iov.iov_len = nbytes;
-  return readv(fd, &iov, 1);
+  /* read() is a cancellation point */
+
+  enter_cancellation_point();
+
+  /* Let nx_read() do the real work */
+
+  ret = nx_read(fd, buf, nbytes);
+  if (ret < 0)
+    {
+      set_errno(-ret);
+      ret = ERROR;
+    }
+
+  leave_cancellation_point();
+  return ret;
 }

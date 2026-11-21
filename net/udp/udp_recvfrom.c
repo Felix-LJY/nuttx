@@ -67,19 +67,6 @@ struct udp_recvfrom_s
  * Private Functions
  ****************************************************************************/
 
-#ifdef CONFIG_NET_TIMESTAMP
-static void udp_store_cmsg_timestamp(FAR struct udp_recvfrom_s *pstate,
-                                     FAR struct timespec *timestamp)
-{
-  FAR struct msghdr *msg = pstate->ir_msg;
-  struct timeval tv;
-
-  TIMESPEC_TO_TIMEVAL(&tv, timestamp);
-  cmsg_append(msg, SOL_SOCKET, SO_TIMESTAMP,
-              &tv, sizeof(struct timeval));
-}
-#endif
-
 #ifdef CONFIG_NET_SOCKOPTS
 static void udp_recvpktinfo(FAR struct udp_recvfrom_s *pstate,
                             FAR void *srcaddr, uint8_t ifindex)
@@ -139,35 +126,25 @@ static void udp_recvpktinfo(FAR struct udp_recvfrom_s *pstate,
  *
  ****************************************************************************/
 
-static inline size_t udp_recvfrom_newdata(FAR struct net_driver_s *dev,
-                                          FAR struct udp_recvfrom_s *pstate)
+static inline void udp_recvfrom_newdata(FAR struct net_driver_s *dev,
+                                        FAR struct udp_recvfrom_s *pstate)
 {
-  size_t recvlen;
-
-  /* Get the length of the data to return */
-
-  if (dev->d_len > pstate->ir_msg->msg_iov->iov_len)
-    {
-      recvlen = pstate->ir_msg->msg_iov->iov_len;
-    }
-  else
-    {
-      recvlen = dev->d_len;
-    }
+  ssize_t recvlen;
+  int offset;
 
   /* Copy the new appdata into the user buffer */
 
-  recvlen = iob_copyout(pstate->ir_msg->msg_iov->iov_base, dev->d_iob,
-                        recvlen, dev->d_appdata - dev->d_iob->io_data -
-                                 dev->d_iob->io_offset);
+  offset = dev->d_appdata - dev->d_iob->io_data - dev->d_iob->io_offset;
+
+  recvlen = iob_copyout_iov(pstate->ir_msg->msg_iov,
+                            pstate->ir_msg->msg_iovlen,
+                            dev->d_iob, dev->d_len, offset);
 
   /* Update the size of the data read */
 
   pstate->ir_recvlen = recvlen;
 
   dev->d_len = 0;
-
-  return recvlen;
 }
 
 static inline void udp_readahead(struct udp_recvfrom_s *pstate)
@@ -185,9 +162,11 @@ static inline void udp_readahead(struct udp_recvfrom_s *pstate)
     {
       int recvlen;
       int offset = 0;
-      uint16_t datalen;
+      int pos;
+      uint16_t datalen = 0;
       uint8_t src_addr_size;
       uint8_t ifindex;
+      uint8_t meta[UDP_READAHEAD_META_SIZE];
 #ifdef CONFIG_NET_IPv6
       uint8_t srcaddr[sizeof(struct sockaddr_in6)];
 #else
@@ -198,48 +177,35 @@ static inline void udp_readahead(struct udp_recvfrom_s *pstate)
        * Layout: |datalen|ifindex|src_addr_size|src_addr|[timestamp]|data|
        */
 
-      recvlen = iob_copyout((FAR uint8_t *)&datalen, iob,
-                            sizeof(datalen), offset);
-      offset += sizeof(datalen);
-      DEBUGASSERT(recvlen == sizeof(datalen));
+      recvlen = iob_copyout(meta, iob, sizeof(meta), offset);
+      offset += sizeof(meta);
+      DEBUGASSERT(recvlen == sizeof(meta));
 
+      pos = 0;
+      memcpy(&datalen, &meta[pos], sizeof(datalen));
+      pos += sizeof(datalen);
 #ifdef CONFIG_NETDEV_IFINDEX
-      recvlen = iob_copyout(&ifindex, iob, sizeof(ifindex), offset);
-      offset += sizeof(ifindex);
-      DEBUGASSERT(recvlen == sizeof(ifindex));
+      ifindex = meta[pos++];
 #else
       ifindex = 1;
 #endif
-      recvlen = iob_copyout(&src_addr_size, iob,
-                            sizeof(src_addr_size), offset);
-      offset += sizeof(src_addr_size);
-      DEBUGASSERT(recvlen == sizeof(src_addr_size));
+      src_addr_size = meta[pos++];
+      DEBUGASSERT(pos == UDP_READAHEAD_META_SIZE);
 
       recvlen = iob_copyout(srcaddr, iob, src_addr_size, offset);
       offset += src_addr_size;
       DEBUGASSERT(recvlen == src_addr_size);
 
 #ifdef CONFIG_NET_TIMESTAMP
-      /* Unpack stored timestamp if SO_TIMESTAMP socket option is enabled */
-
-      if (conn->timestamp)
-        {
-          struct timespec timestamp;
-          recvlen = iob_copyout((FAR uint8_t *)&timestamp, iob,
-                                sizeof(struct timespec), offset);
-          DEBUGASSERT(recvlen == sizeof(struct timespec));
-
-          udp_store_cmsg_timestamp(pstate, &timestamp);
-        }
-
-      offset += sizeof(struct timespec);
+      cmsg_store_timestamp(pstate->ir_msg, &iob->io_time,
+                           conn->sconn.s_options);
 #endif
 
-      /* Copy to user */
+      /* Copy to user buffer(s) */
 
-      recvlen = iob_copyout(pstate->ir_msg->msg_iov->iov_base, iob,
-                            MIN(pstate->ir_msg->msg_iov->iov_len, datalen),
-                            offset);
+      recvlen = iob_copyout_iov(pstate->ir_msg->msg_iov,
+                                pstate->ir_msg->msg_iovlen,
+                                iob, datalen, offset);
 
       /* Update the accumulated size of the data read */
 
@@ -470,10 +436,8 @@ static uint32_t udp_eventhandler(FAR struct net_driver_s *dev,
           /* Save packet timestamp, if requested */
 
 #ifdef CONFIG_NET_TIMESTAMP
-          if (pstate->ir_conn->timestamp)
-            {
-              udp_store_cmsg_timestamp(pstate, &dev->d_rxtime);
-            }
+          cmsg_store_timestamp(pstate->ir_msg, &dev->d_iob->io_time,
+                               pstate->ir_conn->sconn.s_options);
 #endif
 
           /* Save the sender's address in the caller's 'from' location */
@@ -685,9 +649,9 @@ ssize_t psock_udp_recvfrom(FAR struct socket *psock, FAR struct msghdr *msg,
 
   /* Perform the UDP recvfrom() operation */
 
-  if (msg->msg_iovlen != 1)
+  if (msg->msg_iovlen == 0)
     {
-      return -ENOTSUP;
+      return -EMSGSIZE;
     }
 
   /* Initialize the state structure.  This is done with the network locked
@@ -785,6 +749,7 @@ ssize_t psock_udp_recvfrom(FAR struct socket *psock, FAR struct msghdr *msg,
         }
       else
         {
+          nwarn("WARNING: Failed to allocate UDP recv callback\n");
           ret = -EBUSY;
         }
     }

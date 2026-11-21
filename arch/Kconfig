@@ -1,3 +1,24 @@
+############################################################################
+# arch/Kconfig
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.  The
+# ASF licenses this file to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance with the
+# License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
+############################################################################
 #
 # For a description of the syntax of this configuration file,
 # see the file kconfig-language.txt in the NuttX tools repository.
@@ -26,19 +47,22 @@ config ARCH_ARM
 config ARCH_ARM64
 	bool "ARM64"
 	select ALARM_ARCH
+	select ARCH_HAVE_FORK if BUILD_KERNEL && ARCH_ADDRENV
 	select ARCH_64BIT
 	select ARCH_HAVE_BACKTRACE
+	select ARCH_HAVE_HIPRI_INTERRUPT
 	select ARCH_HAVE_INTERRUPTSTACK
 	select ARCH_HAVE_VFORK
 	select ARCH_HAVE_STACKCHECK
 	select ARCH_HAVE_CUSTOMOPT
 	select ARCH_HAVE_STDARG_H
 	select ARCH_HAVE_SETJMP
+	select ARCH_HAVE_UCONTEXT
 	select ARCH_HAVE_SYSCALL_HOOKS
 	select ARCH_HAVE_RDWR_MEM_CPU_RUN
 	select ARCH_HAVE_TCBINFO
 	select ARCH_HAVE_THREAD_LOCAL
-	select ARCH_HAVE_PERF_EVENTS
+	select ARCH_HAVE_PERF_EVENTS if !SMP || ARCH_CLUSTER_PMU
 	select ONESHOT
 	select ONESHOT_COUNT
 	---help---
@@ -81,8 +105,20 @@ config ARCH_RENESAS
 	---help---
 		Renesas architectures (SH and M16C).
 
+config ARCH_RH850
+	bool "Renesas RH850"
+	select ARCH_HAVE_INTERRUPTSTACK
+	select ARCH_HAVE_CUSTOMOPT
+	select ARCH_HAVE_IRQPRIO
+	select ARCH_HAVE_STACKCHECK
+	select ARCH_TOOLCHAIN_GNU
+	select LIBC_ATOMIC_IRQ
+	---help---
+		Renesas RH850 architecture (G4KH core).
+
 config ARCH_RISCV
 	bool "RISC-V"
+	select ARCH_HAVE_FORK if BUILD_KERNEL && ARCH_ADDRENV && !ARCH_STACK_DYNAMIC
 	select ARCH_HAVE_BACKTRACE
 	select ARCH_HAVE_CPUINFO
 	select ARCH_HAVE_INTERRUPTSTACK
@@ -136,6 +172,7 @@ config ARCH_X86
 config ARCH_X86_64
 	bool "x86_64"
 	select ARCH_64BIT
+	select ARCH_HAVE_FORK if BUILD_KERNEL && ARCH_ADDRENV
 	select ARCH_HAVE_TCBINFO
 	select ARCH_HAVE_FPU
 	select ARCH_HAVE_DPFPU
@@ -148,7 +185,6 @@ config ARCH_X86_64
 	select ARCH_HAVE_BACKTRACE
 	select ARCH_HAVE_VFORK
 	select ARCH_HAVE_SETJMP
-	select ARCH_HAVE_PERF_EVENTS
 	select ARCH_HAVE_POWEROFF
 	select ARCH_HAVE_SYSCALL if LIB_SYSCALL
 	---help---
@@ -158,6 +194,7 @@ config ARCH_XTENSA
 	bool "Xtensa"
 	select ARCH_HAVE_BACKTRACE
 	select ARCH_HAVE_VFORK
+	select ARCH_HAVE_FORK if BUILD_KERNEL && ARCH_ADDRENV
 	select ARCH_HAVE_CPUINFO
 	select ARCH_HAVE_INTERRUPTSTACK
 	select ARCH_HAVE_STACKCHECK
@@ -206,6 +243,7 @@ config ARCH_TRICORE
 	select ARCH_HAVE_TCBINFO
 	select ARCH_HAVE_REGCPY
 	select LIBC_ATOMIC_ARCH if !TRICORE_TOOLCHAIN_TASKING
+	select ARCH_HAVE_VFORK
 	---help---
 		Infineon 32-bit AURIX TriCore architectures
 
@@ -220,6 +258,7 @@ config ARCH
 	default "mips"    if ARCH_MIPS
 	default "misoc"   if ARCH_MISOC
 	default "renesas" if ARCH_RENESAS
+	default "rh850"   if ARCH_RH850
 	default "risc-v"  if ARCH_RISCV
 	default "sim"     if ARCH_SIM
 	default "x86"     if ARCH_X86
@@ -251,6 +290,9 @@ source "arch/misoc/Kconfig"
 endif
 if ARCH_RENESAS
 source "arch/renesas/Kconfig"
+endif
+if ARCH_RH850
+source "arch/rh850/Kconfig"
 endif
 if ARCH_RISCV
 source "arch/risc-v/Kconfig"
@@ -506,13 +548,19 @@ config ARCH_HAVE_FORK
 		allocated pages holding a copy of the parent's contents, mapped at the
 		same virtual addresses.
 
-		No architecture selects this yet.  Two things are needed.  First,
-		up_addrenv_fork() itself.  Second, the architecture must build the
-		child's register context from the *user's* saved system call frame:
-		in a kernel build fork() is reached through a system call, so the
-		return address and stack pointer the architecture's fork entry point
-		can see for itself are the kernel's, not the caller's, and a child
-		built from those resumes at a kernel address.
+		It also requires the architecture to build the child's register
+		context from the *user's* saved system call frame:  in a kernel build
+		fork() is reached through a system call, so the return address and
+		stack pointer the architecture's fork entry point can see for itself
+		are the kernel's, not the caller's, and a child built from those
+		resumes at a kernel address.
+
+		The protected configurations are excluded, MPU and MMU alike.  A
+		protected build has one address space protected by a fixed set of
+		regions, and its up_addrenv_*() are stubs; there is no per-process
+		mapping to duplicate at the same virtual addresses, so POSIX fork()
+		semantics cannot be provided.  vfork(), which shares the parent's
+		memory, works there as everywhere else.
 
 		Where this is not selected fork() is not provided at all, and code
 		that calls it fails to build.
@@ -1029,8 +1077,6 @@ config ARCH_PGPOOL_MAPPING
 		Otherwise, a temporary mapping will have to be established each time
 		it is necessary to modify the contents of a page.
 
-if ARCH_PGPOOL_MAPPING
-
 config ARCH_PGPOOL_PBASE
 	hex "Page pool physical address"
 	default 0x0
@@ -1039,6 +1085,20 @@ config ARCH_PGPOOL_PBASE
 		setting is probably equivalent to other platform specific definitions
 		but is required again in order to modularize the common address
 		environment logic.
+
+		This applies whether or not the pool is statically mapped:  the page
+		allocator hands out physical addresses either way.  Only
+		ARCH_PGPOOL_VBASE depends on ARCH_PGPOOL_MAPPING.
+
+config ARCH_PGPOOL_SIZE
+	int "Page pool size (bytes)"
+	default 0
+	---help---
+		The size of the page pool memory in bytes.  This setting is probably
+		equivalent  to other platform specific definitions but is required again
+		in order to modularize the common address environment logic.
+
+if ARCH_PGPOOL_MAPPING
 
 config ARCH_PGPOOL_VBASE
 	hex "Page pool virtual address"
@@ -1049,24 +1109,16 @@ config ARCH_PGPOOL_VBASE
 		but is required again in order to modularize the common address
 		environment logic.
 
-config ARCH_PGPOOL_SIZE
-	int "Page pool size (bytes)"
-	default 0
-	---help---
-		The size of the page pool memory in bytes.  This setting is probably
-		equivalent  to other platform specific definitions but is required again
-		in order to modularize the common address environment logic.
-
 endif # ARCH_PGPOOL_MAPPING
 endif # ARCH_ADDRENV && ARCH_NEED_ADDRENV_MAPPING
 
 config NCPUS
-	int "Number of CPUs we will use"
+	int "Number of CPUs we will use" if !SMP
 	default SMP_NCPUS if SMP
 	default 1
 	range 1 32
 	---help---
-		Number of CPUs we will use.
+		Number of CPUs we will use.  An SMP build always uses SMP_NCPUS.
 
 config PAGING
 	bool "On-demand paging"
@@ -1303,6 +1355,13 @@ config ARCH_RAMFUNCS
 		architectures to improve performance.  In other cases, it is done
 		so that FLASH can be reconfigured while the MCU executes out of
 		SRAM.
+
+config ARCH_SKIP_ZERO_BSS
+	bool "Skip zero bss section"
+	default n
+	---help---
+		BSS must be set to all zero if there is no external preparation.
+		But it will take a lot of boot time.
 
 config ARCH_HAVE_CUSTOM_VECTORS
 	bool

@@ -32,6 +32,11 @@
 #                   reliable code generation.
 #
 
+# cctc has no -isystem, which tools/incdir gives every compiler other
+# than the ZDS ones, so pass the system include directories with -I.
+
+INCSYSDIR_PREFIX = -I
+
 ifeq ($(CONFIG_DEBUG_CUSTOMOPT),y)
   ARCHOPTIMIZATION += $(CONFIG_DEBUG_OPTLEVEL)
 else ifeq ($(CONFIG_DEBUG_FULLOPT),y)
@@ -57,9 +62,24 @@ UNAR              = artc -x
 NM                = nm
 OBJCOPY           = echo
 OBJDUMP           = elfdump
+ASMEXT            = .asm
 
-ARCHOPTIMIZATION += --lsl-core=vtc
-LDFLAGS          += --lsl-core=vtc
+# The .asm sources go through the C preprocessor first, as the .S sources
+# of GCC, so that they can use the configuration and the headers.  ctc -Ep
+# leaves no line markers, which the assembler does not take.
+
+define ASSEMBLE
+	$(ECHO_BEGIN)"AS: $1 "
+	$(Q) ctc -Ep $(filter -D% -U% -I%,$(subst -I ,-I,$(AFLAGS) $($(strip $1)_AFLAGS))) $1 -o $(basename $2).src
+	$(Q) $(CC) -c $(AFLAGS) $($(strip $1)_AFLAGS) $(basename $2).src -o $2
+	$(Q) $(call DELFILE, $(basename $2).src)
+	$(ECHO_END)
+endef
+
+%.dds: %.asm
+	$(Q) ctc -Em $(filter -D% -U% -I%,$(subst -I ,-I,$(CFLAGS))) $< -o $@
+	$(Q) sed -i "s|^$(notdir $*)\.o *:|$(OBJPATH)$(DELIM)$*$(OBJEXT):|" $@
+
 ARCHOPTIMIZATION += --iso=99
 ARCHOPTIMIZATION += --language=+gcc,+volatile,-strings,-kanji
 

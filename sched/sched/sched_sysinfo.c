@@ -77,8 +77,9 @@ int sysinfo(FAR struct sysinfo *info)
 
       if (cpuload.total)
         {
-          info->loads[0] = ((cpuload.total - cpuload.active) <<
-                            SI_LOAD_SHIFT) / cpuload.total;
+          info->loads[0] = (unsigned long)(((cpuload.total - cpuload.active)
+                                            << SI_LOAD_SHIFT) /
+                                           cpuload.total);
           info->loads[1] = info->loads[0];
           info->loads[2] = info->loads[0];
         }
@@ -101,11 +102,11 @@ int sysinfo(FAR struct sysinfo *info)
 #ifdef CONFIG_MM_PGALLOC
       mm_pginfo(&pginfo);
 
-      info->totalram += pginfo.ntotal << MM_PGSHIFT;
-      info->freeram  += pginfo.nfree  << MM_PGSHIFT;
+      info->totalram += (unsigned long)pginfo.ntotal << MM_PGSHIFT;
+      info->freeram  += (unsigned long)pginfo.nfree  << MM_PGSHIFT;
 #endif
 
-      info->uptime   = TICK2SEC(clock_systime_ticks());
+      info->uptime   = (unsigned long)TICK2SEC(clock_systime_ticks());
       info->procs    = CONFIG_SMP_NCPUS;
       info->mem_unit = 1;
     }

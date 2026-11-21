@@ -31,7 +31,7 @@
 
 #include "arm_internal.h"
 #include "chip.h"
-#include "hardware/stm32wb_rcc.h"
+#include "hardware/stm32_rcc.h"
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -39,13 +39,9 @@
 
 #ifndef __ASSEMBLY__
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -190,24 +186,24 @@ void stm32_clockenable(void);
 void stm32_rcc_enable_lse(void);
 
 /****************************************************************************
- * Name: stm32_rcc_enable_lsi
+ * Name: stm32_rcc_enablelsi
  *
  * Description:
  *   Enable the Internal Low-Speed (LSI) RC Oscillator.
  *
  ****************************************************************************/
 
-void stm32_rcc_enable_lsi(void);
+void stm32_rcc_enablelsi(void);
 
 /****************************************************************************
- * Name: stm32_rcc_disable_lsi
+ * Name: stm32_rcc_disablelsi
  *
  * Description:
  *   Disable the Internal Low-Speed (LSI) RC Oscillator.
  *
  ****************************************************************************/
 
-void stm32_rcc_disable_lsi(void);
+void stm32_rcc_disablelsi(void);
 
 /****************************************************************************
  * Name: stm32_rcc_enable_hsi48
@@ -254,7 +250,6 @@ void stm32_rcc_enable_hsi48(crs_syncsrc_t syncsrc);
 
 void stm32_rcc_disable_hsi48(void);
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

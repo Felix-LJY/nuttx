@@ -30,62 +30,42 @@ HEAD_ASRC =
 include armv8-m/Make.defs
 include common/stm32/Make.defs
 
-ifeq ($(CONFIG_STM32_PROGMEM),y)
+ifneq ($(CONFIG_STM32_PROGMEM)$(CONFIG_STM32_EDATA),)
 CHIP_CSRCS += stm32_flash.c
+endif
+
+ifeq ($(CONFIG_STM32_EDATA),y)
+CHIP_CSRCS += stm32_edata.c
 endif
 
 # Required STM32H5 files
 
-CHIP_CSRCS += stm32_gpio.c stm32_irq.c stm32_lowputc.c stm32_rcc.c
-CHIP_CSRCS += stm32_start.c stm32_pwr.c stm32_timerisr.c
-CHIP_CSRCS += stm32_lse.c stm32_lsi.c stm32_exti_gpio.c
-
-ifneq ($(CONFIG_ARCH_IDLE_CUSTOM),y)
-CHIP_CSRCS += stm32_idle.c
-endif
-
-ifeq ($(CONFIG_STM32_USART),y)
-CHIP_CSRCS += stm32_serial.c
-endif
-
-ifeq ($(CONFIG_TIMER),y)
-CHIP_CSRCS += stm32_tim_lowerhalf.c
-endif
-
-ifeq ($(CONFIG_STM32_I2C),y)
-CHIP_CSRCS += stm32_i2c.c
-endif
+CHIP_CSRCS += stm32_rcc.c
+CHIP_CSRCS += stm32_pwr.c
+CHIP_CSRCS += stm32_lse.c stm32_sdmmc.c
 
 ifeq ($(CONFIG_ADC),y)
 CHIP_CSRCS += stm32_adc.c
+endif
+
+ifeq ($(CONFIG_STM32_DAC),y)
+CHIP_CSRCS += stm32_dac.c
 endif
 
 ifeq ($(CONFIG_STM32_FDCAN_CHARDRIVER),y)
 CHIP_CSRCS += stm32_fdcan.c
 endif
 
-ifeq ($(CONFIG_STM32_RNG),y)
-CHIP_CSRCS += stm32_rng.c
-endif
-
 ifeq ($(CONFIG_STM32_ICACHE),y)
 CHIP_CSRCS += stm32_icache.c
 endif
 
-ifeq ($(CONFIG_STM32_SPI),y)
-CHIP_CSRCS += stm32_spi.c
+ifeq ($(CONFIG_STM32H5_EFUSE),y)
+CHIP_CSRCS += stm32_efuse.c
 endif
 
 ifeq ($(CONFIG_STM32_QSPI1),y)
 CHIP_CSRCS += stm32_qspi.c
-endif
-
-ifeq ($(CONFIG_STM32_TIM),y)
-CHIP_CSRCS += stm32_tim.c
-endif
-
-ifeq ($(CONFIG_STM32_LPTIM),y)
-CHIP_CSRCS += stm32_lptim.c
 endif
 
 ifeq ($(CONFIG_STM32_HAVE_HSI48),y)
@@ -100,18 +80,6 @@ ifeq ($(CONFIG_STM32_USBFS_HOST),y)
 CHIP_CSRCS += stm32_usbdrdhost.c
 endif
 
-ifeq ($(CONFIG_STM32_ETHMAC),y)
-CHIP_CSRCS += stm32_ethernet.c
-endif
-
-ifeq ($(CONFIG_MDIO_BUS),y)
-CHIP_CSRCS += stm32_mdio.c
-endif
-
-ifeq ($(CONFIG_STM32_DMA),y)
-CHIP_CSRCS += stm32_dma.c
-endif
-
 ifeq ($(CONFIG_STM32_DTS),y)
 CHIP_CSRCS += stm32_dts.c
 endif
@@ -120,23 +88,18 @@ ifeq ($(CONFIG_STM32_PWM),y)
 CHIP_CSRCS += stm32_pwm.c
 endif
 
+ifeq ($(CONFIG_STM32_TIMX_CAP),y)
+CHIP_CSRCS += stm32_capture.c
+ifeq ($(CONFIG_CAPTURE),y)
+CHIP_CSRCS += stm32_capture_lowerhalf.c
+endif
+endif
+
 ifeq ($(CONFIG_PM),y)
 CHIP_CSRCS += stm32_pmstandby.c stm32_pmstop.c
 ifneq ($(CONFIG_ARCH_CUSTOM_PMINIT),y)
 CHIP_CSRCS += stm32_pminitialize.c
 endif
-endif
-
-ifeq ($(CONFIG_STM32_IWDG),y)
-CHIP_CSRCS += stm32_iwdg.c
-endif
-
-ifeq ($(CONFIG_ARM_MPU),y)
-CHIP_CSRCS += stm32_mpuinit.c
-endif
-
-ifeq ($(CONFIG_STM32_WWDG),y)
-CHIP_CSRCS += stm32_wwdg.c
 endif
 
 # Required chip type specific files

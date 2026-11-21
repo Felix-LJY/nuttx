@@ -33,7 +33,6 @@
 
 #include <nuttx/debug.h>
 #include <nuttx/irq.h>
-#include <nuttx/fs/fs.h>
 #include <nuttx/kmalloc.h>
 #include <nuttx/semaphore.h>
 #include <nuttx/sched.h>
@@ -41,6 +40,10 @@
 #include "sched/sched.h"
 #include "group/group.h"
 #include "tls/tls.h"
+
+#ifdef CONFIG_FS_CHROOT
+#  include "../../fs/fs_heap.h"
+#endif
 
 /****************************************************************************
  * Private Data
@@ -98,6 +101,57 @@ static inline void group_inherit_identity(FAR struct task_group_s *group)
 #  define group_inherit_identity(group)
 #endif
 
+#ifdef CONFIG_FS_CHROOT
+/****************************************************************************
+ * Name: group_inherit_chroot
+ *
+ * Description:
+ *   Inherit the chroot jail from the parent task group.  Kernel threads
+ *   share g_kthread_group and must not inherit a user jail.
+ *   CONFIG_FS_CHROOT is selected in fs/Kconfig.
+ *
+ * Input Parameters:
+ *   group - The new task group.
+ *   ttype - The type of the new thread (TCB_FLAG_TTYPE_* value).
+ *
+ * Returned Value:
+ *   Zero (OK) on success; a negated errno value on failure.
+ *
+ ****************************************************************************/
+
+static int group_inherit_chroot(FAR struct task_group_s *group,
+                                 uint8_t ttype)
+{
+  FAR struct tcb_s *rtcb;
+  FAR struct task_group_s *rgroup;
+
+  if (ttype == TCB_FLAG_TTYPE_KERNEL)
+    {
+      return OK;
+    }
+
+  rtcb   = this_task();
+  rgroup = rtcb->group;
+
+  DEBUGASSERT(group != NULL && rgroup != NULL);
+
+  if (rgroup->tg_root == NULL)
+    {
+      return OK;
+    }
+
+  group->tg_root = fs_heap_strdup(rgroup->tg_root);
+  if (group->tg_root == NULL)
+    {
+      return -ENOMEM;
+    }
+
+  return OK;
+}
+#else
+#  define group_inherit_chroot(group, ttype) (0)
+#endif
+
 /****************************************************************************
  * Public Functions
  ****************************************************************************/
@@ -142,6 +196,9 @@ int group_allocate(FAR struct tcb_s *tcb, uint8_t ttype)
     {
       group = &g_kthread_group;
       tcb->group = group;
+#ifdef CONFIG_SCHED_CAPABILITIES
+      group->tg_caps = PR_CAP_ALL;
+#endif
       if (group->tg_info)
         {
           return OK;
@@ -190,6 +247,30 @@ int group_allocate(FAR struct tcb_s *tcb, uint8_t ttype)
 
   group_inherit_identity(group);
 
+  ret = group_inherit_chroot(group, ttype);
+  if (ret < 0)
+    {
+      goto errout_with_group;
+    }
+
+#ifdef CONFIG_SCHED_CAPABILITIES
+  group->tg_caps = this_task()->group != NULL ?
+                   this_task()->group->tg_caps : PR_CAP_ALL;
+#endif
+
+  /* Inherit the resource limits from the parent task group */
+
+  group_init_rlimit(group, this_task()->group);
+
+  /* Inherit the file mode creation mask.  Kernel threads share one group
+   * and keep the mask 0.
+   */
+
+  if (ttype != TCB_FLAG_TTYPE_KERNEL && this_task()->group != NULL)
+    {
+      group->tg_umask = this_task()->group->tg_umask;
+    }
+
   /* Initialize file descriptors for the TCB */
 
   fdlist_init(&group->tg_fdlist);
@@ -219,7 +300,20 @@ int group_allocate(FAR struct tcb_s *tcb, uint8_t ttype)
   return OK;
 
 errout_with_group:
-  kmm_free(group);
+#ifdef CONFIG_FS_CHROOT
+  if (group->tg_root != NULL)
+    {
+      fs_heap_free(group->tg_root);
+      group->tg_root = NULL;
+    }
+#endif
+
+  if (group != &g_kthread_group)
+    {
+      kmm_free(group);
+    }
+
+  tcb->group = NULL;
   return ret;
 }
 
@@ -247,6 +341,9 @@ errout_with_group:
 void group_initialize(FAR struct tcb_s *tcb)
 {
   FAR struct task_group_s *group;
+#ifdef CONFIG_SCHED_PROCESS_GROUPS
+  FAR struct tcb_s *rtcb;
+#endif
 
   DEBUGASSERT(tcb && tcb->group);
   group = tcb->group;
@@ -275,4 +372,25 @@ void group_initialize(FAR struct tcb_s *tcb)
     }
 
   group->tg_info->ta_pid = group->tg_pid;
+
+#ifdef CONFIG_SCHED_PROCESS_GROUPS
+  /* A task that a user task creates gets the process group and the
+   * session of that task.  A task that the kernel creates (the init task,
+   * a task that a kernel thread starts) is the leader of a new session.
+   * The kernel threads share one group with the IDs 0.
+   */
+
+  rtcb = this_task();
+  if (group != &g_kthread_group && rtcb->group != NULL &&
+      (rtcb->flags & TCB_FLAG_TTYPE_MASK) != TCB_FLAG_TTYPE_KERNEL)
+    {
+      group->tg_pgid = rtcb->group->tg_pgid;
+      group->tg_sid  = rtcb->group->tg_sid;
+    }
+  else
+    {
+      group->tg_pgid = group->tg_pid;
+      group->tg_sid  = group->tg_pid;
+    }
+#endif
 }

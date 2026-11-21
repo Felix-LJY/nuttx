@@ -39,17 +39,7 @@
 
 /* Configuration ************************************************************/
 
-#define HAVE_PROC             1
 #define HAVE_RTC_DRIVER       1
-
-#if !defined(CONFIG_FS_PROCFS)
-#  undef HAVE_PROC
-#endif
-
-#if defined(HAVE_PROC) && defined(CONFIG_DISABLE_MOUNTPOINT)
-#  warning Mountpoints disabled.  No procfs support
-#  undef HAVE_PROC
-#endif
 
 /* Check if we can support the RTC driver */
 
@@ -115,18 +105,6 @@
 
 int stm32_bringup(void);
 
-/****************************************************************************
- * Name: stm32_mpu_configure_otp
- *
- * Description:
- *   Initialize MPU and configure the OTP flash region.
- *
- ****************************************************************************/
-
-#if defined(CONFIG_ARM_MPU) && defined(CONFIG_STM32_ICACHE)
-void stm32_mpu_configure_otp(void);
-#endif
-
 #ifdef CONFIG_STM32_SPI
 /****************************************************************************
  * Name: stm32_spiregister
@@ -163,20 +141,19 @@ void stm32_spiinitialize(void);
 int stm32_adc_setup(void);
 #endif
 
-#ifdef CONFIG_STM32_DTS
-int stm32_dts_setup(int devno);
-#endif
-
 /****************************************************************************
- * Name: stm32_can_setup
+ * Name: stm32_dac_setup
  *
  * Description:
- *  Initialize CAN and register the CAN device
- *
+ *   Initialize the DAC and register the DAC driver.
  ****************************************************************************/
 
-#ifdef CONFIG_STM32_FDCAN_CHARDRIVER
-int stm32_can_setup(uint8_t port);
+#ifdef CONFIG_DAC
+int stm32_dac_setup(void);
+#endif
+
+#ifdef CONFIG_STM32_DTS
+int stm32_dts_setup(int devno);
 #endif
 
 /****************************************************************************

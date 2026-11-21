@@ -28,6 +28,7 @@
  ****************************************************************************/
 
 #include <nuttx/config.h>
+#include <stdbool.h>
 #include <nuttx/fs/fs.h>
 #include <nuttx/kmalloc.h>
 
@@ -98,11 +99,8 @@
 #ifndef __ASSEMBLY__
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -120,11 +118,15 @@ FAR struct file_struct *lib_get_stream(int fd);
 
 unsigned long nrand(unsigned long limit);
 
+/* Functions defined in lib_getstacksize.c **********************************/
+
+size_t lib_get_stacksize(size_t size);
+
 /* Functions defined in lib_tempbuffer.c ************************************/
 
 #ifdef CONFIG_LIBC_TEMPBUFFER
-FAR char *lib_get_tempbuffer(size_t nbytes);
-void lib_put_tempbuffer(FAR char *buffer);
+FAR void *lib_get_tempbuffer(size_t nbytes);
+void lib_put_tempbuffer(FAR void *buffer);
 #else
 #  define lib_get_tempbuffer(n) alloca(n)
 #  define lib_put_tempbuffer(b)
@@ -138,7 +140,6 @@ void lib_put_tempbuffer(FAR char *buffer);
 FAR char *lib_realpath(FAR const char *path, FAR char *resolved,
                        bool notfollow);
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

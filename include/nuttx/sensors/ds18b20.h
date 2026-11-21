@@ -28,6 +28,7 @@
  ****************************************************************************/
 
 #include <nuttx/config.h>
+#include <stdbool.h>
 
 #if defined(CONFIG_1WIRE) && defined(CONFIG_SENSORS_DS18B20)
 
@@ -62,11 +63,8 @@ struct ds18b20_alarm_s
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -88,7 +86,6 @@ extern "C"
 
 int ds18b20_register(int devno, FAR struct onewire_master_s *dev,
                      uint64_t romcode);
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

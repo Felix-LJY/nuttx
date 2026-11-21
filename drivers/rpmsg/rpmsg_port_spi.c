@@ -28,8 +28,8 @@
 #include <errno.h>
 #include <stdio.h>
 
+#include <nuttx/lib/xorsum.h>
 #include <nuttx/nuttx.h>
-#include <nuttx/crc16.h>
 #include <nuttx/kmalloc.h>
 #include <nuttx/kthread.h>
 #include <nuttx/power/pm.h>
@@ -45,8 +45,8 @@
  ****************************************************************************/
 
 #ifdef CONFIG_RPMSG_PORT_SPI_CRC
-#  define rpmsg_port_spi_crc16(hdr)     crc16ibm((FAR uint8_t *)&(hdr)->cmd, \
-                                                  (hdr)->len - sizeof((hdr)->crc))
+#  define rpmsg_port_spi_crc16(hdr)     xorsum16(&(hdr)->cmd, \
+                                                 (hdr)->len - sizeof((hdr)->crc))
 #else
 #  define rpmsg_port_spi_crc16(hdr)     0
 #endif
@@ -344,6 +344,14 @@ static void rpmsg_port_spi_complete_handler(FAR void *arg)
       rpspi->shutdown = false;
     }
 
+  if (rpspi->rxhdr->len < sizeof(struct rpmsg_port_header_s) ||
+      rpspi->rxhdr->len > rpspi->port.rxq.len)
+    {
+      rpmsgerr("drop malformed rx: len=%u crc=%u cmd=%u\n",
+               rpspi->rxhdr->len, rpspi->rxhdr->crc, rpspi->rxhdr->cmd);
+      goto out;
+    }
+
   if (rpspi->rxhdr->crc != 0)
     {
       uint16_t crc = rpmsg_port_spi_crc16(rpspi->rxhdr);
@@ -530,6 +538,10 @@ rpmsg_port_spi_process_packet(FAR struct rpmsg_port_spi_s *rpspi,
             spin_unlock_irqrestore(&rpspi->lock, flags);
             rpmsg_port_register(&rpspi->port, (FAR const char *)(rxhdr + 1));
           }
+        else
+          {
+            spin_unlock_irqrestore(&rpspi->lock, flags);
+          }
 
         rpmsg_port_queue_return_buffer(&rpspi->port.rxq, rxhdr);
         break;
@@ -539,8 +551,14 @@ rpmsg_port_spi_process_packet(FAR struct rpmsg_port_spi_s *rpspi,
         break;
 
       case RPMSG_PORT_SPI_CMD_SHUTDOWN:
-        rpmsg_port_unregister(&rpspi->port);
         flags = spin_lock_irqsave(&rpspi->lock);
+        if (rpspi->state != RPMSG_PORT_SPI_STATE_UNCONNECTED)
+          {
+            spin_unlock_irqrestore(&rpspi->lock, flags);
+            rpmsg_port_unregister(&rpspi->port);
+            flags = spin_lock_irqsave(&rpspi->lock);
+          }
+
         if (rpspi->state == RPMSG_PORT_SPI_STATE_DISCONNECTING)
           {
             rpspi->state = RPMSG_PORT_SPI_STATE_UNCONNECTED;
@@ -553,6 +571,10 @@ rpmsg_port_spi_process_packet(FAR struct rpmsg_port_spi_s *rpspi,
             rpspi->state = RPMSG_PORT_SPI_STATE_UNCONNECTED;
             spin_unlock_irqrestore(&rpspi->lock, flags);
             IOEXP_WRITEPIN(rpspi->ioe, rpspi->mreq, 1);
+          }
+        else
+          {
+            spin_unlock_irqrestore(&rpspi->lock, flags);
           }
 
         rpmsg_port_queue_return_buffer(&rpspi->port.rxq, rxhdr);
@@ -590,7 +612,7 @@ static int rpmsg_port_spi_thread(int argc, FAR char *argv[])
 }
 
 /****************************************************************************
- * Name: rpmsg_port_spi_gpio_init
+ * Name: rpmsg_port_spi_init_gpio
  ****************************************************************************/
 
 static int
@@ -658,6 +680,17 @@ rpmsg_port_spi_init_hardware(FAR struct rpmsg_port_spi_s *rpspi,
 {
   int ret;
 
+  rpspi->spi = spi;
+  rpspi->ioe = ioe;
+  rpspi->freq = spicfg->freq;
+  rpspi->devid = spicfg->devid;
+  rpspi->nbits = spicfg->nbits;
+
+  SPI_SETBITS(spi, spicfg->nbits);
+  SPI_SETMODE(spi, spicfg->mode);
+  SPI_REGISTERCALLBACK(spi, rpmsg_port_spi_complete_handler, rpspi);
+  SPI_SELECT(spi, spicfg->devid, false);
+
   /* Init mreq gpio */
 
   ret = rpmsg_port_spi_init_gpio(ioe, &rpspi->mreq, spicfg->mreq_pin,
@@ -665,7 +698,7 @@ rpmsg_port_spi_init_hardware(FAR struct rpmsg_port_spi_s *rpspi,
   if (ret < 0)
     {
       rpmsgerr("mreq init failed\n");
-      return ret;
+      goto out;
     }
 
   /* Init sreq gpio */
@@ -676,21 +709,14 @@ rpmsg_port_spi_init_hardware(FAR struct rpmsg_port_spi_s *rpspi,
   if (ret < 0)
     {
       rpmsgerr("sreq init failed\n");
-      return ret;
+      goto out;
     }
 
-  SPI_SETBITS(spi, spicfg->nbits);
-  SPI_SETMODE(spi, spicfg->mode);
-  SPI_REGISTERCALLBACK(spi, rpmsg_port_spi_complete_handler, rpspi);
-  SPI_SELECT(spi, spicfg->devid, false);
-
-  rpspi->spi = spi;
-  rpspi->ioe = ioe;
-  rpspi->freq = spicfg->freq;
-  rpspi->devid = spicfg->devid;
-  rpspi->nbits = spicfg->nbits;
-
   return 0;
+
+out:
+  SPI_REGISTERCALLBACK(spi, NULL, NULL);
+  return ret;
 }
 
 /****************************************************************************

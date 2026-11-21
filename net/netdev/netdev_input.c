@@ -77,13 +77,31 @@ int netdev_input(FAR struct net_driver_s *dev,
   ret = netdev_iob_prepare(dev, false, 0);
   if (ret != OK)
     {
+      dev->d_len = 0;
       return ret;
     }
+
+#if defined(CONFIG_NET_TIMESTAMP)
+  if ((dev->d_features & NETDEV_RX_STAMP) != 0)
+    {
+      dev->d_iob->io_time = dev->d_rxtime;
+    }
+#endif
 
   /* Copy data to iob entry */
 
   ret = iob_trycopyin(dev->d_iob, buf, dev->d_len, -llhdrlen, false);
-  if (ret == dev->d_len)
+  if (ret != dev->d_len)
+    {
+      /* The packet is dropped, nothing is left to send */
+
+      dev->d_len = 0;
+      if (ret >= 0)
+        {
+          ret = -ENOMEM;
+        }
+    }
+  else
     {
       /* Update device buffer to l2 start */
 

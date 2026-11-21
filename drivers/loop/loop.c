@@ -27,11 +27,13 @@
 #include <nuttx/config.h>
 
 #include <sys/types.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <string.h>
 #include <errno.h>
 
 #include <nuttx/fs/fs.h>
+#include <nuttx/fs/uio.h>
 #include <nuttx/fs/loop.h>
 
 #ifdef CONFIG_DEV_LOOP
@@ -70,6 +72,29 @@ static const struct file_operations g_loop_fops =
  * Private Functions
  ****************************************************************************/
 
+#ifdef CONFIG_BUILD_KERNEL
+/****************************************************************************
+ * Name: loop_copyname
+ *
+ * Description:
+ *   Read a name in user memory once, into copy (PATH_MAX + 1 bytes): the
+ *   inode tree lock is held when the name is used.  NULL stays NULL.
+ *
+ ****************************************************************************/
+
+static FAR const char *loop_copyname(FAR char *copy, FAR const char *name)
+{
+  if (name == NULL)
+    {
+      return NULL;
+    }
+
+  memccpy(copy, name, '\0', PATH_MAX);
+  copy[PATH_MAX] = '\0';
+  return copy;
+}
+#endif
+
 /****************************************************************************
  * Name: loop_read
  ****************************************************************************/
@@ -100,55 +125,71 @@ static int loop_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
 
   switch (cmd)
     {
-    /* Command:      LOOPIOC_SETUP
-     * Description:  Setup the loop device
-     * Argument:     A pointer to a read-only instance of struct losetup_s.
-     * Dependencies: The loop device must be enabled (CONFIG_DEV_LOOP=y)
-     */
+      /* Command:      LOOPIOC_SETUP
+       * Description:  Setup the loop device
+       * Argument:     A pointer to a read-only instance of struct losetup_s.
+       * Dependencies: The loop device must be enabled (CONFIG_DEV_LOOP=y)
+       */
 
-    case LOOPIOC_SETUP:
-      {
-         FAR struct losetup_s *setup =
-           (FAR struct losetup_s *)((uintptr_t)arg);
+      case LOOPIOC_SETUP:
+        {
+           FAR struct losetup_s *setup =
+             (FAR struct losetup_s *)((uintptr_t)arg);
 
-        if (setup == NULL)
-          {
-            ret = -EINVAL;
-          }
-        else
-          {
-            ret = losetup(setup->devname, setup->filename, setup->sectsize,
-                          setup->offset, setup->readonly);
-          }
-      }
-      break;
+          if (setup == NULL)
+            {
+              ret = -EINVAL;
+            }
+          else
+            {
+              FAR const char *devname = setup->devname;
+              FAR const char *filename = setup->filename;
+#ifdef CONFIG_BUILD_KERNEL
+              char name[PATH_MAX + 1];
+              char file[PATH_MAX + 1];
 
-    /* Command:      LOOPIOC_TEARDOWN
-     * Description:  Teardown a loop device previously setup via
-                     LOOPIOC_SETUP
-     * Argument:     A read-able pointer to the path of the device to be
-     *               torn down
-     * Dependencies: The loop device must be enabled (CONFIG_DEV_LOOP=y)
-     */
+              devname = loop_copyname(name, devname);
+              filename = loop_copyname(file, filename);
+#endif
 
-    case LOOPIOC_TEARDOWN:
-      {
-        FAR const char *devname = (FAR const char *)((uintptr_t)arg);
+              ret = losetup(devname, filename, setup->sectsize,
+                            setup->offset, setup->readonly);
+            }
+        }
+        break;
 
-        if (devname == NULL)
-          {
-            ret = -EINVAL;
-          }
-        else
-          {
-            ret = loteardown(devname);
-          }
-       }
-       break;
+      /* Command:      LOOPIOC_TEARDOWN
+       * Description:  Teardown a loop device previously setup via
+       *               LOOPIOC_SETUP
+       * Argument:     A read-able pointer to the path of the device to be
+       *               torn down
+       * Dependencies: The loop device must be enabled (CONFIG_DEV_LOOP=y)
+       */
 
-     default:
-       ret = -ENOTTY;
-       break;
+      case LOOPIOC_TEARDOWN:
+        {
+          FAR const char *devname = (FAR const char *)((uintptr_t)arg);
+
+          if (devname == NULL)
+            {
+              ret = -EINVAL;
+            }
+          else
+            {
+#ifdef CONFIG_BUILD_KERNEL
+              char name[PATH_MAX + 1];
+
+              devname = loop_copyname(name, devname);
+#endif
+
+              ret = loteardown(devname);
+            }
+        }
+        break;
+
+      default:
+        ret = -ENOTTY;
+        break;
     }
 
   return ret;

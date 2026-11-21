@@ -106,13 +106,20 @@ static void nxtask_reset_task(FAR struct tcb_s *tcb, bool remove)
 
 #ifdef HAVE_GROUP_MEMBERS
   group_kill_children(tcb);
+
+  /* The task group is reused after a restart.  It is no longer exiting once
+   * all of the old child threads have been removed.
+   */
+
+  tcb->group->tg_flags &= ~GROUP_FLAG_EXITING;
 #endif
 
   /* Remove the TCB from whatever list it is in.  After this point, the TCB
-   * should no longer be accessible to the system
+   * should no longer be accessible to the system.  nxtask_recover() has
+   * already removed a task that waits on a semaphore.
    */
 
-  if (remove)
+  if (remove && tcb->task_state != TSTATE_WAIT_SEM)
     {
       nxsched_remove_readytorun(tcb);
     }
@@ -152,9 +159,6 @@ static void nxtask_reset_task(FAR struct tcb_s *tcb, bool remove)
 
   up_initial_state(tcb);
 
-  /* Add the task to the inactive task list */
-
-  dq_addfirst((FAR dq_entry_t *)tcb, list_inactivetasks());
   tcb->task_state = TSTATE_TASK_INACTIVE;
 }
 
@@ -306,6 +310,7 @@ errout_with_lock:
 int task_restart(pid_t pid)
 {
   int ret = nxtask_restart(pid);
+
   if (ret < 0)
     {
       set_errno(-ret);

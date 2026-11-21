@@ -1,6 +1,8 @@
-====
-or1k
-====
+=====================
+OpenRISC Generic OR1K
+=====================
+
+.. tags:: arch:or1k, chip:mor1kx
 
 Generic OpenRISC board, suitable for use with Qemu, for example.
 

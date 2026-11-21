@@ -46,9 +46,9 @@
 /* Allocate a new Bluetooth socket data callback */
 
 #define bluetooth_callback_alloc(dev,conn) \
-  devif_callback_alloc(dev, &conn->bc_conn.list, &conn->bc_conn.list_tail)
+  devif_callback_alloc(dev, &conn->bc_conn.s_list, &conn->bc_conn.s_listtail)
 #define bluetooth_callback_free(dev,conn,cb) \
-  devif_conn_callback_free(dev, cb, &conn->bc_conn.list, &conn->bc_conn.list_tail)
+  devif_conn_callback_free(dev, cb, &conn->bc_conn.s_list, &conn->bc_conn.s_listtail)
 
 /* Memory Pools */
 
@@ -109,16 +109,13 @@ struct bluetooth_conn_s
  ****************************************************************************/
 
 #ifdef __cplusplus
-#  define EXTERN extern "C"
 extern "C"
 {
-#else
-#  define EXTERN extern
 #endif
 
 /* The Bluetooth socket interface */
 
-EXTERN const struct sock_intf_s g_bluetooth_sockif;
+extern const struct sock_intf_s g_bluetooth_sockif;
 
 /* The Bluetooth connections rmutex */
 
@@ -345,6 +342,23 @@ FAR struct radio_driver_s *
                         FAR const bt_addr_t *addr);
 
 /****************************************************************************
+ * Name: bluetooth_find_device_byindex
+ *
+ * Description:
+ *   Select a Bluetooth network driver by its zero-based index among
+ *   Bluetooth devices.
+ *
+ * Input Parameters:
+ *   index - The Bluetooth device index.
+ *
+ * Returned Value:
+ *   A pointer to the network driver to use.  NULL is returned on failure.
+ *
+ ****************************************************************************/
+
+FAR struct radio_driver_s *bluetooth_find_device_byindex(uint8_t index);
+
+/****************************************************************************
  * Name: bluetooth_poll
  *
  * Description:
@@ -459,7 +473,6 @@ FAR struct bluetooth_container_s *bluetooth_container_allocate(void);
 
 void bluetooth_container_free(FAR struct bluetooth_container_s *container);
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

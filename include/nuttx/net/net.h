@@ -54,6 +54,7 @@
 /* Definitions of 8-bit socket flags */
 
 #define _SF_INITD           0x01  /* Bit 0: Socket structure is initialized */
+#define _SF_CONNECTING      0x02  /* Bit 1: SOCK_STREAM is connecting */
 #define _SF_NONBLOCK        0x08  /* Bit 3: Don't block if no data (TCP/READ only) */
 #define _SF_LISTENING       0x10  /* Bit 4: SOCK_STREAM is listening */
 #define _SF_BOUND           0x20  /* Bit 5: SOCK_STREAM is bound to an address */
@@ -71,12 +72,13 @@
 
 /* Macro to manage the socket state and flags */
 
-#define _SS_INITD(s)        (((s) & _SF_INITD)     != 0)
-#define _SS_ISNONBLOCK(s)   (((s) & _SF_NONBLOCK)  != 0)
-#define _SS_ISLISTENING(s)  (((s) & _SF_LISTENING) != 0)
-#define _SS_ISBOUND(s)      (((s) & _SF_BOUND)     != 0)
-#define _SS_ISCONNECTED(s)  (((s) & _SF_CONNECTED) != 0)
-#define _SS_ISCLOSED(s)     (((s) & _SF_CLOSED)    != 0)
+#define _SS_INITD(s)        (((s) & _SF_INITD)      != 0)
+#define _SS_ISCONNECTING(s) (((s) & _SF_CONNECTING) != 0)
+#define _SS_ISNONBLOCK(s)   (((s) & _SF_NONBLOCK)   != 0)
+#define _SS_ISLISTENING(s)  (((s) & _SF_LISTENING)  != 0)
+#define _SS_ISBOUND(s)      (((s) & _SF_BOUND)      != 0)
+#define _SS_ISCONNECTED(s)  (((s) & _SF_CONNECTED)  != 0)
+#define _SS_ISCLOSED(s)     (((s) & _SF_CLOSED)     != 0)
 
 /* Determine if a socket is valid.  Valid means both (1) allocated and (2)
  * successfully initialized:
@@ -93,6 +95,16 @@
 #define _PS_ALLOCD(psock)   ((psock)->s_conn != NULL)
 #define _PS_INITD(psock)    (_SS_INITD((psock)->s_flags))
 #define _PS_VALID(psock)    (_PS_ALLOCD(psock) && _PS_INITD(psock))
+
+/* Network device locking macros */
+
+#define netdev_lock(dev)    nxrmutex_lock(&(dev)->d_lock)
+#define netdev_unlock(dev)  nxrmutex_unlock(&(dev)->d_lock)
+#define netdev_trylock(dev) nxrmutex_trylock(&(dev)->d_lock)
+#define netdev_breaklock(dev, pcount) \
+                            nxrmutex_breaklock(&(dev)->d_lock, pcount)
+#define netdev_restorelock(dev, count) \
+                            nxrmutex_restorelock(&(dev)->d_lock, count)
 
 /****************************************************************************
  * Public Types
@@ -137,10 +149,10 @@ typedef uint8_t sockcaps_t;
  * a given address family.
  */
 
-struct file;    /* Forward reference */
-struct stat;    /* Forward reference */
-struct socket;  /* Forward reference */
-struct pollfd;  /* Forward reference */
+struct file;     /* Forward reference */
+struct stat;     /* Forward reference */
+struct socket;   /* Forward reference */
+struct pollfd_s; /* Forward reference */
 
 struct sock_intf_s
 {
@@ -160,7 +172,7 @@ struct sock_intf_s
                     FAR struct sockaddr *addr, FAR socklen_t *addrlen,
                     FAR struct socket *newsock, int flags);
   CODE int        (*si_poll)(FAR struct socket *psock,
-                    FAR struct pollfd *fds, bool setup);
+                    FAR struct pollfd_s *fds, bool setup);
   CODE ssize_t    (*si_sendmsg)(FAR struct socket *psock,
                     FAR const struct msghdr *msg, int flags);
   CODE ssize_t    (*si_recvmsg)(FAR struct socket *psock,
@@ -197,14 +209,14 @@ struct socket_conn_s
 {
   /* Common prologue of all connection structures. */
 
-  dq_entry_t node;        /* Supports a doubly linked list */
+  dq_entry_t s_node;      /* Supports a doubly linked list */
 
   /* This is a list of connection callbacks.  Each callback represents a
    * thread that is stalled, waiting for a device-specific event.
    */
 
-  FAR struct devif_callback_s *list;
-  FAR struct devif_callback_s *list_tail;
+  FAR struct devif_callback_s *s_list;
+  FAR struct devif_callback_s *s_listtail;
 
   /* This lock protects the connection structure.  It is used to prevent
    * re-entrance into the connection structure while it is being modified.
@@ -267,11 +279,8 @@ struct socket
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -329,9 +338,6 @@ ssize_t net_ioctl_arglen(uint8_t domain, int cmd);
  *   net_unlock()      - Unlocks the network.
  *   net_sem_wait()    - Like pthread_cond_wait() except releases the
  *                       network momentarily to wait on another semaphore.
- *   net_ioballoc()    - Like iob_alloc() except releases the network
- *                       momentarily to wait for an IOB to become
- *                       available.
  *
  ****************************************************************************/
 
@@ -351,25 +357,6 @@ ssize_t net_ioctl_arglen(uint8_t domain, int cmd);
  ****************************************************************************/
 
 int net_lock(void);
-
-/****************************************************************************
- * Name: net_trylock
- *
- * Description:
- *   Try to take the network lock only when it is currently not locked.
- *   Otherwise, it locks the semaphore.  In either
- *   case, the call returns without blocking.
- *
- * Input Parameters:
- *   None
- *
- * Returned Value:
- *   Zero (OK) is returned on success; a negated errno value is returned on
- *   failure (probably -EAGAIN).
- *
- ****************************************************************************/
-
-int net_trylock(void);
 
 /****************************************************************************
  * Name: net_unlock
@@ -495,15 +482,16 @@ int net_sem_timedwait2(FAR sem_t *sem, bool interruptible,
                        unsigned int timeout, FAR rmutex_t *mutex1,
                        FAR rmutex_t *mutex2);
 
+struct net_driver_s; /* Forward reference */
 #ifdef CONFIG_MM_IOB
 
 /****************************************************************************
- * Name: net_iobtimedalloc
+ * Name: conn_dev_iobtimedalloc
  *
  * Description:
  *   Allocate an IOB.  If no IOBs are available, then atomically wait for
  *   for the IOB while temporarily releasing the lock on the network.
- *   This function is wrapped version of net_ioballoc(), this wait will
+ *   This function is wrapped version of conn_dev_ioballoc(), this wait will
  *   be terminated when the specified timeout expires.
  *
  *   Caution should be utilized.  Because the network lock is relinquished
@@ -514,6 +502,8 @@ int net_sem_timedwait2(FAR sem_t *sem, bool interruptible,
  * Input Parameters:
  *   throttled  - An indication of the IOB allocation is "throttled"
  *   timeout    - The relative time to wait until a timeout is declared.
+ *   sconn      - The socket connection structure.
+ *   dev        - The network device structure.
  *
  * Returned Value:
  *   A pointer to the newly allocated IOB is returned on success.  NULL is
@@ -521,22 +511,27 @@ int net_sem_timedwait2(FAR sem_t *sem, bool interruptible,
  *
  ****************************************************************************/
 
-FAR struct iob_s *net_iobtimedalloc(bool throttled, unsigned int timeout);
+FAR struct iob_s *
+conn_dev_iobtimedalloc(bool throttled, unsigned int timeout,
+                       FAR struct socket_conn_s *sconn,
+                       FAR struct net_driver_s *dev);
 
 /****************************************************************************
- * Name: net_ioballoc
+ * Name: conn_dev_ioballoc
  *
  * Description:
  *   Allocate an IOB.  If no IOBs are available, then atomically wait for
  *   for the IOB while temporarily releasing the lock on the network.
  *
  *   Caution should be utilized.  Because the network lock is relinquished
- *   during the wait, there could changes in the network state that occur
+ *   during the wait, there could be changes in the network state that occur
  *   before the lock is recovered.  Your design should account for this
  *   possibility.
  *
  * Input Parameters:
  *   throttled  - An indication of the IOB allocation is "throttled"
+ *   sconn      - The socket connection structure.
+ *   dev        - The network device structure.
  *
  * Returned Value:
  *   A pointer to the newly allocated IOB is returned on success.  NULL is
@@ -544,7 +539,9 @@ FAR struct iob_s *net_iobtimedalloc(bool throttled, unsigned int timeout);
  *
  ****************************************************************************/
 
-FAR struct iob_s *net_ioballoc(bool throttled);
+FAR struct iob_s *conn_dev_ioballoc(bool throttled,
+                                    FAR struct socket_conn_s *sconn,
+                                    FAR struct net_driver_s *dev);
 #endif
 
 /****************************************************************************
@@ -882,6 +879,24 @@ int psock_connect(FAR struct socket *psock, FAR const struct sockaddr *addr,
 
 ssize_t psock_sendmsg(FAR struct socket *psock, FAR const struct msghdr *msg,
                       int flags);
+
+/****************************************************************************
+ * Name: psock_sigpipe
+ *
+ * Description:
+ *   Raise SIGPIPE in the calling thread when a send on a stream socket
+ *   failed with -EPIPE, unless 'flags' has MSG_NOSIGNAL.  The user
+ *   interfaces (send(), sendto(), sendmsg(), sendfile() and write() on a
+ *   socket) call it.  The psock_send*() interfaces do not raise SIGPIPE.
+ *
+ * Input Parameters:
+ *   psock    The socket of the send
+ *   ret      The result of the send
+ *   flags    The send flags
+ *
+ ****************************************************************************/
+
+void psock_sigpipe(FAR struct socket *psock, ssize_t ret, int flags);
 
 /****************************************************************************
  * Name: psock_recvmsg
@@ -1313,8 +1328,8 @@ int psock_shutdown(FAR struct socket *psock, int how);
  *
  ****************************************************************************/
 
-struct pollfd; /* Forward reference -- see poll.h */
-int psock_poll(FAR struct socket *psock, struct pollfd *fds, bool setup);
+struct pollfd_s; /* Forward reference -- see poll.h */
+int psock_poll(FAR struct socket *psock, struct pollfd_s *fds, bool setup);
 
 /****************************************************************************
  * Name: psock_dup2
@@ -1461,7 +1476,6 @@ int psock_socketpair(int domain, int type, int protocol,
  *
  ****************************************************************************/
 
-struct net_driver_s; /* Forward reference */
 int netdev_register(FAR struct net_driver_s *dev, enum net_lltype_e lltype);
 
 /****************************************************************************
@@ -1483,26 +1497,6 @@ int netdev_register(FAR struct net_driver_s *dev, enum net_lltype_e lltype);
  ****************************************************************************/
 
 int netdev_unregister(FAR struct net_driver_s *dev);
-
-/****************************************************************************
- * Name: netdev_lock
- *
- * Description:
- *   Lock the network device.
- *
- ****************************************************************************/
-
-void netdev_lock(FAR struct net_driver_s *dev);
-
-/****************************************************************************
- * Name: netdev_unlock
- *
- * Description:
- *   Unlock the network device.
- *
- ****************************************************************************/
-
-void netdev_unlock(FAR struct net_driver_s *dev);
 
 /****************************************************************************
  * Name: netdev_findbyname
@@ -1539,7 +1533,6 @@ FAR struct net_driver_s *netdev_findbyname(FAR const char *ifname);
 
 FAR struct net_driver_s *netdev_findbyindex(int ifindex);
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

@@ -1,3 +1,24 @@
+############################################################################
+# binfmt/Kconfig
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.  The
+# ASF licenses this file to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance with the
+# License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
+############################################################################
 #
 # For a description of the syntax of this configuration file,
 # see the file kconfig-language.txt in the NuttX tools repository.
@@ -45,6 +66,40 @@ config NXFLAT
 if NXFLAT
 source "binfmt/libnxflat/Kconfig"
 endif
+
+config BINFMT_SCRIPT
+	bool "Enable script (#!) binary format"
+	default n
+	---help---
+		Enable support for executing files that start with a "#!"
+		(shebang) line.  When posix_spawn / exec targets such a file,
+		the shebang interpreter is loaded via the normal binfmt chain
+		and the original script path is forwarded to it at argv[1],
+		so the interpreter (sh, lua, python, ...) auto-executes it.
+
+		The interpreter itself must be loadable by another registered
+		binfmt handler (builtin, ELF, etc.).
+
+config BINFMT_BUILTIN_STRICT_PATH
+	bool "Match a builtin application by path as POSIX specifies"
+	default n
+	depends on BUILTIN
+	---help---
+		By default, the builtin binary format looks up only the last part of
+		a path, so exec("/nonexistent/hello") starts the builtin application
+		"hello", and so does exec("/tmp/hello") for a file that is not a
+		program.  POSIX wants ENOENT and ENOEXEC.
+
+		With this option, a name with a '/' matches a builtin application
+		only if it names a file in a mounted BINFS (FS_BINFS).  A bare name
+		still matches.
+
+		Code that starts a builtin application by a path with no file there
+		then fails.  Without a BINFS at /bin this includes popen() without
+		LIBC_ENVPATH ("/bin/sh": no shell, so a shell command fails with
+		ENOENT), a script with "#!/bin/sh", the shell "/bin/sh" of BASIC and
+		dropbear, the default shell of ADB, and the shell "/bin/nsh" that
+		getpwnam() reports for root.
 
 config ELF
 	bool "Enable the ELF Binary Format"
@@ -121,6 +176,22 @@ config BINFMT_ELF_EXECUTABLE
 		Produce a full linked executable object as output.
 
 endchoice
+
+config BINFMT_CHECKEXEC
+	bool "Check the execute permission of programs"
+	default SCHED_USER_IDENTITY
+	---help---
+		Refuse to start a program from a file that has no execute
+		permission, with EACCES.  Each binary format checks the mode of
+		the file that it opens, also for scripts and their interpreters.  With
+		SCHED_USER_IDENTITY, the owner, group or other execute bit is
+		checked for the effective user and group IDs.  Without it, any
+		execute bit is enough.
+
+		File systems without a stored mode (for example FAT) report
+		execute permission for all files, unless they are mounted with
+		MS_NOEXEC.  On a file system that stores the mode, a program that
+		was created with a mode without execute bits needs chmod first.
 
 config BINFMT_STORE_FILENAME
 	bool "Store the binary filename"

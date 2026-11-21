@@ -31,7 +31,6 @@
 
 #include <sys/timex.h>
 #include <sys/types.h>
-#include <stdbool.h>
 #include <stdint.h>
 #include <time.h>
 
@@ -76,25 +75,6 @@
 
 #  define __HAVE_KERNEL_GLOBALS 1
 #endif
-
-/* The following are the bit fields of the clockid_t
- * bit 0~2: the clock type
- * CLOCK_REALTIME           - 0
- * CLOCK_MONOTONIC          - 1
- * CLOCK_PROCESS_CPUTIME_ID - 2
- * CLOCK_THREAD_CPUTIME_ID  - 3
- * CLOCK_BOOTTIME           - 4
- * CLOCK_FD                 - 5
- *
- * if the clockid value exceeds CLOCK_MASK, it indicates a dynamic clockid.
- * bit 3~32: the fd, pid or tid value
- *
- * The CLOCK_MASK are using to extract the clock_type from the clockid_t
- */
-
-#define CLOCK_FD              5
-#define CLOCK_MASK            7
-#define CLOCK_SHIFT           3
 
 /* Timing constants *********************************************************/
 
@@ -205,6 +185,31 @@
 #define TICK2HSEC(tick)       div_const_roundnearest(tick, TICK_PER_HSEC)
 #define TICK2SEC(tick)        div_const_roundnearest(tick, TICK_PER_SEC)
 
+/* CLOCK2TICK converts a value of clock() (CLOCKS_PER_SEC units) to system
+ * ticks (CLK_TCK units).  It is for code that cannot call
+ * clock_systime_ticks(), such as user space in a protected or kernel
+ * build.
+ */
+
+#if CLOCKS_PER_SEC == CLK_TCK
+#  define CLOCK2TICK(clk)     (clk)
+#else
+#  define CLOCK2TICK(clk)     ((clk) / (CLOCKS_PER_SEC / CLK_TCK))
+#endif
+
+/* CLOCK2USEC and CLOCK2MSEC convert a value of clock() (CLOCKS_PER_SEC
+ * units), for example the difference of two calls, to microseconds and
+ * milliseconds.
+ */
+
+#define CLOCK2USEC(clk)       ((clk) * (USEC_PER_SEC / CLOCKS_PER_SEC))
+
+#if CLOCKS_PER_SEC >= MSEC_PER_SEC
+#  define CLOCK2MSEC(clk)     div_const(clk, CLOCKS_PER_SEC / MSEC_PER_SEC)
+#else
+#  define CLOCK2MSEC(clk)     ((clk) * (MSEC_PER_SEC / CLOCKS_PER_SEC))
+#endif
+
 /* MSEC2SEC */
 
 #define MSEC2SEC(msec)        div_const(msec, MSEC_PER_SEC)
@@ -224,18 +229,6 @@
 /* NSEC2MSEC */
 
 #define NSEC2MSEC(nsec)       div_const(nsec, NSEC_PER_MSEC)
-
-#if defined(CONFIG_DEBUG_SCHED) && !defined(CONFIG_SCHED_TICKLESS)
-/* Initial system timer ticks value close to maximum 32-bit value, to test
- * 64-bit system-timer after going over 32-bit value. This is to make errors
- * of casting 64-bit system-timer to 32-bit variables more visible.
- */
-
-#  define INITIAL_SYSTEM_TIMER_TICKS \
-    (UINT32_MAX - (TICK_PER_SEC * 5))
-#else
-#  define INITIAL_SYSTEM_TIMER_TICKS 0
-#endif
 
 /* If Gregorian time is not supported, then neither is Julian */
 
@@ -306,11 +299,8 @@ struct cpuload_s
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -576,7 +566,7 @@ int clock_isleapyear(int year);
  *
  ****************************************************************************/
 
-int clock_daysbeforemonth(int month, bool leap_year);
+int clock_daysbeforemonth(int month, uint8_t leap_year);
 
 /****************************************************************************
  * Name:  clock_dayoftheweek
@@ -846,7 +836,6 @@ int nxclock_gettime(clockid_t clock_id, FAR struct timespec *tp);
 int nxclock_adjtime(clockid_t clock_id, FAR struct timex *buf);
 #endif
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

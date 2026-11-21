@@ -146,8 +146,8 @@ static off_t   tda19988_seek(FAR struct file *filep, off_t offset,
                              int whence);
 static int     tda19988_ioctl(FAR struct file *filep, int cmd,
                               unsigned long arg);
-static int     tda19988_poll(FAR struct file *filep, FAR struct pollfd *fds,
-                             bool setup);
+static int tda19988_poll(FAR struct file *filep, FAR struct pollfd_s *fds,
+                         bool setup);
 #ifndef CONFIG_DISABLE_PSEUDOFS_OPERATIONS
 static int     tda19988_unlink(FAR struct inode *inode);
 #endif
@@ -1157,7 +1157,7 @@ static int tda19988_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
  *
  ****************************************************************************/
 
-static int tda19988_poll(FAR struct file *filep, FAR struct pollfd *fds,
+static int tda19988_poll(FAR struct file *filep, FAR struct pollfd_s *fds,
                          bool setup)
 {
   FAR struct inode *inode;
@@ -1309,14 +1309,14 @@ static int tda19988_hwinitialize(FAR struct tda1988_dev_s *priv)
   priv->version = version & ~0x30;
   switch (priv->version)
     {
-    case HDMI_CTRL_REV_TDA19988:
-      lcdinfo("TDA19988\n");
-      break;
+      case HDMI_CTRL_REV_TDA19988:
+        lcdinfo("TDA19988\n");
+        break;
 
-    default:
-      lcderr("ERROR: Unknown device: %04x\n", priv->version);
-      ret = -ENODEV;
-      goto done;
+      default:
+        lcderr("ERROR: Unknown device: %04x\n", priv->version);
+        ret = -ENODEV;
+        goto done;
     }
 
   tda19988_hdmi_putreg(priv, HDMI_CTRL_DDC_CTRL_REG, HDMI_CTRL_DDC_EN);

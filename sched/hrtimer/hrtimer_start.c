@@ -59,22 +59,27 @@ int hrtimer_start_absolute(FAR hrtimer_t *hrtimer, hrtimer_entry_t func,
                            uint64_t expired)
 {
   irqstate_t flags;
-  bool       reprogram = false;
-  int        ret       = OK;
+  uint64_t   prev_expired;
+  uint64_t   next_expired;
+  int        ret = OK;
 
   DEBUGASSERT(hrtimer != NULL && func != NULL);
 
   /* Acquire the lock and seize the ownership of the hrtimer queue. */
 
-  flags = write_seqlock_irqsave(&g_hrtimer_lock);
+  flags = hrtimer_lock();
 
   /* Ensure no running core can write the hrtimer. */
 
   hrtimer_cancel_running(hrtimer);
 
+  /* Remember the earliest expiration before the queue is changed. */
+
+  prev_expired = hrtimer_next_expired();
+
   if (hrtimer_is_pending(hrtimer))
     {
-      reprogram = hrtimer_remove(hrtimer);
+      hrtimer_remove(hrtimer);
     }
 
   hrtimer->func    = func;
@@ -82,18 +87,19 @@ int hrtimer_start_absolute(FAR hrtimer_t *hrtimer, hrtimer_entry_t func,
 
   /* Insert the timer into the hrtimer queue. */
 
-  reprogram |= hrtimer_insert(hrtimer);
+  hrtimer_insert(hrtimer);
 
-  /* If the inserted timer is now the earliest, start hardware timer */
+  /* Reprogram the hardware timer only if the earliest expiration changed. */
 
-  if (reprogram)
+  next_expired = hrtimer_next_expired();
+  if (prev_expired != next_expired)
     {
-      hrtimer_reprogram(hrtimer_get_first()->expired);
+      hrtimer_reprogram(next_expired);
     }
 
   /* Release the lock and give up the ownership of the hrtimer queue. */
 
-  write_sequnlock_irqrestore(&g_hrtimer_lock, flags);
+  hrtimer_unlock(flags);
 
   return ret;
 }

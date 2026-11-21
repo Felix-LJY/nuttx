@@ -20,12 +20,10 @@
 #
 # ##############################################################################
 
-set(SRCS stm32_boot.c stm32_bringup.c)
+set(SRCS stm32_boot.c stm32_bringup.c stm32_usb.c stm32_ioctl.c stm32_spi.c)
 
 if(CONFIG_ARCH_LEDS)
   list(APPEND SRCS stm32_autoleds.c)
-else()
-  list(APPEND SRCS stm32_userleds.c)
 endif()
 
 if(CONFIG_VIDEO_FB)
@@ -38,11 +36,17 @@ if(CONFIG_STM32_SDMMC)
   list(APPEND SRCS stm32_sdmmc.c)
 endif()
 
+if(CONFIG_IEEE80211_MORSE)
+  list(APPEND SRCS stm32_morse.c)
+endif()
+
 if(CONFIG_FAT_DMAMEMORY)
   list(APPEND SRCS stm32_dma_alloc.c)
 endif()
 
 target_sources(board PRIVATE ${SRCS})
+
+set_property(GLOBAL PROPERTY LD_SCRIPT "${NUTTX_BOARD_DIR}/scripts/flash.ld")
 
 if(NOT CONFIG_BUILD_FLAT)
   add_subdirectory(${NUTTX_BOARD_DIR}/kernel)

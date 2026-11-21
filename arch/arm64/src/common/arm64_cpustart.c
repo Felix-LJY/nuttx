@@ -68,7 +68,16 @@ uint64_t *const g_cpu_int_stacktop[CONFIG_SMP_NCPUS] =
 #if CONFIG_SMP_NCPUS > 4
   (uint64_t *)(g_interrupt_stacks[4] + INTSTACK_SIZE),
 #if CONFIG_SMP_NCPUS > 5
-#  error This logic needs to extended for CONFIG_SMP_NCPUS > 5
+  (uint64_t *)(g_interrupt_stacks[5] + INTSTACK_SIZE),
+#if CONFIG_SMP_NCPUS > 6
+  (uint64_t *)(g_interrupt_stacks[6] + INTSTACK_SIZE),
+#if CONFIG_SMP_NCPUS > 7
+  (uint64_t *)(g_interrupt_stacks[7] + INTSTACK_SIZE),
+#if CONFIG_SMP_NCPUS > 8
+#  error This logic needs to extended for CONFIG_SMP_NCPUS > 8
+#endif /* CONFIG_SMP_NCPUS > 8 */
+#endif /* CONFIG_SMP_NCPUS > 7 */
+#endif /* CONFIG_SMP_NCPUS > 6 */
 #endif /* CONFIG_SMP_NCPUS > 5 */
 #endif /* CONFIG_SMP_NCPUS > 4 */
 #endif /* CONFIG_SMP_NCPUS > 3 */
@@ -78,7 +87,7 @@ uint64_t *const g_cpu_int_stacktop[CONFIG_SMP_NCPUS] =
 
 uint32_t g_smp_busy_wait_flag;
 
-#ifdef CONFIG_ARM64_DECODEFIQ
+#ifdef CONFIG_ARCH_HIPRI_INTERRUPT
 uint64_t *const g_cpu_int_fiq_stacktop[CONFIG_SMP_NCPUS] =
 {
   (uint64_t *)(g_interrupt_fiq_stacks[0] + INTSTACK_SIZE),
@@ -91,7 +100,16 @@ uint64_t *const g_cpu_int_fiq_stacktop[CONFIG_SMP_NCPUS] =
 #if CONFIG_SMP_NCPUS > 4
   (uint64_t *)(g_interrupt_fiq_stacks[4] + INTSTACK_SIZE),
 #if CONFIG_SMP_NCPUS > 5
-#  error This logic needs to extended for CONFIG_SMP_NCPUS > 5
+  (uint64_t *)(g_interrupt_fiq_stacks[5] + INTSTACK_SIZE),
+#if CONFIG_SMP_NCPUS > 6
+  (uint64_t *)(g_interrupt_fiq_stacks[6] + INTSTACK_SIZE),
+#if CONFIG_SMP_NCPUS > 7
+  (uint64_t *)(g_interrupt_fiq_stacks[7] + INTSTACK_SIZE),
+#if CONFIG_SMP_NCPUS > 8
+#  error This logic needs to extended for CONFIG_SMP_NCPUS > 8
+#endif /* CONFIG_SMP_NCPUS > 8 */
+#endif /* CONFIG_SMP_NCPUS > 7 */
+#endif /* CONFIG_SMP_NCPUS > 6 */
 #endif /* CONFIG_SMP_NCPUS > 5 */
 #endif /* CONFIG_SMP_NCPUS > 4 */
 #endif /* CONFIG_SMP_NCPUS > 3 */
@@ -125,9 +143,6 @@ static void arm64_smp_init_top(void)
   sched_note_cpu_started(tcb);
 #endif
 
-  /* core n, idle n */
-
-  write_sysreg(0, tpidrro_el0);
   UNUSED(tcb);
 
   nx_idle_trampoline();
@@ -135,7 +150,7 @@ static void arm64_smp_init_top(void)
 
 static void arm64_start_cpu(int cpu_num)
 {
-#ifdef CONFIG_ARM64_PSCI
+#if defined(CONFIG_ARM64_PSCI) && !defined(CONFIG_ARCH_TRUSTZONE_SECURE)
   uint64_t cpu_mpid = arm64_get_mpid(cpu_num);
 #endif
 
@@ -146,7 +161,7 @@ static void arm64_start_cpu(int cpu_num)
   sched_note_cpu_start(this_task(), cpu_num);
 #endif
 
-#ifdef CONFIG_ARM64_PSCI
+#if defined(CONFIG_ARM64_PSCI) && !defined(CONFIG_ARCH_TRUSTZONE_SECURE)
   if (psci_cpu_on(cpu_mpid, (uint64_t)__start))
     {
       serr("Failed to boot secondary CPU core %d (MPID:%#lx)\n", cpu_num,
@@ -202,6 +217,7 @@ int up_cpu_start(int cpu)
 
 #ifdef CONFIG_SMP
   uint32_t *address = &g_smp_busy_wait_flag;
+
   *address = 1;
   up_flush_dcache((uintptr_t)address, (uintptr_t)address + sizeof(address));
 #endif
@@ -221,6 +237,10 @@ void arm64_boot_secondary_c_routine(void)
 
 #ifdef CONFIG_ARCH_HAVE_MMU
   arm64_mmu_init(false);
+#endif
+
+#ifndef CONFIG_ARM64_DCACHE_DISABLE
+  up_enable_dcache();
 #endif
 
   /* We need to confirm that current_task has been initialized. */

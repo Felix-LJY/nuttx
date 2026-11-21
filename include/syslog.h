@@ -36,7 +36,6 @@
 
 #include <stdint.h>
 #include <stdarg.h>
-#include <stdbool.h>
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -64,8 +63,6 @@
 #define LOG_NDELAY      0x08    /* don't delay open */
 #define LOG_NOWAIT      0x10    /* don't wait for console forks: DEPRECATED */
 #define LOG_PERROR      0x20    /* log to stderr as well */
-
-/* Note: openlog() is not currently supported */
 
 /* The facility argument is used to specify what type of program is logging
  * the message. This lets the configuration file specify that messages from
@@ -177,10 +174,14 @@ extern "C"
  *
  *   It is not necessary to call openlog() prior to calling syslog().
  *
+ *   With CONFIG_SYSLOG_OPENLOG, NuttX puts the ident (up to 31
+ *   characters) and, with LOG_PID, the process ID before each message, and
+ *   writes the messages to stderr too with LOG_PERROR.  It does not use
+ *   the other options or the facility.  Without it, openlog() does nothing.
+ *
  ****************************************************************************/
 
-/* Not supported */
-#define openlog(i, o, f) {(void)(i); (void)(o); (void)(f);}
+void openlog(FAR const char *ident, int option, int facility);
 
 /****************************************************************************
  * Name: closelog
@@ -190,10 +191,11 @@ extern "C"
  *   The closelog() function will close any open file descriptors allocated
  *   by previous calls to openlog() or syslog().
  *
+ *   NuttX has no such descriptor.  The settings of openlog() stay.
+ *
  ****************************************************************************/
 
-/* Not supported */
-#define closelog()
+void closelog(void);
 
 /****************************************************************************
  * Name: syslog and vsyslog
@@ -213,11 +215,15 @@ extern "C"
  *
  ****************************************************************************/
 
-#ifndef CONFIG_SYSLOG_TO_SCHED_NOTE
 void syslog(int priority, FAR const IPTR char *fmt, ...) syslog_like(2, 3);
 void vsyslog(int priority, FAR const IPTR char *fmt, va_list ap)
      syslog_like(2, 0);
-#else
+
+/* With CONFIG_SYSLOG_TO_SCHED_NOTE, these macros replace the calls.  The
+ * functions remain for code that takes their address.
+ */
+
+#ifdef CONFIG_SYSLOG_TO_SCHED_NOTE
 #  define syslog(priority, fmt, ...) \
           sched_note_printf(NOTE_TAG_LOG + priority, fmt, ##__VA_ARGS__)
 #  define vsyslog(priority, fmt, ap) \

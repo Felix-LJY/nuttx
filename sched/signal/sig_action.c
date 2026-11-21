@@ -38,6 +38,10 @@
 #include <nuttx/signal.h>
 #include <nuttx/spinlock.h>
 
+#ifdef CONFIG_FDPIC
+#  include <nuttx/fdpic.h>
+#endif
+
 #include "sched/sched.h"
 #include "group/group.h"
 #include "signal/signal.h"
@@ -55,12 +59,6 @@
 #else
 #  define IS_PREALLOC_ACTION(x) false
 #endif
-
-/****************************************************************************
- * Private Data
- ****************************************************************************/
-
-static spinlock_t g_sigaction_spin;
 
 /****************************************************************************
  * Private Functions
@@ -86,14 +84,14 @@ static void nxsig_alloc_actionblock(void)
   sigact = kmm_malloc((sizeof(sigactq_t)) * CONFIG_SIG_ALLOC_ACTIONS);
   if (sigact != NULL)
     {
-      flags = spin_lock_irqsave(&g_sigaction_spin);
+      flags = spin_lock_irqsave(&g_sigspinlock);
 
       for (i = 0; i < CONFIG_SIG_ALLOC_ACTIONS; i++)
         {
           sq_addlast((FAR sq_entry_t *)sigact++, &g_sigfreeaction);
         }
 
-      spin_unlock_irqrestore(&g_sigaction_spin, flags);
+      spin_unlock_irqrestore(&g_sigspinlock, flags);
     }
 }
 
@@ -112,9 +110,9 @@ static FAR sigactq_t *nxsig_alloc_action(void)
 
   /* Try to get the signal action structure from the free list */
 
-  flags = spin_lock_irqsave(&g_sigaction_spin);
+  flags = spin_lock_irqsave(&g_sigspinlock);
   sigact = (FAR sigactq_t *)sq_remfirst(&g_sigfreeaction);
-  spin_unlock_irqrestore(&g_sigaction_spin, flags);
+  spin_unlock_irqrestore(&g_sigspinlock, flags);
 
   /* Check if we got one via loop as not in critical section now */
 
@@ -126,9 +124,9 @@ static FAR sigactq_t *nxsig_alloc_action(void)
 
       /* And try again */
 
-      flags = spin_lock_irqsave(&g_sigaction_spin);
+      flags = spin_lock_irqsave(&g_sigspinlock);
       sigact = (FAR sigactq_t *)sq_remfirst(&g_sigfreeaction);
-      spin_unlock_irqrestore(&g_sigaction_spin, flags);
+      spin_unlock_irqrestore(&g_sigspinlock, flags);
     }
 
   return sigact;
@@ -200,7 +198,8 @@ static FAR sigactq_t *nxsig_alloc_action(void)
  * - All sa_flags in struct sigaction of act input are ignored (all
  *   treated like SA_SIGINFO). The one exception is if
  *   CONFIG_SCHED_CHILD_STATUS is defined; then SA_NOCLDWAIT is supported but
- *   only for SIGCHLD
+ *   only for SIGCHLD.  SIGCHLD set to SIG_IGN has the same effect if
+ *   CONFIG_SIG_DEFAULT is defined.
  *
  ****************************************************************************/
 
@@ -210,6 +209,8 @@ int nxsig_action(int signo, FAR const struct sigaction *act,
   FAR struct tcb_s *rtcb = this_task();
   FAR struct task_group_s *group;
   FAR sigactq_t *sigact;
+  FAR sigpendq_t *sigpend;
+  sq_queue_t sigpendq;
   _sa_handler_t handler;
   irqstate_t flags;
 
@@ -227,6 +228,10 @@ int nxsig_action(int signo, FAR const struct sigaction *act,
     {
       return -EINVAL;
     }
+
+  /* Initialize a queue to collect pending signals that need to be released */
+
+  sq_init(&sigpendq);
 
   /* Verify the signal number */
 
@@ -256,7 +261,7 @@ int nxsig_action(int signo, FAR const struct sigaction *act,
   if (oact != NULL)
     {
 #ifdef CONFIG_SIG_DEFAULT
-      if (nxsig_isdefault(rtcb, signo))
+      if (sigact != NULL && nxsig_isdefault(rtcb, signo))
         {
           /* Return SIG_DFL if the default signal is attached */
 
@@ -277,12 +282,28 @@ int nxsig_action(int signo, FAR const struct sigaction *act,
         }
       else
         {
-          /* There isn't an old value */
+          /* No action attached: the signal is ignored, or it is at a
+           * default action that ignores it.
+           */
 
+#ifdef CONFIG_SIG_DEFAULT
+          oact->sa_handler = nxsig_isdefault(rtcb, signo) ?
+                             SIG_DFL : SIG_IGN;
+#else
           oact->sa_handler = NULL;
+#endif
           oact->sa_flags   = 0;
           sigemptyset(&oact->sa_mask);
         }
+
+#if defined(CONFIG_SCHED_HAVE_PARENT) && defined(CONFIG_SCHED_CHILD_STATUS)
+      /* Report SA_NOCLDWAIT, so that a restore of oact keeps it */
+
+      if (signo == SIGCHLD && (group->tg_flags & GROUP_FLAG_NOCLDWAIT) != 0)
+        {
+          oact->sa_flags |= SA_NOCLDWAIT;
+        }
+#endif
     }
 
   /* If the argument act is a null pointer, signal handling is unchanged;
@@ -295,36 +316,20 @@ int nxsig_action(int signo, FAR const struct sigaction *act,
       return OK;
     }
 
-#if defined(CONFIG_SCHED_HAVE_PARENT) && defined(CONFIG_SCHED_CHILD_STATUS)
-  /* Handle a special case.  Retention of child status can be suppressed
-   * if signo == SIGCHLD and sa_flags == SA_NOCLDWAIT.
-   *
-   * POSIX.1 leaves it unspecified whether a SIGCHLD signal is generated
-   * when a child process terminates.  In NuttX, a SIGCHLD signal is
-   * generated in this case; but in some other implementations, it may not
-   * be.
+  handler = act->sa_handler;
+
+#ifdef CONFIG_FDPIC
+  /* Resolve the handler here, the innermost common code, so it happens
+   * exactly once.  SIG_ERR, SIG_IGN, SIG_DFL and SIG_HOLD are small
+   * integers rather than addresses, so exclude them by hand.
    */
 
-  if (signo == SIGCHLD && (act->sa_flags & SA_NOCLDWAIT) != 0)
+  if (handler != SIG_ERR && handler != SIG_IGN && handler != SIG_DFL &&
+      handler != SIG_HOLD)
     {
-      /* We do require a critical section to muck with the TCB values that
-       * can be modified by the child thread.
-       */
-
-      flags = enter_critical_section();
-
-      /* Mark that status should be not be retained */
-
-      rtcb->group->tg_flags |= GROUP_FLAG_NOCLDWAIT;
-
-      /* Free all pending exit status */
-
-      group_remove_children(rtcb->group);
-      leave_critical_section(flags);
+      handler = (_sa_handler_t)fdpic_callback((FAR void *)handler);
     }
 #endif
-
-  handler = act->sa_handler;
 
 #ifdef CONFIG_SIG_DEFAULT
   /* If the caller is setting the handler to SIG_DFL, then we need to
@@ -362,6 +367,48 @@ int nxsig_action(int signo, FAR const struct sigaction *act,
           /* And deallocate it */
 
           nxsig_release_action(sigact);
+        }
+
+      flags = spin_lock_irqsave(&group->tg_lock);
+
+      /* Traverse the pending signal queue
+       * to find signals with matching signo
+       */
+
+      sigpend = (FAR sigpendq_t *)group->tg_sigpendingq.head;
+      while (sigpend)
+        {
+          FAR sigpendq_t *next_sigpend = sigpend->flink;
+
+          if (sigpend->info.si_signo == signo)
+            {
+              /* Remove the pending signal from the group's pending queue */
+
+              sq_rem((FAR sq_entry_t *)sigpend, &group->tg_sigpendingq);
+
+              /* Add it to the temporary queue for later release
+               * We cannot call nxsig_release_pendingsignal() here: it may
+               * call kmm_free(), which must not happen while holding the
+               * group spinlock.
+               */
+
+              sq_addlast((FAR sq_entry_t *)sigpend, &sigpendq);
+            }
+
+          sigpend = next_sigpend;
+        }
+
+      spin_unlock_irqrestore(&group->tg_lock, flags);
+
+      /* Now release the collected pending signals outside the spinlock */
+
+      sigpend = (FAR sigpendq_t *)sigpendq.head;
+      while (sigpend)
+        {
+          FAR sigpendq_t *next_sigpend = sigpend->flink;
+
+          nxsig_release_pendingsignal(sigpend);
+          sigpend = next_sigpend;
         }
     }
 
@@ -405,6 +452,55 @@ int nxsig_action(int signo, FAR const struct sigaction *act,
       sigact->act.sa_user    = act->sa_user;
     }
 
+#if defined(CONFIG_SCHED_HAVE_PARENT) && defined(CONFIG_SCHED_CHILD_STATUS)
+  /* Handle a special case.  Retention of child status is suppressed if
+   * signo == SIGCHLD and sa_flags has SA_NOCLDWAIT, or if the action is
+   * SIG_IGN (XSI).  Any other action for SIGCHLD retains it again.
+   *
+   * POSIX.1 leaves it unspecified whether a SIGCHLD signal is generated
+   * when a child process terminates.  In NuttX, a SIGCHLD signal is
+   * generated in this case; but in some other implementations, it may not
+   * be.
+   */
+
+  if (signo == SIGCHLD)
+    {
+      bool nocldwait = (act->sa_flags & SA_NOCLDWAIT) != 0;
+
+#ifdef CONFIG_SIG_DEFAULT
+      /* Without CONFIG_SIG_DEFAULT, SIG_IGN is also SIG_DFL */
+
+      if (act->sa_handler == SIG_IGN)
+        {
+          nocldwait = true;
+        }
+#endif
+
+      /* We do require a critical section to muck with the TCB values that
+       * can be modified by the child thread.
+       */
+
+      flags = enter_critical_section();
+
+      if (nocldwait)
+        {
+          /* Mark that status should be not be retained */
+
+          group->tg_flags |= GROUP_FLAG_NOCLDWAIT;
+
+          /* Free all pending exit status */
+
+          group_remove_children(group);
+        }
+      else
+        {
+          group->tg_flags &= ~GROUP_FLAG_NOCLDWAIT;
+        }
+
+      leave_critical_section(flags);
+    }
+#endif
+
   return OK;
 }
 
@@ -426,6 +522,80 @@ int sigaction(int signo, FAR const struct sigaction *act,
 }
 
 /****************************************************************************
+ * Name: nxsig_dupactions
+ *
+ * Description:
+ *   Give a new task group (the child of fork() or vfork()) a copy of the
+ *   signal actions of the group of its parent: the signal handlers, and
+ *   the signals that have the default action.  The signals that the
+ *   parent ignores have no action, so the child ignores them too.
+ *
+ * Input Parameters:
+ *   group  - The new task group.  It has no signal actions yet.
+ *   parent - The task group of the parent.
+ *
+ ****************************************************************************/
+
+void nxsig_dupactions(FAR struct task_group_s *group,
+                      FAR struct task_group_s *parent)
+{
+  FAR sigactq_t *sigact;
+  FAR sigactq_t *copy;
+  irqstate_t flags;
+  int i;
+  int n;
+
+  /* Copy one action at a time: an allocation cannot be made while the
+   * list of the parent is locked, and another thread of the parent can
+   * change the list meanwhile.
+   */
+
+  for (i = 0; ; i++)
+    {
+      copy = nxsig_alloc_action();
+
+      flags = spin_lock_irqsave(&parent->tg_lock);
+      for (sigact = (FAR sigactq_t *)parent->tg_sigactionq.head, n = 0;
+           sigact != NULL && n < i;
+           sigact = sigact->flink, n++);
+
+      if (sigact != NULL)
+        {
+          copy->signo = sigact->signo;
+          copy->act   = sigact->act;
+        }
+
+      spin_unlock_irqrestore(&parent->tg_lock, flags);
+
+      if (sigact == NULL)
+        {
+          nxsig_release_action(copy);
+          break;
+        }
+
+      flags = spin_lock_irqsave(&group->tg_lock);
+      sq_addlast((FAR sq_entry_t *)copy, &group->tg_sigactionq);
+      spin_unlock_irqrestore(&group->tg_lock, flags);
+    }
+
+#ifdef CONFIG_SIG_DEFAULT
+  flags = spin_lock_irqsave(&parent->tg_lock);
+  group->tg_sigdefault = parent->tg_sigdefault;
+  spin_unlock_irqrestore(&parent->tg_lock, flags);
+#endif
+
+#if defined(CONFIG_SCHED_HAVE_PARENT) && defined(CONFIG_SCHED_CHILD_STATUS)
+  /* SA_NOCLDWAIT (or SIGCHLD set to SIG_IGN) is part of the action of
+   * SIGCHLD: the child does not keep the status of its children either.
+   */
+
+  flags = enter_critical_section();
+  group->tg_flags |= parent->tg_flags & GROUP_FLAG_NOCLDWAIT;
+  leave_critical_section(flags);
+#endif
+}
+
+/****************************************************************************
  * Name: nxsig_release_action
  *
  * Description:
@@ -441,9 +611,9 @@ void nxsig_release_action(FAR sigactq_t *sigact)
     {
       /* Non-preallocated instances will never return to heap! */
 
-      flags = spin_lock_irqsave(&g_sigaction_spin);
+      flags = spin_lock_irqsave(&g_sigspinlock);
       sq_addlast((FAR sq_entry_t *)sigact, &g_sigfreeaction);
-      spin_unlock_irqrestore(&g_sigaction_spin, flags);
+      spin_unlock_irqrestore(&g_sigspinlock, flags);
     }
   else
     {

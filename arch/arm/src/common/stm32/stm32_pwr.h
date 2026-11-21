@@ -56,13 +56,9 @@ enum stm32_pwr_wupin_e
  * Public Function Prototypes
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -124,7 +120,11 @@ void stm32_pwr_initbkp(bool writable);
  *
  ****************************************************************************/
 
+#ifdef CONFIG_STM32_HAVE_IP_PWR_M33_V1
+bool stm32_pwr_enablebkp(bool writable);
+#else
 void stm32_pwr_enablebkp(bool writable);
+#endif
 
 /****************************************************************************
  * Name: stm32_pwr_enablewkup
@@ -277,7 +277,6 @@ void stm32_pwr_disablepvd(void);
 
 #endif /* CONFIG_STM32_ENERGYLITE */
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

@@ -1,11 +1,11 @@
 /****************************************************************************
  * arch/arm/src/s32k3xx/s32k3xx_edma.h
  *
- *   Copyright (C) 2019, 2021, 2023 Gregory Nutt. All rights reserved.
- *   Copyright 2022 NXP
- *   Authors: Gregory Nutt <gnutt@nuttx.org>
- *            David Sidrane <david.sidrane@nscdg.com>
- *            Peter van der Perk <peter.vanderperk@nxp.com>
+ * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-FileCopyrightText: Copyright 2019, 2021, 2023 Gregory Nutt
+ * SPDX-FileCopyrightText: Copyright 2022 NXP
+ * SPDX-FileCopyrightText: Copyright 2016-2017 NXP
+ * SPDX-FileCopyrightText: Copyright 2015, Freescale Semiconductor, Inc.
  *
  * This file was leveraged from the NuttX S32K1 port.  Portions of that eDMA
  * logic derived from NXP sample code which has a compatible BSD 3-clause
@@ -247,13 +247,9 @@ struct s32k3xx_dmaregs_s
  * Public Data
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -473,7 +469,6 @@ void s32k3xx_dmadump(const struct s32k3xx_dmaregs_s *regs, const char *msg);
 #  define s32k3xx_dmadump(handle,regs,msg)
 #endif
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

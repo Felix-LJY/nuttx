@@ -29,6 +29,90 @@
 
 #include <nuttx/config.h>
 
+/* NUTTX_NO_EXTENSIONS (see the end of this file) needs "#pragma
+ * push_macro": clang, or GCC 4.4 or later (not Green Hills).  Save the
+ * program's own definitions of the helper names that this file defines
+ * and removes at its end, so that they are restored there.
+ */
+
+#ifdef NUTTX_NO_EXTENSIONS
+#  if !defined(__clang__) && \
+      (!defined(__GNUC__) || defined(__ghs__) || __GNUC__ < 4 || \
+       (__GNUC__ == 4 && __GNUC_MINOR__ < 4))
+#    error "NUTTX_NO_EXTENSIONS needs clang, or GCC 4.4 or later"
+#  endif
+#  pragma push_macro("weak_alias")
+#  undef weak_alias
+#  pragma push_macro("visibility_hidden")
+#  undef visibility_hidden
+#  pragma push_macro("visibility_default")
+#  undef visibility_default
+#  pragma push_macro("unused_data")
+#  undef unused_data
+#  pragma push_macro("PRAGMA")
+#  undef PRAGMA
+#  pragma push_macro("unroll_loop")
+#  undef unroll_loop
+#  pragma push_macro("weak_data")
+#  undef weak_data
+#  pragma push_macro("weak_function")
+#  undef weak_function
+#  pragma push_macro("weak_const_function")
+#  undef weak_const_function
+#  pragma push_macro("pure_function")
+#  undef pure_function
+#  pragma push_macro("const_function")
+#  undef const_function
+#  pragma push_macro("farcall_function")
+#  undef farcall_function
+#  pragma push_macro("compiler_assume")
+#  undef compiler_assume
+#  pragma push_macro("locate_code")
+#  undef locate_code
+#  pragma push_macro("reentrant_function")
+#  undef reentrant_function
+#  pragma push_macro("naked_function")
+#  undef naked_function
+#  pragma push_macro("always_inline_function")
+#  undef always_inline_function
+#  pragma push_macro("noinline_function")
+#  undef noinline_function
+#  pragma push_macro("noprofile_function")
+#  undef noprofile_function
+#  pragma push_macro("nooptimiziation_function")
+#  undef nooptimiziation_function
+#  pragma push_macro("nosanitize_address")
+#  undef nosanitize_address
+#  pragma push_macro("nosanitize_undefined")
+#  undef nosanitize_undefined
+#  pragma push_macro("nostackprotect_function")
+#  undef nostackprotect_function
+#  pragma push_macro("constructor_fuction")
+#  undef constructor_fuction
+#  pragma push_macro("destructor_function")
+#  undef destructor_function
+#  pragma push_macro("tz_nonsecure_entry")
+#  undef tz_nonsecure_entry
+#  pragma push_macro("tz_nonsecure_call")
+#  undef tz_nonsecure_call
+#  pragma push_macro("deprecated_function")
+#  undef deprecated_function
+#  pragma push_macro("osentry_function")
+#  undef osentry_function
+#  pragma push_macro("memory_barrier")
+#  undef memory_barrier
+#  pragma push_macro("UNUSED")
+#  undef UNUSED
+#  pragma push_macro("predict_true")
+#  undef predict_true
+#  pragma push_macro("is_constexpr")
+#  undef is_constexpr
+#  pragma push_macro("used_data")
+#  undef used_data
+#  pragma push_macro("object_size")
+#  undef object_size
+#endif
+
 /****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
@@ -115,6 +199,17 @@
 #    define CONFIG_HAVE_BUILTIN_FFS 1
 #    define CONFIG_HAVE_BUILTIN_FFSL 1
 #    define CONFIG_HAVE_BUILTIN_FFSLL 1
+#    define CONFIG_HAVE_BUILTIN_NAN 1
+#  endif
+
+  /* An __asm__ label carries __USER_LABEL_PREFIX__ ("_" on RH850 and RX) */
+
+#  ifdef __USER_LABEL_PREFIX__
+#    define __asm_symbol_str(x)  #x
+#    define __asm_symbol_xstr(x) __asm_symbol_str(x)
+#    define __asm_symbol(fn)     __asm_symbol_xstr(__USER_LABEL_PREFIX__) #fn
+#  else
+#    define __asm_symbol(fn)     #fn
 #  endif
 
 #  if CONFIG_FORTIFY_SOURCE > 0
@@ -139,13 +234,16 @@
 #    if !defined(__clang__)
 #      define fortify_va_arg_pack __builtin_va_arg_pack
 #    endif
-#    define fortify_real(fn) __typeof__(fn) __real_##fn __asm__(#fn)
+#    define fortify_real(fn) __typeof__(fn) __real_##fn \
+                             __asm__(__asm_symbol(fn))
 #    define fortify_function(fn) fortify_real(fn); \
                                  extern __inline__ no_builtin(#fn) \
                                  __attribute__((__always_inline__, \
                                                 __gnu_inline__, __artificial__))
-#  elif defined(__OPTIMIZE__) && __OPTIMIZE__ > 0 && defined(__has_builtin)
-#    define builtin_original(fn)  __typeof__(fn)  __orig_##fn __asm__(#fn)
+#  elif defined(__OPTIMIZE__) && __OPTIMIZE__ > 0 && \
+         defined(__has_builtin) && !defined(NUTTX_NO_EXTENSIONS)
+#    define builtin_original(fn)  __typeof__(fn)  __orig_##fn \
+                                  __asm__(__asm_symbol(fn))
 #    define builtin_function(fn)  builtin_original(fn); \
                                   extern __inline__ no_builtin(#fn) \
                                   __attribute__((__always_inline__, \
@@ -1054,7 +1152,7 @@
 #  define const_function
 #  define predict_true(x) (x)
 #  define predict_false(x) (x)
-#  define is_constexpr(x)  (0)
+#  define is_constexpr(x) __builtin_constant_p(x)
 #  define compiler_assume(x)
 #  define locate_code(n)
 #  define aligned_data(n)
@@ -1290,11 +1388,21 @@
 
 #elif defined(__TASKING__)
 
+/* Map the GCC keyword spellings: the TASKING VX-toolset accepts
+ * __asm, asm and the __asm volatile sequence, but neither __asm__
+ * nor __volatile__ nor the asm volatile sequence, so redirect the
+ * double underscore spellings to __asm and plain volatile.
+ */
+
+#  define __asm__       __asm
+#  define __volatile__  volatile
+
 /* Define these here and allow specific architectures to override as needed */
 
 #  define CONFIG_HAVE_FLOAT             1
 #  define CONFIG_HAVE_DOUBLE            1
 #  define CONFIG_HAVE_LONG_DOUBLE       1
+#  define LDBL_MANT_DIG                 53
 
 /* Pre-processor */
 
@@ -1318,7 +1426,7 @@
 #  define const_function
 #  define predict_true(x) (x)
 #  define predict_false(x) (x)
-#  define is_constexpr(x)  (0)
+#  define is_constexpr(x)               __builtin_constant_p(x)
 #  define compiler_assume(x)
 #  define aligned_data(n)               __attribute__((aligned(n)))
 #  define locate_code(n)                __attribute__((section(n)))
@@ -1396,16 +1504,16 @@
 #    define atomic_store_8(obj, val, memorder)     __c11_atomic_store(obj, val, memorder)
 #    define atomic_load_4(obj, memorder)           __c11_atomic_load(obj, memorder)
 #    define atomic_load_8(obj, memorder)           __c11_atomic_load(obj, memorder)
-#    define atomic_fetch_add_4(obj, val, memorder) __c11_atomic_add(obj, val, memorder)
-#    define atomic_fetch_add_8(obj, val, memorder) __c11_atomic_add(obj, val, memorder)
-#    define atomic_fetch_sub_4(obj, val, memorder) __c11_atomic_sub(obj, val, memorder)
-#    define atomic_fetch_sub_8(obj, val, memorder) __c11_atomic_sub(obj, val, memorder)
-#    define atomic_fetch_and_4(obj, val, memorder) __c11_atomic_and(obj, val, memorder)
-#    define atomic_fetch_and_8(obj, val, memorder) __c11_atomic_and(obj, val, memorder)
-#    define atomic_fetch_or_4(obj, val, memorder)  __c11_atomic_or(obj, val, memorder)
-#    define atomic_fetch_or_8(obj, val, memorder)  __c11_atomic_or(obj, val, memorder)
-#    define atomic_fetch_xor_4(obj, val, memorder) __c11_atomic_xor(obj, val, memorder)
-#    define atomic_fetch_xor_8(obj, val, memorder) __c11_atomic_xor(obj, val, memorder)
+#    define atomic_fetch_add_4(obj, val, memorder) __c11_atomic_fetch_add(obj, val, memorder)
+#    define atomic_fetch_add_8(obj, val, memorder) __c11_atomic_fetch_add(obj, val, memorder)
+#    define atomic_fetch_sub_4(obj, val, memorder) __c11_atomic_fetch_sub(obj, val, memorder)
+#    define atomic_fetch_sub_8(obj, val, memorder) __c11_atomic_fetch_sub(obj, val, memorder)
+#    define atomic_fetch_and_4(obj, val, memorder) __c11_atomic_fetch_and(obj, val, memorder)
+#    define atomic_fetch_and_8(obj, val, memorder) __c11_atomic_fetch_and(obj, val, memorder)
+#    define atomic_fetch_or_4(obj, val, memorder)  __c11_atomic_fetch_or(obj, val, memorder)
+#    define atomic_fetch_or_8(obj, val, memorder)  __c11_atomic_fetch_or(obj, val, memorder)
+#    define atomic_fetch_xor_4(obj, val, memorder) __c11_atomic_fetch_xor(obj, val, memorder)
+#    define atomic_fetch_xor_8(obj, val, memorder) __c11_atomic_fetch_xor(obj, val, memorder)
 #    define atomic_exchange_4(obj, val, memorder)  __c11_atomic_exchange(obj, val, memorder)
 #    define atomic_exchange_8(obj, val, memorder)  __c11_atomic_exchange(obj, val, memorder)
 #    define atomic_compare_exchange_4(obj, expected, desired, weak, success, failure) \
@@ -1534,6 +1642,106 @@
 #  define __has_include(x) 0
 #endif
 
+#ifndef __has_feature
+#  define __has_feature(x) 0
+#endif
+
+#ifndef __has_extension
+#  define __has_extension(x) 0
+#endif
+
+#ifndef __has_keyword
+#  define __has_keyword(x) 0
+#endif
+
+/* A program can define NUTTX_NO_EXTENSIONS before the first #include to
+ * keep some non-standard names free for its own use.  Then the headers do
+ * not define ERROR and OK (sys/types.h), set_errno() and get_errno()
+ * (errno.h), zalloc() (stdlib.h), O_TEXT and O_BINARY (fcntl.h), utimens()
+ * and lutimens() (sys/stat.h), the file system types *_MAGIC
+ * (sys/statfs.h), PANIC(), PANIC_WITH_REGS(), ASSERT(), VERIFY(),
+ * COMPILE_TIME_ASSERT() and BUILD_BUG_ON_ZERO() (assert.h), crypt_r()
+ * (unistd.h), the types unchar and s_char (sys/types.h),
+ * builtin_function() and builtin_original() (above: string.h then declares
+ * the plain functions) and the helper macros of this file below, such as
+ * memory_barrier(), UNUSED() and object_size().  The headers that a
+ * program includes do not use these names.  A definition that the program
+ * made before is restored (saved at the start of this file).
+ */
+
+#ifdef NUTTX_NO_EXTENSIONS
+#  undef weak_alias
+#  undef visibility_hidden
+#  undef visibility_default
+#  undef unused_data
+#  undef PRAGMA
+#  undef unroll_loop
+#  undef weak_data
+#  undef weak_function
+#  undef weak_const_function
+#  undef pure_function
+#  undef const_function
+#  undef farcall_function
+#  undef compiler_assume
+#  undef locate_code
+#  undef reentrant_function
+#  undef naked_function
+#  undef always_inline_function
+#  undef noinline_function
+#  undef noprofile_function
+#  undef nooptimiziation_function
+#  undef nosanitize_address
+#  undef nosanitize_undefined
+#  undef nostackprotect_function
+#  undef constructor_fuction
+#  undef destructor_function
+#  undef tz_nonsecure_entry
+#  undef tz_nonsecure_call
+#  undef deprecated_function
+#  undef osentry_function
+#  undef memory_barrier
+#  undef UNUSED
+#  undef predict_true
+#  undef is_constexpr
+#  undef used_data
+#  undef object_size
+#  pragma pop_macro("weak_alias")
+#  pragma pop_macro("visibility_hidden")
+#  pragma pop_macro("visibility_default")
+#  pragma pop_macro("unused_data")
+#  pragma pop_macro("PRAGMA")
+#  pragma pop_macro("unroll_loop")
+#  pragma pop_macro("weak_data")
+#  pragma pop_macro("weak_function")
+#  pragma pop_macro("weak_const_function")
+#  pragma pop_macro("pure_function")
+#  pragma pop_macro("const_function")
+#  pragma pop_macro("farcall_function")
+#  pragma pop_macro("compiler_assume")
+#  pragma pop_macro("locate_code")
+#  pragma pop_macro("reentrant_function")
+#  pragma pop_macro("naked_function")
+#  pragma pop_macro("always_inline_function")
+#  pragma pop_macro("noinline_function")
+#  pragma pop_macro("noprofile_function")
+#  pragma pop_macro("nooptimiziation_function")
+#  pragma pop_macro("nosanitize_address")
+#  pragma pop_macro("nosanitize_undefined")
+#  pragma pop_macro("nostackprotect_function")
+#  pragma pop_macro("constructor_fuction")
+#  pragma pop_macro("destructor_function")
+#  pragma pop_macro("tz_nonsecure_entry")
+#  pragma pop_macro("tz_nonsecure_call")
+#  pragma pop_macro("deprecated_function")
+#  pragma pop_macro("osentry_function")
+#  pragma pop_macro("memory_barrier")
+#  pragma pop_macro("UNUSED")
+#  pragma pop_macro("predict_true")
+#  pragma pop_macro("is_constexpr")
+#  pragma pop_macro("used_data")
+#  pragma pop_macro("object_size")
+#endif
+
 /****************************************************************************
  * Public Function Prototypes
  ****************************************************************************/
@@ -1543,14 +1751,10 @@
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

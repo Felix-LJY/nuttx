@@ -43,22 +43,6 @@
 #include "sched/sched.h"
 
 /****************************************************************************
- * Pre-processor Definitions
- ****************************************************************************/
-
-#ifdef CONFIG_LIB_SYSCALL
-
-/* Requested privilege level 3 in a segment selector.  A caller that reached
- * here through the `syscall' instruction was in user mode, and SYSRETQ is
- * going to put it back there with the selectors IA32_STAR describes -- see
- * x86_64_fork_syscall().
- */
-
-#  define X86_GDT_RPL_USER 3
-
-#endif
-
-/****************************************************************************
  * Private Functions
  ****************************************************************************/
 
@@ -67,9 +51,10 @@
  *
  * Description:
  *   The high end of the part of a task's stack that a fork copies:  the
- *   bottom of the register save area that up_initial_state() reserved at the
- *   very top of the stack.  The save area itself is not stack and must not
- *   be copied over -- it is where the child's own resume frame is built.
+ *   top of the stack of a task with a kernel stack, else the bottom of the
+ *   register save area that up_initial_state() reserved at the very top of
+ *   the stack.  The save area itself is not stack and must not be copied
+ *   over -- it is where the child's own resume frame is built.
  *
  * Input Parameters:
  *   tcb - The task whose stack is in question
@@ -81,6 +66,16 @@
 
 static uint64_t x86_64_fork_stacktop(struct tcb_s *tcb)
 {
+#ifdef CONFIG_ARCH_KERNEL_STACK
+  /* The register area is on the kernel stack: copy up to the top */
+
+  if (tcb->xcp.kstack != NULL)
+    {
+      return ((uintptr_t)tcb->stack_base_ptr + tcb->adj_stack_size) &
+             ~(uint64_t)15;
+    }
+#endif
+
   return (uint64_t)XCP_ALIGN_DOWN((uintptr_t)tcb->stack_base_ptr +
                                   tcb->adj_stack_size - XCPTCONTEXT_SIZE);
 }
@@ -399,7 +394,17 @@ static pid_t x86_64_fork_syscall(bool vfork, struct tcb_s *parent)
   newsp  = newtop - stackutil;
   offset = newtop - stacktop;
 
-  memcpy((void *)newsp, (const void *)rsp, stackutil);
+  /* A zero offset means the child is running on the parent's stack
+   * addresses:  a fork() child, which inherited them and whose duplicated
+   * address environment already holds a copy of the contents.  There is then
+   * nothing to copy -- source and destination would be the same region --
+   * and nothing to relocate.
+   */
+
+  if (offset != 0)
+    {
+      memcpy((void *)newsp, (const void *)rsp, stackutil);
+    }
 
   sinfo("Old stack top:%08" PRIx64 " RSP:%08" PRIx64 "\n", stacktop, rsp);
   sinfo("New stack top:%08" PRIx64 " RSP:%08" PRIx64 "\n", newtop, newsp);
@@ -430,11 +435,19 @@ static pid_t x86_64_fork_syscall(bool vfork, struct tcb_s *parent)
   child->xcp.regs[REG_RSI] = sregs[REG_RSI];
   child->xcp.regs[REG_RDI] = sregs[REG_RDI];
 
-  /* The frame pointer moves with the stack it points into */
+  /* The frame pointer moves with the stack it points into.  With a zero
+   * offset it does not move at all, and neither does the saved chain it
+   * heads:  see the note above the copy.
+   */
 
-  child->xcp.regs[REG_RBP] = x86_64_fork_reloc(sregs[REG_RBP], rsp,
-                                               stacktop, offset);
-  x86_64_fork_relocfp(sregs[REG_RBP], rsp, stacktop, offset);
+  child->xcp.regs[REG_RBP] = sregs[REG_RBP];
+
+  if (offset != 0)
+    {
+      child->xcp.regs[REG_RBP] = x86_64_fork_reloc(sregs[REG_RBP], rsp,
+                                                   stacktop, offset);
+      x86_64_fork_relocfp(sregs[REG_RBP], rsp, stacktop, offset);
+    }
 
   /* Build the interrupt frame the child is resumed from.  RIP and RFLAGS
    * come out of RCX and R11, and the selectors are the ones SYSRETQ derives

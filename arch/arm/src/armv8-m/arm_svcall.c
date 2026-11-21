@@ -30,6 +30,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <assert.h>
+#include <errno.h>
 #include <nuttx/debug.h>
 #include <syscall.h>
 
@@ -176,7 +177,8 @@ int arm_svcall(int irq, void *context, void *arg)
 
           /* Return unprivileged mode */
 
-          regs[REG_CONTROL]    = getcontrol() | CONTROL_NPRIV;
+          regs[REG_CONTROL]    = getcontrol() | CONTROL_NPRIV |
+                                 CONTROL_PACBTI_MASK;
 
           /* Change the parameter ordering to match the expectation of struct
            * userpace_s task_startup:
@@ -214,7 +216,8 @@ int arm_svcall(int irq, void *context, void *arg)
 
           /* Return unprivileged mode */
 
-          regs[REG_CONTROL]    = getcontrol() | CONTROL_NPRIV;
+          regs[REG_CONTROL]    = getcontrol() | CONTROL_NPRIV |
+                                 CONTROL_PACBTI_MASK;
 
           /* Change the parameter ordering to match the expectation of the
            * user space pthread_startup:
@@ -259,7 +262,8 @@ int arm_svcall(int irq, void *context, void *arg)
 
           /* Return unprivileged mode */
 
-          regs[REG_CONTROL]    = getcontrol() | CONTROL_NPRIV;
+          regs[REG_CONTROL]    = getcontrol() | CONTROL_NPRIV |
+                                 CONTROL_PACBTI_MASK;
 
           /* Change the parameter ordering to match the expectation of struct
            * userpace_s signal_handler.
@@ -296,7 +300,8 @@ int arm_svcall(int irq, void *context, void *arg)
 
           /* Return privileged mode */
 
-          regs[REG_CONTROL]    = getcontrol() & ~CONTROL_NPRIV;
+          regs[REG_CONTROL]    = (getcontrol() & ~CONTROL_NPRIV) |
+                                 CONTROL_PACBTI_MASK;
           rtcb->xcp.sigreturn  = 0;
         }
         break;
@@ -313,15 +318,12 @@ int arm_svcall(int irq, void *context, void *arg)
           struct tcb_s *rtcb = this_task();
           int index = rtcb->xcp.nsyscalls;
 
-          /* Verify that the SYS call number is within range */
-
-          DEBUGASSERT(cmd >= CONFIG_SYS_RESERVED && cmd < SYS_maxsyscall);
-
-          /* Make sure that there is a no saved syscall return address.  We
-           * cannot yet handle nested system calls.
-           */
-
-          DEBUGASSERT(index < CONFIG_SYS_NNEST);
+          if (cmd < CONFIG_SYS_RESERVED || cmd >= SYS_maxsyscall ||
+              index >= CONFIG_SYS_NNEST)
+            {
+              regs[REG_R0] = -ENOSYS;
+              break;
+            }
 
           /* Use ip to create a debug frame.
            * we can use gdb backtrace from syscall to user space.
@@ -341,7 +343,8 @@ int arm_svcall(int irq, void *context, void *arg)
 
           /* Return privileged mode */
 
-          regs[REG_CONTROL]    = getcontrol() & ~CONTROL_NPRIV;
+          regs[REG_CONTROL]    = (getcontrol() & ~CONTROL_NPRIV) |
+                                 CONTROL_PACBTI_MASK;
 
           /* Offset R0 to account for the reserved values */
 

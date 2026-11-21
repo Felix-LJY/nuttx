@@ -33,7 +33,7 @@
 #include "chip.h"
 
 #if defined(CONFIG_STM32_STM32U585XX) || defined(CONFIG_STM32_STM32U5A5XX)
-#  include "hardware/stm32u5xx_rcc.h"
+#  include "hardware/stm32_rcc.h"
 #else
 #  error "Unsupported STM32U5 chip"
 #endif
@@ -70,13 +70,9 @@
 
 #ifndef __ASSEMBLY__
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -242,7 +238,6 @@ void stm32_rcc_disablelsi(void);
 
 void stm32_rcc_enableperipherals(void);
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

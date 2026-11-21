@@ -26,6 +26,7 @@
 
 #include <nuttx/config.h>
 
+#include <errno.h>
 #include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
@@ -42,6 +43,10 @@
  * Description:
  *   Given the directory path from dirfd.
  *
+ * Returned Value:
+ *   Zero on success.  -EINVAL if path or fullpath is NULL.  -ENOENT if
+ *   path is an empty string.
+ *
  ****************************************************************************/
 
 int lib_getfullpath(int dirfd, FAR const char *path,
@@ -50,6 +55,12 @@ int lib_getfullpath(int dirfd, FAR const char *path,
   if (path == NULL || fullpath == NULL)
     {
       return -EINVAL;
+    }
+  else if (path[0] == '\0')
+    {
+      /* An empty path names no file.  It does not name dirfd. */
+
+      return -ENOENT;
     }
   else if (path[0] == '/')
     {
@@ -86,11 +97,12 @@ int lib_getfullpath(int dirfd, FAR const char *path,
       /* Get real directory path by dirfd */
 
       ret = fcntl(dirfd, F_GETPATH, fullpath);
-      if (ret >= 0)
+      if (ret < 0)
         {
-          strlcat(fullpath, path, fulllen);
+          return -get_errno();
         }
 
+      strlcat(fullpath, path, fulllen);
       return 0;
     }
 }

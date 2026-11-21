@@ -164,11 +164,11 @@ struct tsc2007_dev_s
   struct tsc2007_sample_s sample;      /* Last sampled touch point data */
 
   /* The following is a list if poll structures of threads waiting for
-   * driver events. The 'struct pollfd' reference for each open is also
+   * driver events. The 'struct pollfd_s' reference for each open is also
    * retained in the f_priv field of the 'struct file'.
    */
 
-  FAR struct pollfd *fds[CONFIG_TSC2007_NPOLLWAITERS];
+  FAR struct pollfd_s *fds[CONFIG_TSC2007_NPOLLWAITERS];
 };
 
 /****************************************************************************
@@ -194,7 +194,7 @@ static int tsc2007_close(FAR struct file *filep);
 static ssize_t tsc2007_read(FAR struct file *filep, FAR char *buffer,
                             size_t len);
 static int tsc2007_ioctl(FAR struct file *filep, int cmd, unsigned long arg);
-static int tsc2007_poll(FAR struct file *filep, FAR struct pollfd *fds,
+static int tsc2007_poll(FAR struct file *filep, FAR struct pollfd_s *fds,
                         bool setup);
 
 /****************************************************************************
@@ -634,7 +634,7 @@ static void tsc2007_worker(FAR void *arg)
 
       /* Power down ADC and enable PENIRQ */
 
-     tsc2007_transfer(priv, TSC2007_ENABLE_PENIRQ);
+      tsc2007_transfer(priv, TSC2007_ENABLE_PENIRQ);
 
       /* Now calculate the pressure using the first method, reduced to:
        *
@@ -696,7 +696,7 @@ static void tsc2007_worker(FAR void *arg)
        * after the loss of contact is sampled.
        */
 
-       priv->sample.contact = CONTACT_UP;
+      priv->sample.contact = CONTACT_UP;
     }
 
   /* Indicate the availability of new sample data for this ID */
@@ -1023,6 +1023,7 @@ static int tsc2007_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
       case TSIOC_SETXRCAL:  /* arg: Pointer to int calibration value */
         {
           FAR int *ptr = (FAR int *)((uintptr_t)arg);
+
           DEBUGASSERT(priv->config != NULL && ptr != NULL);
           priv->config->rxplate = *ptr;
         }
@@ -1031,6 +1032,7 @@ static int tsc2007_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
       case TSIOC_GETXRCAL:  /* arg: Pointer to int calibration value */
         {
           FAR int *ptr = (FAR int *)((uintptr_t)arg);
+
           DEBUGASSERT(priv->config != NULL && ptr != NULL);
           *ptr = priv->config->rxplate;
         }
@@ -1039,6 +1041,7 @@ static int tsc2007_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
       case TSIOC_SETFREQUENCY:  /* arg: Pointer to uint32_t frequency value */
         {
           FAR uint32_t *ptr = (FAR uint32_t *)((uintptr_t)arg);
+
           DEBUGASSERT(priv->config != NULL && ptr != NULL);
           priv->config->frequency = *ptr;
         }
@@ -1047,6 +1050,7 @@ static int tsc2007_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
       case TSIOC_GETFREQUENCY:  /* arg: Pointer to uint32_t frequency value */
         {
           FAR uint32_t *ptr = (FAR uint32_t *)((uintptr_t)arg);
+
           DEBUGASSERT(priv->config != NULL && ptr != NULL);
           *ptr = priv->config->frequency;
         }
@@ -1065,7 +1069,7 @@ static int tsc2007_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
  * Name: tsc2007_poll
  ****************************************************************************/
 
-static int tsc2007_poll(FAR struct file *filep, FAR struct pollfd *fds,
+static int tsc2007_poll(FAR struct file *filep, FAR struct pollfd_s *fds,
                         bool setup)
 {
   FAR struct inode         *inode;
@@ -1138,7 +1142,8 @@ static int tsc2007_poll(FAR struct file *filep, FAR struct pollfd *fds,
     {
       /* This is a request to tear down the poll. */
 
-      FAR struct pollfd **slot = (FAR struct pollfd **)fds->priv;
+      FAR struct pollfd_s **slot = (FAR struct pollfd_s **)fds->priv;
+
       DEBUGASSERT(slot != NULL);
 
       /* Remove all memory of the poll setup */

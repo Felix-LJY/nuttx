@@ -42,16 +42,38 @@
 /* IEEE 802.15.4 constants */
 
 #define IEEE802154_MAX_FRAME_WAITTIME (16 + 32 + 4064)
-#define IEEE802154_MAX_CSMA_BACKOFFS  (1)
+#define IEEE802154_MAX_CSMA_BACKOFFS  (4)
 #define IEEE802154_MIN_BE             (3)
 #define IEEE802154_MAX_BE             (5)
 #define IEEE802154_CW0                (2)
 
-/* ACK_SYM + turnaround symbols + backoff */
+/* macAckWaitDuration: aUnitBackoffPeriod + aTurnaroundTime +
+ * phySHRDuration (10) + ceiling(6 * phySymbolsPerOctet (2)), in symbols
+ * (IEEE 802.15.4-2011 6.4.3)
+ */
 
-#define IEEE802154_ACK_WAIT           (12+                              \
-                                       IEEE802154_TURN_AROUND_TIME+     \
-                                       IEEE802154_UNIT_BACKOFF_PERIOD)
+#define IEEE802154_ACK_WAIT           (IEEE802154_UNIT_BACKOFF_PERIOD + \
+                                       IEEE802154_TURN_AROUND_TIME +    \
+                                       10 + 12)
+
+/* RADIO ramp-up time in fast ramp-up mode */
+
+#define NRF52_RADIOI8_RAMPUP_US       (40)
+
+/* Latency from the last bit on air to the RADIO PHYEND event */
+
+#define NRF52_RADIOI8_PHYEND_US       (23)
+
+/* Air time of a frame with the given PHR: SHR, PHR and PSDU, 32 us/octet */
+
+#define NRF52_RADIOI8_FRAME_US(phr)   (((phr) + 6) * 2 * IEEE802154_SYMBOL_US)
+
+/* IFS after a frame with the given PHR */
+
+#define NRF52_RADIOI8_IFS_US(phr)                       \
+  (((phr) > IEEE802154_MAX_SIFS_FRAME_SIZE ?            \
+    IEEE802154_LIFS_SYMBOLS : IEEE802154_SIFS_SYMBOLS) * \
+   IEEE802154_SYMBOL_US)
 
 /****************************************************************************
  * Public Types
@@ -68,6 +90,7 @@ enum nrf52_radioi8_state_e
   NRF52_RADIO_STATE_RX,            /* RX active */
   NRF52_RADIO_STATE_ACKTX,         /* Transmitting ACK now */
   NRF52_RADIO_STATE_ED,            /* Energy detection now */
+  NRF52_RADIO_STATE_BEACONTX,      /* Transmitting beacon now */
 };
 
 /* Radio data */
@@ -88,14 +111,17 @@ struct nrf52_radioi8_radio_data_s
 
   bool     rxenabled;           /* RX enabled now */
   bool     rxrestore;           /* RX needs to be restored */
+  bool     edrestore;           /* RX needs to be restored after ED */
   bool     rxlong;              /* Last RX frame was long */
 
   /* TX state */
 
   bool     waitack;             /* TX needs ACK */
   bool     framepending;        /* Frame pending from the last TX ACK */
-  bool     csma_busy;           /* Un-slotted CSMA busy */
+  bool     csma_busy;           /* CSMA-CA transaction in progress */
+  bool     csma_paused;         /* Slotted CSMA-CA waits for the next CAP */
   bool     slotted;             /* Slotted CSMA-CA */
+  uint8_t  bsn;                 /* macBSN, the beacon sequence number */
 
   /* Radio configuration */
 
@@ -107,8 +133,11 @@ struct nrf52_radioi8_radio_data_s
 #ifdef CONFIG_NRF52_RADIO_IEEE802154_SUPERFRAME
   /* Superframe data */
 
-  bool    wait_for_beacon;      /* Device wait for beacon */
-  bool    ble;                  /* Batter life extension */
+  bool     sftrack;             /* Device tracks the beacons */
+  bool     ble;                 /* Battery life extension */
+  bool     beacon_pending;      /* A beacon waits for the radio */
+  uint8_t  backoffs;            /* Backoff periods before the next CCA */
+  uint32_t boundary;            /* Backoff period boundary of the next step */
 #endif
 };
 
@@ -123,10 +152,6 @@ struct ieee802154_cca_s;
 
 struct nrf52_radioi8_radio_ops_s
 {
-  /* Start transmission - TX must be armed (TXEN set) */
-
-  void (*txstart)(struct nrf52_radioi8_dev_s *dev);
-
   /* Start CCA - RX must be armed (RXEN set) */
 
   void (*ccastart)(struct nrf52_radioi8_dev_s *dev);
@@ -160,6 +185,10 @@ struct nrf52_radioi8_radio_ops_s
   /* Trigger normal transaction (non GTS) */
 
   void (*norm_trigger)(struct nrf52_radioi8_dev_s *dev);
+
+  /* Start the next frame that waits for the radio, after mindelay */
+
+  void (*txnext)(struct nrf52_radioi8_dev_s *dev, uint32_t mindelay);
 
 #ifdef CONFIG_NRF52_RADIO_IEEE802154_SUPERFRAME
   /* Setup a beacon frame transfe */

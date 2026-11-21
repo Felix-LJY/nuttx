@@ -405,7 +405,9 @@ static uint32_t sendto_eventhandler(FAR struct net_driver_s *dev,
        * the next transfer.
        */
 
+      conn_lock(&conn->sconn);
       sendto_writebuffer_release(conn, NULL);
+      conn_unlock(&conn->sconn);
       return flags;
     }
 
@@ -508,6 +510,41 @@ static uint32_t sendto_eventhandler(FAR struct net_driver_s *dev,
 }
 
 /****************************************************************************
+ * Name: sendto_map_loopback
+ *
+ * Description:
+ *   Replace 0.0.0.0 or :: in the destination of a write buffer with the
+ *   loopback address, as udp_connect() does for the connection.
+ *
+ ****************************************************************************/
+
+static void sendto_map_loopback(FAR struct sockaddr_storage *dest)
+{
+#ifdef CONFIG_NET_IPv4
+  FAR struct sockaddr_in *addr4 = (FAR struct sockaddr_in *)dest;
+#endif
+#ifdef CONFIG_NET_IPv6
+  FAR struct sockaddr_in6 *addr6 = (FAR struct sockaddr_in6 *)dest;
+#endif
+
+#ifdef CONFIG_NET_IPv4
+  if (dest->ss_family == AF_INET &&
+      net_ipv4addr_cmp(addr4->sin_addr.s_addr, INADDR_ANY))
+    {
+      net_ipv4addr_copy(addr4->sin_addr.s_addr, HTONL(INADDR_LOOPBACK));
+    }
+#endif
+
+#ifdef CONFIG_NET_IPv6
+  if (dest->ss_family == AF_INET6 &&
+      net_ipv6addr_cmp(addr6->sin6_addr.s6_addr16, g_ipv6_unspecaddr))
+    {
+      net_ipv6addr_copy(addr6->sin6_addr.s6_addr16, g_ipv6_loopback);
+    }
+#endif
+}
+
+/****************************************************************************
  * Name: udp_send_gettimeout
  *
  * Description:
@@ -585,6 +622,7 @@ ssize_t psock_udp_sendto(FAR struct socket *psock, FAR const void *buf,
 
   if (len > 65535)
     {
+      nwarn("WARNING: UDP datagram too large: %zu bytes\n", len);
       return -EMSGSIZE;
     }
 
@@ -600,6 +638,8 @@ ssize_t psock_udp_sendto(FAR struct socket *psock, FAR const void *buf,
        * already connected.
        */
 
+      nwarn("WARNING: Socket already connected, destination"
+            " address ignored\n");
       return -EISCONN;
     }
 
@@ -613,6 +653,8 @@ ssize_t psock_udp_sendto(FAR struct socket *psock, FAR const void *buf,
        * address is set.
        */
 
+      nwarn("WARNING: Destination address required for"
+            " unconnected socket\n");
       return -EDESTADDRREQ;
     }
 
@@ -648,9 +690,14 @@ ssize_t psock_udp_sendto(FAR struct socket *psock, FAR const void *buf,
           destipaddr = into->sin_addr.s_addr;
         }
 
-      /* Make sure that the IP address mapping is in the ARP table */
+      /* Make sure that the IP address mapping is in the ARP table.
+       * 0.0.0.0 goes to the loopback device, which needs none.
+       */
 
-      ret = arp_send(destipaddr);
+      if (!net_ipv4addr_cmp(destipaddr, INADDR_ANY))
+        {
+          ret = arp_send(destipaddr);
+        }
     }
 #endif /* CONFIG_NET_ARP_SEND */
 
@@ -685,9 +732,14 @@ ssize_t psock_udp_sendto(FAR struct socket *psock, FAR const void *buf,
           destipaddr = into->sin6_addr.s6_addr16;
         }
 
-      /* Make sure that the IP address mapping is in the Neighbor Table */
+      /* Make sure that the IP address mapping is in the Neighbor Table.
+       * :: goes to the loopback device, which needs none.
+       */
 
-      ret = icmpv6_neighbor(NULL, destipaddr);
+      if (!net_ipv6addr_cmp(destipaddr, g_ipv6_unspecaddr))
+        {
+          ret = icmpv6_neighbor(NULL, destipaddr);
+        }
     }
 #endif /* CONFIG_NET_ICMPv6_NEIGHBOR */
 
@@ -696,7 +748,7 @@ ssize_t psock_udp_sendto(FAR struct socket *psock, FAR const void *buf,
   if (ret < 0)
     {
       nerr("ERROR: Not reachable\n");
-      return -ENETUNREACH;
+      return ret;
     }
 #endif /* CONFIG_NET_ARP_SEND || CONFIG_NET_ICMPv6_NEIGHBOR */
 
@@ -824,7 +876,12 @@ ssize_t psock_udp_sendto(FAR struct socket *psock, FAR const void *buf,
   else
     {
       memcpy(&wrb->wb_dest, to, tolen);
-      udp_connect(conn, to);
+      sendto_map_loopback(&wrb->wb_dest);
+      ret = udp_connect(conn, to);
+      if (ret < 0)
+        {
+          goto errout_with_wrb;
+        }
     }
 
   /* Skip l2/l3/l4 offset before copy */
@@ -904,6 +961,8 @@ ssize_t psock_udp_sendto(FAR struct socket *psock, FAR const void *buf,
   return len;
 
 errout_with_wrb:
+  nwarn("WARNING: UDP send failed during write buffer preparation: %d\n",
+        ret);
   udp_wrbuffer_release(wrb);
 
   return ret;
@@ -982,8 +1041,13 @@ void udp_sendbuffer_notify(FAR struct udp_conn_s *conn)
 {
   int val = 0;
 
+  /* Post also when no thread waits yet: a sender can be between its check
+   * of the limit and its wait, with the locks released.  A count that no
+   * sender waited for only makes a sender check the limit once more.
+   */
+
   nxsem_get_value(&conn->sndsem, &val);
-  if (val < 0)
+  if (val <= 0)
     {
       nxsem_post(&conn->sndsem);
     }

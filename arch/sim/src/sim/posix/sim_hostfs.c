@@ -312,12 +312,21 @@ static void host_stat_convert(struct stat *hostbuf, struct nuttx_stat_s *buf)
 int host_open(const char *pathname, int flags, int mode)
 {
   int mapflags = host_oflags_convert(flags);
+  struct stat hostbuf;
 
   int ret = open(pathname, mapflags, mode);
 
   if (ret == -1)
     {
       ret = host_errno_convert(-errno);
+    }
+  else if ((mapflags & (O_ACCMODE | O_DIRECTORY)) == O_RDONLY &&
+           fstat(ret, &hostbuf) == 0 && S_ISDIR(hostbuf.st_mode))
+    {
+      /* A directory: the caller opens it with the directory operations */
+
+      close(ret);
+      ret = host_errno_convert(-EISDIR);
     }
 
   return ret;
@@ -778,12 +787,13 @@ int host_stat(const char *path, struct nuttx_stat_s *buf)
 
 int host_chstat(const char *path, const struct nuttx_stat_s *buf, int flags)
 {
+  int nofollow = (flags & NUTTX_CH_STAT_NOFOLLOW) ? AT_SYMLINK_NOFOLLOW : 0;
   struct timespec times[2];
   int ret;
 
   if (flags & NUTTX_CH_STAT_MODE)
     {
-      ret = chmod(path, buf->st_mode);
+      ret = fchmodat(AT_FDCWD, path, buf->st_mode, nofollow);
       if (ret < 0)
         {
           return host_errno_convert(-errno);
@@ -792,7 +802,7 @@ int host_chstat(const char *path, const struct nuttx_stat_s *buf, int flags)
 
   if (flags & (NUTTX_CH_STAT_UID | NUTTX_CH_STAT_GID))
     {
-      ret = chown(path, buf->st_uid, buf->st_gid);
+      ret = fchownat(AT_FDCWD, path, buf->st_uid, buf->st_gid, nofollow);
       if (ret < 0)
         {
           return host_errno_convert(-errno);
@@ -823,7 +833,7 @@ int host_chstat(const char *path, const struct nuttx_stat_s *buf, int flags)
           times[1].tv_nsec = UTIME_OMIT;
         }
 
-      ret = utimensat(AT_FDCWD, path, times, 0);
+      ret = utimensat(AT_FDCWD, path, times, nofollow);
       if (ret < 0)
         {
           return host_errno_convert(-errno);

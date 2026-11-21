@@ -44,6 +44,10 @@
 #  include "hardware/stm32_tim.h"
 #endif
 
+/* The H5 timers have the TIMER IP version 2 extensions */
+
+#define HAVE_IP_TIMERS_V2 1
+
 /****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
@@ -1019,13 +1023,9 @@ struct stm32_pwm_ops_s
 
 #ifndef __ASSEMBLY__
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -1051,7 +1051,6 @@ extern "C"
 
 struct pwm_lowerhalf_s *stm32_pwminitialize(int timer);
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

@@ -28,66 +28,98 @@
  ****************************************************************************/
 
 #include <nuttx/config.h>
+#include <nuttx/atomic.h>
+#if defined(CONFIG_SPINLOCK_DEBUG)
+#  include <nuttx/queue.h>
+#endif
 
 /****************************************************************************
  * Public Type Definitions
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
+#endif
+
+#if defined(CONFIG_SPINLOCK_DEBUG)
+typedef struct spinlock_debug_s
+{
+  sq_entry_t flink;
+  FAR struct tcb_s *holder;
+  FAR void *caller;
+} spinlock_debug_t;
+#  define SPINLOCK_DEBUG_INFO spinlock_debug_t info;
+#  define SPINLOCK_DEBUG_INIT {{NULL}, NULL, NULL}
 #else
-#define EXTERN extern
+#  define SPINLOCK_DEBUG_INFO
+#  define SPINLOCK_DEBUG_INIT
 #endif
 
 #if defined(CONFIG_RW_SPINLOCK)
-typedef uint32_t rwlock_t;
+typedef struct rwlock_s
+{
+  atomic_t lock;
+  SPINLOCK_DEBUG_INFO
+} rwlock_t;
 #  define RW_SP_UNLOCKED      0
 #  define RW_SP_READ_LOCKED   1
 #  define RW_SP_WRITE_LOCKED -1
 #endif
 
 #ifndef CONFIG_SPINLOCK
-#  define SP_UNLOCKED 0  /* The Un-locked state */
-#  define SP_LOCKED   1  /* The Locked state */
+#  define SP_UNLOCKED {0, SPINLOCK_DEBUG_INIT} /* The Un-locked state */
+#  define SP_LOCKED   {1, SPINLOCK_DEBUG_INIT} /* The Locked state */
 
-typedef uint8_t spinlock_t;
+typedef struct spinlock_s
+{
+  atomic_t lock;
+  SPINLOCK_DEBUG_INFO
+} spinlock_t;
 #elif defined(CONFIG_TICKET_SPINLOCK)
 
 typedef struct spinlock_s
 {
-  uint32_t owner;
-  uint32_t next;
+  atomic_t owner;
+  atomic_t next;
+  SPINLOCK_DEBUG_INFO
 } spinlock_t;
 
-#  define SP_UNLOCKED (spinlock_t){0, 0}
-#  define SP_LOCKED   (spinlock_t){0, 1}
+#  define SP_UNLOCKED {0, 0, SPINLOCK_DEBUG_INIT}
+#  define SP_LOCKED   {0, 1, SPINLOCK_DEBUG_INIT}
 
 #else
 
-typedef uint32_t spinlock_t;
+typedef struct spinlock_s
+{
+  atomic_t lock;
+  SPINLOCK_DEBUG_INFO
+} spinlock_t;
 
-#  define SP_UNLOCKED 0
-#  define SP_LOCKED   1
+#  define SP_UNLOCKED {0, SPINLOCK_DEBUG_INIT}
+#  define SP_LOCKED   {1, SPINLOCK_DEBUG_INIT}
 
 #endif /* CONFIG_SPINLOCK */
 
 #define RSPINLOCK_CPU_INVALID (-1)
-#define RSPINLOCK_INITIALIZER {0}
+#define RSPINLOCK_INITIALIZER {{0}, SPINLOCK_DEBUG_INIT}
 
-typedef union rspinlock_u
+typedef struct rspinlock_s
 {
-  /* Which cpu is holding spinlock, and taking recursive count */
+  union
+  {
+    /* Which cpu is holding spinlock, and taking recursive count */
 
-  uint32_t val;
-  struct
-    {
-      uint16_t owner;
-      uint16_t count;
-    };
+    atomic_t val;       /* Shared lock value. */
+    uint32_t local_val; /* Local copy to avoid atomic read/write. */
+  };
+
+  SPINLOCK_DEBUG_INFO
 } rspinlock_t;
+
+#define RSPINLOCK_OWNER(val)          ((uint32_t)(val) >> 16u)    /* The high 16 bits are the owner */
+#define RSPINLOCK_COUNT(val)          ((uint32_t)(val) & 0xffffu) /* The low 16 bits are the count */
+#define RSPINLOCK_VALUE(owner, count) (((uint32_t)(owner) << 16u) | (count))
 
 #define SEQLOCK_INITIALIZER { 0u }
 
@@ -96,7 +128,6 @@ typedef struct seqcount_s
   uint32_t sequence;
 } seqcount_t;
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

@@ -38,6 +38,10 @@
 #include <nuttx/kthread.h>
 #include <nuttx/spawn.h>
 
+#ifdef CONFIG_FDPIC
+#  include <nuttx/fdpic.h>
+#endif
+
 #include "sched/sched.h"
 #include "group/group.h"
 #include "task/spawn.h"
@@ -89,6 +93,11 @@ static int nxtask_spawn_create(FAR const char *name, int priority,
   FAR struct tcb_s *tcb;
   pid_t pid;
   int ret;
+
+  if (!nxsched_capable(PR_CAP_SPAWN))
+    {
+      return -EPERM;
+    }
 
   /* Allocate a TCB for the new task. */
 
@@ -292,8 +301,10 @@ static int nxtask_spawn_exec(FAR pid_t *pidp, FAR const char *name,
  *     It will contains these attributes, not all of which are supported by
  *     NuttX:
  *
- *     - POSIX_SPAWN_SETPGROUP:  Setting of the new task's process group is
- *       not supported.  NuttX does not support process groups.
+ *     - POSIX_SPAWN_SETPGROUP:  Set the new task's process group
+ *       (CONFIG_SCHED_PROCESS_GROUPS, else ignored).
+ *     - POSIX_SPAWN_SETSID: The new task is the leader of a new session
+ *       (CONFIG_SCHED_PROCESS_GROUPS, else ignored).
  *     - POSIX_SPAWN_SETSCHEDPARAM: Set new tasks priority to the sched_param
  *       value.
  *     - POSIX_SPAWN_SETSCHEDULER: Set the new task's scheduler policy to
@@ -334,6 +345,14 @@ int task_spawn(FAR const char *name, main_t entry,
 {
   pid_t pid = INVALID_PROCESS_ID;
   int ret;
+
+#ifdef CONFIG_FDPIC
+  /* Resolve the descriptor once, in the public entry point.  The new task
+   * inherits the creator's D-Space.
+   */
+
+  entry = (main_t)fdpic_callback((FAR void *)entry);
+#endif
 
   sinfo("name=%s entry=%p file_actions=%p attr=%p argv=%p\n",
         name, entry, file_actions, attr, argv);

@@ -26,12 +26,32 @@ ifeq ($(CONFIG_RPMSG),y)
 
 CSRCS += rpmsg.c
 
+ifeq ($(CONFIG_RPMSG_CHAR),y)
+CSRCS += rpmsg_char.c
+endif
+
+ifeq ($(CONFIG_RPMSG_TRACE),y)
+CSRCS += rpmsg_trace.c
+endif
+
+ifeq ($(CONFIG_RPMSG_PROCFS),y)
+CSRCS += rpmsg_procfs.c
+endif
+
 ifeq ($(CONFIG_RPMSG_PING),y)
 CSRCS += rpmsg_ping.c
 endif
 
 ifeq ($(CONFIG_RPMSG_TEST),y)
 CSRCS += rpmsg_test.c
+endif
+
+ifeq ($(CONFIG_RPMSG_HEAP),y)
+CSRCS += rpmsg_heap.c
+endif
+
+ifeq ($(CONFIG_RPMSG_WAKELOCK),y)
+CSRCS += rpmsg_wakelock.c
 endif
 
 ifeq ($(CONFIG_RPMSG_ROUTER),y)
@@ -56,14 +76,6 @@ endif
 
 ifeq ($(CONFIG_RPMSG_VIRTIO),y)
 CSRCS += rpmsg_virtio.c
-endif
-
-ifeq ($(CONFIG_RPMSG_VIRTIO_LITE),y)
-CSRCS += rpmsg_virtio_lite.c
-endif
-
-ifeq ($(CONFIG_RPMSG_VIRTIO_IVSHMEM),y)
-CSRCS += rpmsg_virtio_ivshmem.c
 endif
 
 DEPPATH += --dep-path rpmsg

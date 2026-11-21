@@ -42,6 +42,7 @@
 
 #include <nuttx/config.h>
 
+#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -311,6 +312,7 @@ static void hci_reset_complete(FAR struct bt_buf_s *buf)
     }
 
   g_scan_dev_found_cb = NULL;
+  g_btdev.flow_control_enable = false;
   g_btdev.scan_enable = BT_LE_SCAN_DISABLE;
   g_btdev.scan_filter = BT_LE_SCAN_FILTER_DUP_ENABLE;
 }
@@ -431,8 +433,32 @@ static void hci_cmd_status(FAR struct bt_buf_s *buf)
 static void hci_num_completed_packets(FAR struct bt_buf_s *buf)
 {
   FAR struct bt_hci_evt_num_completed_packets_s *evt = (FAR void *)buf->data;
-  uint16_t num_handles = BT_LE162HOST(evt->num_handles);
-  uint16_t i;
+  uint8_t num_handles;
+  uint8_t i;
+
+  if (buf->len < sizeof(*evt))
+    {
+      wlerr("ERROR: Truncated Number Of Completed Packets event\n");
+      return;
+    }
+
+  /* Number_of_Handles is one octet.  Reading it with BT_LE162HOST() took
+   * the first octet of the following handle as its high byte, so a count
+   * of up to 65535 could be produced from a one-octet field.
+   */
+
+  num_handles = evt->num_handles;
+
+  /* The handle and count pairs the event declares have to have been
+   * received before they can be read.
+   */
+
+  if (buf->len < sizeof(*evt) + num_handles * sizeof(evt->h[0]))
+    {
+      wlerr("ERROR: Event declares %u handles but carries %u octets\n",
+            num_handles, buf->len);
+      return;
+    }
 
   wlinfo("num_handles %u\n", num_handles);
 
@@ -792,18 +818,52 @@ done:
 
 static void le_adv_report(FAR struct bt_buf_s *buf)
 {
-  FAR struct bt_hci_ev_le_advertising_report_s *info;
-  uint8_t num_reports = buf->data[0];
+  uint8_t num_reports;
+
+  if (buf->len < sizeof(num_reports))
+    {
+      wlerr("ERROR: Truncated advertising report event\n");
+      return;
+    }
+
+  num_reports = buf->data[0];
 
   wlinfo("Adv number of reports %u\n", num_reports);
 
-  info = bt_buf_consume(buf, sizeof(num_reports));
+  bt_buf_consume(buf, sizeof(num_reports));
 
   while (num_reports--)
     {
-      int8_t rssi = info->data[info->length];
+      FAR struct bt_hci_ev_le_advertising_report_s *info;
       FAR struct bt_keys_s *keys;
       bt_addr_le_t addr;
+      size_t reportlen;
+      int8_t rssi;
+
+      /* A report is the fixed fields, the advertising data whose length
+       * they declare, and one octet of RSSI.  Both lengths come from the
+       * controller, so check them against what was actually received
+       * before using them: the data length indexes the RSSI octet, and
+       * the total is what locates the next report.
+       */
+
+      if (buf->len < sizeof(*info))
+        {
+          wlerr("ERROR: Truncated advertising report\n");
+          return;
+        }
+
+      info      = (FAR void *)buf->data;
+      reportlen = sizeof(*info) + info->length + sizeof(rssi);
+
+      if (buf->len < reportlen)
+        {
+          wlerr("ERROR: Advertising report data length %u exceeds event\n",
+                info->length);
+          return;
+        }
+
+      rssi = info->data[info->length];
 
       wlinfo("%s event %u, len %u, rssi %d dBm\n",
              bt_addr_le_str(&info->addr), info->evt_type, info->length,
@@ -829,16 +889,13 @@ static void le_adv_report(FAR struct bt_buf_s *buf)
 
       check_pending_conn(&info->addr, info->evt_type, keys);
 
-      /* Get next report iteration by moving pointer to right offset in buf
-       * according to spec 4.2, Vol 2, Part E, 7.7.65.2.
-       *
-       * TODO: multiple reports are stored as multiple arrays not one array
-       * of structs. If num_reports > 0 this will not WORK!
+      /* Advance to the next report.  The RSSI octet sits after the
+       * advertising data and belongs to the report, which the previous
+       * advance left out, so every report after the first started one
+       * octet early.
        */
 
-      /* Note that info already contains one byte which accounts for RSSI */
-
-      info = bt_buf_consume(buf, sizeof(*info) + info->length);
+      bt_buf_consume(buf, reportlen);
     }
 }
 
@@ -932,19 +989,72 @@ static int le_param_request(FAR struct bt_buf_s *buf)
           reply_buf, NULL);
 }
 
+/****************************************************************************
+ * Name: hci_evt_length_ok
+ *
+ * Description:
+ *   Verify that an event carries at least the parameters the handler for
+ *   it is going to read.  Everything reaching here comes from the
+ *   controller, which is a separate device on a serial line, a
+ *   co-processor or, in the simulator, another process, so the lengths it
+ *   declares are checked rather than trusted.
+ *
+ * Input Parameters:
+ *   buf    - The event buffer, positioned at the event parameters
+ *   minlen - Size of the structure the handler casts the parameters to
+ *   code   - Event or subevent code, for the diagnostic only
+ *
+ * Returned Value:
+ *   true if the handler may run.
+ *
+ ****************************************************************************/
+
+static bool hci_evt_length_ok(FAR struct bt_buf_s *buf, size_t minlen,
+                              uint8_t code)
+{
+  if (buf->len < minlen)
+    {
+      wlerr("ERROR: Event 0x%02x too short: %u, need %zu\n", code,
+            buf->len, minlen);
+      return false;
+    }
+
+  return true;
+}
+
 static void hci_le_meta_event(FAR struct bt_buf_s *buf)
 {
-  FAR struct bt_hci_evt_le_meta_event_s *evt = (FAR void *)buf->data;
+  FAR struct bt_hci_evt_le_meta_event_s *evt;
+  uint8_t subevent;
+
+  if (buf->len < sizeof(*evt))
+    {
+      wlerr("ERROR: Truncated LE meta event\n");
+      return;
+    }
+
+  evt      = (FAR void *)buf->data;
+  subevent = evt->subevent;
 
   bt_buf_consume(buf, sizeof(*evt));
 
-  switch (evt->subevent)
+  switch (subevent)
     {
       case BT_HCI_EVT_LE_CONN_COMPLETE:
-        le_conn_complete(buf);
+        if (hci_evt_length_ok(buf,
+                              sizeof(struct bt_hci_evt_le_conn_complete_s),
+                              subevent))
+          {
+            le_conn_complete(buf);
+          }
         break;
 
       case BT_HCI_EVT_LE_ADVERTISING_REPORT:
+
+        /* le_adv_report() checks the report count and every per-report
+         * length itself, since those vary within the event.
+         */
+
         le_adv_report(buf);
         break;
 
@@ -952,39 +1062,86 @@ static void hci_le_meta_event(FAR struct bt_buf_s *buf)
         break;
 
       case BT_HCI_EVT_LE_LTK_REQUEST:
-        le_ltk_request(buf);
+        if (hci_evt_length_ok(buf,
+                              sizeof(struct bt_hci_evt_le_ltk_request_s),
+                              subevent))
+          {
+            le_ltk_request(buf);
+          }
         break;
 
       case BT_HCI_EVT_LE_CONN_PARAM_REQ:
-        le_param_request(buf);
+        if (hci_evt_length_ok(
+              buf, sizeof(struct bt_hci_evt_le_rem_conn_param_req_s),
+              subevent))
+          {
+            le_param_request(buf);
+          }
         break;
 
       default:
-        wlinfo("Unhandled LE event %04x\n", evt->subevent);
+        wlinfo("Unhandled LE event %04x\n", subevent);
         break;
     }
 }
 
 static void hci_event(FAR struct bt_buf_s *buf)
 {
-  FAR struct bt_hci_evt_hdr_s *hdr = (FAR void *)buf->data;
+  FAR struct bt_hci_evt_hdr_s *hdr;
+  uint8_t evt;
 
-  wlinfo("event %u\n", hdr->evt);
+  if (buf->len < sizeof(*hdr))
+    {
+      wlerr("ERROR: Truncated event header\n");
+      return;
+    }
+
+  hdr = (FAR void *)buf->data;
+  evt = hdr->evt;
+
+  wlinfo("event %u\n", evt);
 
   bt_buf_consume(buf, sizeof(struct bt_hci_evt_hdr_s));
 
-  switch (hdr->evt)
+  /* The event declares its own parameter length.  If less than that was
+   * received the packet was truncated in transport and the parameters
+   * cannot be parsed.
+   */
+
+  if (buf->len < hdr->len)
+    {
+      wlerr("ERROR: Event 0x%02x declares %u parameters, got %u\n", evt,
+            hdr->len, buf->len);
+      return;
+    }
+
+  switch (evt)
     {
       case BT_HCI_EVT_DISCONN_COMPLETE:
-        hci_disconn_complete(buf);
+        if (hci_evt_length_ok(buf,
+                              sizeof(struct bt_hci_evt_disconn_complete_s),
+                              evt))
+          {
+            hci_disconn_complete(buf);
+          }
         break;
 
       case BT_HCI_EVT_ENCRYPT_CHANGE:
-        hci_encrypt_change(buf);
+        if (hci_evt_length_ok(buf,
+                              sizeof(struct bt_hci_evt_encrypt_change_s),
+                              evt))
+          {
+            hci_encrypt_change(buf);
+          }
         break;
 
       case BT_HCI_EVT_ENCRYPT_KEY_REFRESH_COMPLETE:
-        hci_encrypt_key_refresh_complete(buf);
+        if (hci_evt_length_ok(
+              buf, sizeof(struct bt_hci_evt_encrypt_key_refresh_complete_s),
+              evt))
+          {
+            hci_encrypt_key_refresh_complete(buf);
+          }
         break;
 
       case BT_HCI_EVT_LE_META_EVENT:
@@ -992,7 +1149,7 @@ static void hci_event(FAR struct bt_buf_s *buf)
         break;
 
       default:
-        wlwarn("WARNING:  Unhandled event 0x%02x\n", hdr->evt);
+        wlwarn("WARNING:  Unhandled event 0x%02x\n", evt);
         break;
     }
 }
@@ -1271,11 +1428,15 @@ static void le_read_buffer_size_complete(FAR struct bt_buf_s *buf)
 
 static int hci_initialize(void)
 {
+#ifndef CONFIG_BLUETOOTH_CNTRL_HOST_FLOW_DISABLE
+  FAR struct bt_hci_rp_read_local_commands_s *commands;
   FAR struct bt_hci_cp_host_buffer_size_s *hbs;
+  FAR uint8_t *enable;
+  bool flow_control;
+#endif
   FAR struct bt_hci_cp_set_event_mask_s *ev;
   FAR struct bt_buf_s *buf;
   FAR struct bt_buf_s *rsp;
-  FAR uint8_t *enable;
   int ret;
 
   /* Send HCI_RESET */
@@ -1405,47 +1566,76 @@ static int hci_initialize(void)
       return ret;
     }
 
-  buf = bt_hci_cmd_create(BT_HCI_OP_HOST_BUFFER_SIZE, sizeof(*hbs));
-  if (buf == NULL)
-    {
-      wlerr("ERROR:  Failed to create buffer\n");
-      return -ENOBUFS;
-    }
+#ifndef CONFIG_BLUETOOTH_CNTRL_HOST_FLOW_DISABLE
+  /* Supported Commands octet 10, bits 5..7 describe Set Controller To Host
+   * Flow Control, Host Buffer Size and Host Number Of Completed Packets.
+   */
 
-  hbs = bt_buf_extend(buf, sizeof(*hbs));
-  memset(hbs, 0, sizeof(*hbs));
-  hbs->acl_mtu = BT_HOST2LE16(BLUETOOTH_MAX_FRAMELEN -
-                              sizeof(struct bt_hci_acl_hdr_s) -
-                              g_btdev.btdev->head_reserve);
-  hbs->acl_pkts = BT_HOST2LE16(CONFIG_BLUETOOTH_BUFFER_PREALLOC);
-
-  ret = bt_hci_cmd_send(BT_HCI_OP_HOST_BUFFER_SIZE, buf);
+  ret = bt_hci_cmd_send_sync(BT_HCI_OP_READ_LOCAL_COMMANDS, NULL, &rsp);
   if (ret < 0)
     {
-      wlerr("ERROR:  bt_hci_cmd_send failed: %d\n", ret);
       return ret;
     }
 
-  buf = bt_hci_cmd_create(BT_HCI_OP_SET_CTL_TO_HOST_FLOW, 1);
-  if (buf == NULL)
+  if (rsp->len < sizeof(*commands))
     {
-      wlerr("ERROR:  Failed to create buffer\n");
-      return -ENOBUFS;
+      bt_buf_release(rsp);
+      return -EINVAL;
     }
 
-  enable  = bt_buf_extend(buf, sizeof(*enable));
-#ifdef CONFIG_BLUETOOTH_CNTRL_HOST_FLOW_DISABLE
-  *enable = 0;
-#else
-  *enable = 1;
+  commands = (FAR void *)rsp->data;
+  flow_control = (commands->commands[10] & 0xe0) == 0xe0;
+  bt_buf_release(rsp);
+
+  if (flow_control)
+    {
+      buf = bt_hci_cmd_create(BT_HCI_OP_HOST_BUFFER_SIZE, sizeof(*hbs));
+      if (buf == NULL)
+        {
+          wlerr("ERROR:  Failed to create buffer\n");
+          return -ENOBUFS;
+        }
+
+      hbs = bt_buf_extend(buf, sizeof(*hbs));
+      memset(hbs, 0, sizeof(*hbs));
+      hbs->acl_mtu = BT_HOST2LE16(BLUETOOTH_MAX_FRAMELEN -
+                                  sizeof(struct bt_hci_acl_hdr_s) -
+                                  g_btdev.btdev->head_reserve);
+      hbs->acl_pkts = BT_HOST2LE16(CONFIG_BLUETOOTH_BUFFER_PREALLOC);
+
+      ret = bt_hci_cmd_send_sync(BT_HCI_OP_HOST_BUFFER_SIZE, buf, NULL);
+      if (ret < 0)
+        {
+          wlerr("ERROR:  bt_hci_cmd_send_sync failed: %d\n", ret);
+          return ret;
+        }
+
+      buf = bt_hci_cmd_create(BT_HCI_OP_SET_CTL_TO_HOST_FLOW, 1);
+      if (buf == NULL)
+        {
+          wlerr("ERROR:  Failed to create buffer\n");
+          return -ENOBUFS;
+        }
+
+      enable  = bt_buf_extend(buf, sizeof(*enable));
+      *enable = 1;
+
+      ret = bt_hci_cmd_send_sync(BT_HCI_OP_SET_CTL_TO_HOST_FLOW, buf, NULL);
+      if (ret < 0)
+        {
+          wlerr("ERROR:  bt_hci_cmd_send_sync failed: %d\n", ret);
+          return ret;
+        }
+
+      /* Report completed packets only after flow control is enabled. */
+
+      g_btdev.flow_control_enable = true;
+    }
+  else
+    {
+      wlwarn("WARNING: Controller to Host flow control is not supported\n");
+    }
 #endif
-
-  ret = bt_hci_cmd_send_sync(BT_HCI_OP_SET_CTL_TO_HOST_FLOW, buf, NULL);
-  if (ret < 0)
-    {
-      wlerr("ERROR:  bt_hci_cmd_send_sync failed: %d\n", ret);
-      return ret;
-    }
 
   if (lmp_bredr_capable(g_btdev))
     {
@@ -1650,6 +1840,7 @@ int bt_initialize(void)
 #ifdef CONFIG_WIRELESS_BLUETOOTH_HOST
   g_callback_list = NULL;
   g_scan_dev_found_cb = NULL;
+  g_btdev.flow_control_enable = false;
 #endif
 
   memset(&g_lp_rxlist, 0, sizeof(g_lp_rxlist));
@@ -2028,6 +2219,27 @@ int bt_hci_cmd_send_sync(uint16_t opcode, FAR struct bt_buf_s *buf,
   else
     {
       wlerr("ERROR:  Failed get response\n");
+
+      /* The command timed out, and sync_sem is about to go out of scope.
+       * A completion arriving after this point would still find the
+       * pointer to it in the command buffer and post it, so detach it
+       * from the buffer, and from the pending command that still refers
+       * to the buffer, before destroying it.
+       *
+       * This closes the window rather than removing it: the completion
+       * runs in another context and there is no lock shared with it.  A
+       * race-free version needs the command queue with per-command state
+       * that is planned separately.
+       */
+
+      buf->u.hci.sync = NULL;
+
+      if (g_btdev.sent_cmd == buf)
+        {
+          g_btdev.sent_cmd = NULL;
+          bt_buf_release(buf);
+        }
+
       nxsem_destroy(&sync_sem);
       return -EIO;
     }
@@ -2191,6 +2403,7 @@ send_set_param:
 int bt_stop_advertising(void)
 {
   FAR struct bt_buf_s *buf;
+
   if (!g_btdev.adv_enable)
     {
       wlwarn("WARNING:  Already advertising\n");

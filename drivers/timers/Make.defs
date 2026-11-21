@@ -24,6 +24,15 @@
 
 ifeq ($(CONFIG_WATCHDOG),y)
   CSRCS += watchdog.c
+  ifeq ($(CONFIG_WATCHDOG_WDOG),y)
+    CSRCS += watchdog_wdog.c
+  endif
+  TMRDEPPATH = --dep-path timers
+  TMRVPATH = :timers
+endif
+
+ifeq ($(CONFIG_WATCHDOG_CMSDK),y)
+  CSRCS += cmsdk_wdt.c
   TMRDEPPATH = --dep-path timers
   TMRVPATH = :timers
 endif
@@ -76,6 +85,15 @@ ifeq ($(CONFIG_RTC_PCF8563),y)
   TMRVPATH = :timers
 endif
 
+ifeq ($(CONFIG_TIMER_SP804),y)
+  CSRCS += sp804_oneshot.c
+ifeq ($(CONFIG_TIMER),y)
+  CSRCS += sp804_timer.c
+endif
+  TMRDEPPATH = --dep-path timers
+  TMRVPATH = :timers
+endif
+
 ifeq ($(CONFIG_RTC_PL031),y)
   CSRCS += pl031.c
   TMRDEPPATH = --dep-path timers
@@ -124,6 +142,12 @@ ifeq ($(CONFIG_PWM),y)
   TMRVPATH = :timers
 endif
 
+ifeq ($(CONFIG_PWM_SIFIVE),y)
+  CSRCS += sifive_pwm.c
+  TMRDEPPATH = --dep-path timers
+  TMRVPATH = :timers
+endif
+
 ifeq ($(CONFIG_PULSECOUNT),y)
   CSRCS += pulsecount.c
   TMRDEPPATH = --dep-path timers
@@ -132,6 +156,12 @@ endif
 
 ifeq ($(CONFIG_DSHOT),y)
   CSRCS += dshot.c
+  TMRDEPPATH = --dep-path timers
+  TMRVPATH = :timers
+endif
+
+ifeq ($(CONFIG_OCU),y)
+  CSRCS += ocu.c
   TMRDEPPATH = --dep-path timers
   TMRVPATH = :timers
 endif
@@ -147,6 +177,18 @@ ifeq ($(CONFIG_CAPTURE),y)
   TMRVPATH = :timers
 endif
 
+ifeq ($(CONFIG_TIMER_IMX_GPT),y)
+  CSRCS += imx_gpt.c
+ifeq ($(CONFIG_TIMER_IMX_GPT_OCU),y)
+  CSRCS += ocu_imx_gpt.c
+endif
+ifeq ($(CONFIG_TIMER_IMX_GPT_ICU),y)
+  CSRCS += capture_imx_gpt.c
+endif
+  TMRDEPPATH = --dep-path timers
+  TMRVPATH = :timers
+endif
+
 ifeq ($(CONFIG_GOLDFISH_TIMER),y)
   CSRCS += goldfish_timer.c
   TMRDEPPATH = --dep-path timers
@@ -155,10 +197,20 @@ endif
 
 ifeq ($(CONFIG_PTP_CLOCK),y)
   CSRCS += ptp_clock.c
+  TMRDEPPATH = --dep-path timers
+  TMRVPATH = :timers
 endif
 
 ifeq ($(CONFIG_PTP_CLOCK_DUMMY),y)
   CSRCS += ptp_clock_dummy.c
+  TMRDEPPATH = --dep-path timers
+  TMRVPATH = :timers
+endif
+
+ifeq ($(CONFIG_PTP_PPS),y)
+  CSRCS += ptp_pps.c
+  TMRDEPPATH = --dep-path timers
+  TMRVPATH = :timers
 endif
 
 # Include timer build support (if any were selected)

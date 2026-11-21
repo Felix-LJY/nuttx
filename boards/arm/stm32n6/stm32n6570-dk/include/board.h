@@ -1,0 +1,482 @@
+/****************************************************************************
+ * boards/arm/stm32n6/stm32n6570-dk/include/board.h
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.  The
+ * ASF licenses this file to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance with the
+ * License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
+ * License for the specific language governing permissions and limitations
+ * under the License.
+ *
+ ****************************************************************************/
+
+#ifndef __BOARDS_ARM_STM32N6_STM32N6570_DK_INCLUDE_BOARD_H
+#define __BOARDS_ARM_STM32N6_STM32N6570_DK_INCLUDE_BOARD_H
+
+/****************************************************************************
+ * Included Files
+ ****************************************************************************/
+
+#include <nuttx/config.h>
+#ifndef __ASSEMBLY__
+#  include <stdint.h>
+#endif
+
+/****************************************************************************
+ * Pre-processor Definitions
+ ****************************************************************************/
+
+/* Clocking *****************************************************************/
+
+/* Two clock trees are provided.  The default runs the CPU at 800 MHz from
+ * the 48 MHz HSE crystal with VDDCORE overdrive.
+ * CONFIG_STM32N6570_DK_CLOCK_HSI selects a conservative 200 MHz tree from
+ * the internal HSI that needs neither the HSE nor overdrive.  See
+ * arch/arm/src/stm32n6/stm32n6xx_rcc.c for the macros.
+ */
+
+#define STM32_HSI_FREQUENCY     64000000ul
+#define STM32_LSI_FREQUENCY     32000
+#define STM32_LSE_FREQUENCY     32768
+
+#ifndef CONFIG_STM32N6570_DK_CLOCK_HSI
+
+/* HSE 48 MHz (X3)
+ *   PLL1 = HSE / 3 * 150 = 2400 MHz   (CPU and system buses)
+ *     IC1  /3 = 800 MHz  -> CPU clock (CPUSW)
+ *     IC2  /6 = 400 MHz  \
+ *     IC6  /8 = 300 MHz   > SYSCLK components (SYSSW IC2_IC6_IC11)
+ *     IC11 /6 = 400 MHz  /
+ *     IC4  /12 = 200 MHz -> SDMMC2 kernel clock
+ *     IC16 /96 = 25 MHz  -> LTDC pixel clock
+ *   PLL2 = HSI / 2 * 48  = 1536 MHz   (audio kernel clocks)
+ *   PLL3 = HSE / 3 * 125 = 2000 MHz   (LTDC)
+ *   PLL4 = HSI / 4 * 75  = 1200 MHz   (I2C, LTDC)
+ *   HPRE /2   = 200 MHz -> HCLK
+ *   PPREx /1  = 200 MHz -> PCLK1/2/4/5
+ *   TIMPRE /2 = 200 MHz -> timer kernel clock
+ *
+ * 800 MHz needs VOS high and the board SMPS in overdrive: PF4 high selects
+ * the higher VDDCORE voltage before the voltage range is switched.
+ */
+
+#define STM32_BOARD_USEHSE
+#define STM32_HSE_FREQUENCY     48000000ul
+#define STM32_BOARD_VOS_HIGH
+#define BOARD_VDDCORE_OVERDRIVE_GPIO (GPIO_OUTPUT | GPIO_PUSHPULL | \
+                                      GPIO_SPEED_2MHZ | GPIO_OUTPUT_SET | \
+                                      GPIO_PORTF | GPIO_PIN4)
+
+#define STM32_PLL1_SRC          RCC_PLL1CFGR1_SEL_HSE
+#define STM32_PLL1_M            3
+#define STM32_PLL1_N            150
+#define STM32_PLL1_FREQUENCY    2400000000ul
+
+#define STM32_PLL2_SRC          RCC_PLL1CFGR1_SEL_HSI
+#define STM32_PLL2_M            2
+#define STM32_PLL2_N            48
+#define STM32_PLL2_FREQUENCY    1536000000ul
+
+#define STM32_PLL3_SRC          RCC_PLL1CFGR1_SEL_HSE
+#define STM32_PLL3_M            3
+#define STM32_PLL3_N            125
+#define STM32_PLL3_FREQUENCY    2000000000ul
+
+#define STM32_PLL4_SRC          RCC_PLL1CFGR1_SEL_HSI
+#define STM32_PLL4_M            4
+#define STM32_PLL4_N            75
+#define STM32_PLL4_FREQUENCY    1200000000ul
+
+#define STM32_IC1_SRC           RCC_ICCFGR_SEL_PLL1
+#define STM32_IC1_DIV           3
+#define STM32_IC2_SRC           RCC_ICCFGR_SEL_PLL1
+#define STM32_IC2_DIV           6
+#define STM32_IC6_SRC           RCC_ICCFGR_SEL_PLL1
+#define STM32_IC6_DIV           8
+#define STM32_IC11_SRC          RCC_ICCFGR_SEL_PLL1
+#define STM32_IC11_DIV          6
+
+/* IC16 = PLL1 / 96 = 25 MHz -> LTDC pixel clock */
+
+#define STM32_IC16_SRC          RCC_ICCFGR_SEL_PLL1
+#define STM32_IC16_DIV          96
+
+/* IC4 = PLL1 / 12 = 200 MHz -> SDMMC kernel clock */
+
+#define STM32_IC4_SRC           RCC_ICCFGR_SEL_PLL1
+#define STM32_IC4_DIV           12
+
+#define STM32_CPUCLK_FREQUENCY  (STM32_PLL1_FREQUENCY / STM32_IC1_DIV)
+#define STM32_SYSCLK_FREQUENCY  (STM32_PLL1_FREQUENCY / STM32_IC2_DIV)
+#define STM32_RCC_CFGR2_HPRE    RCC_CFGR2_HPRE_SYSCLKd2
+#define STM32_RCC_CFGR2_TIMPRE  RCC_CFGR2_TIMPRE_SYSCLKd2
+#define STM32_HCLK_FREQUENCY    (STM32_SYSCLK_FREQUENCY / 2)
+#define STM32_TIMCLK_FREQUENCY  (STM32_SYSCLK_FREQUENCY / 2)
+
+#else /* CONFIG_STM32N6570_DK_CLOCK_HSI */
+
+/* HSI 64 MHz
+ *   PLL1 = HSI / 4 * 50 = 800 MHz
+ *     IC1  /4  = 200 MHz  -> CPU clock (CPUSW)
+ *     IC2  /8  = 100 MHz  \
+ *     IC6  /12 = 66.7 MHz  > SYSCLK components (SYSSW IC2_IC6_IC11)
+ *     IC11 /8  = 100 MHz  /
+ *     IC4  /4  = 200 MHz  -> SDMMC2 kernel clock
+ *   HPRE /2   = 50 MHz   -> HCLK
+ *   PPREx /1  = 50 MHz   -> PCLK1/2/4/5
+ *   TIMPRE /1 = 100 MHz  -> timer kernel clock
+ *
+ * Works with VOS low, no VDDCORE overdrive required.
+ */
+
+#define STM32_PLL1_SRC          RCC_PLL1CFGR1_SEL_HSI
+#define STM32_PLL1_M            4
+#define STM32_PLL1_N            50
+#define STM32_PLL1_FREQUENCY    800000000ul
+
+#define STM32_IC1_SRC           RCC_ICCFGR_SEL_PLL1
+#define STM32_IC1_DIV           4
+#define STM32_IC2_SRC           RCC_ICCFGR_SEL_PLL1
+#define STM32_IC2_DIV           8
+#define STM32_IC6_SRC           RCC_ICCFGR_SEL_PLL1
+#define STM32_IC6_DIV           12
+#define STM32_IC11_SRC          RCC_ICCFGR_SEL_PLL1
+#define STM32_IC11_DIV          8
+
+/* IC16 = PLL1 / 32 = 25 MHz -> LTDC pixel clock */
+
+#define STM32_IC16_SRC          RCC_ICCFGR_SEL_PLL1
+#define STM32_IC16_DIV          32
+
+/* IC4 = PLL1 / 4 = 200 MHz -> SDMMC kernel clock */
+
+#define STM32_IC4_SRC           RCC_ICCFGR_SEL_PLL1
+#define STM32_IC4_DIV           4
+
+#define STM32_CPUCLK_FREQUENCY  (STM32_PLL1_FREQUENCY / STM32_IC1_DIV)
+#define STM32_SYSCLK_FREQUENCY  (STM32_PLL1_FREQUENCY / STM32_IC2_DIV)
+#define STM32_RCC_CFGR2_HPRE    RCC_CFGR2_HPRE_SYSCLKd2
+#define STM32_RCC_CFGR2_TIMPRE  RCC_CFGR2_TIMPRE_SYSCLK
+#define STM32_HCLK_FREQUENCY    (STM32_SYSCLK_FREQUENCY / 2)
+#define STM32_TIMCLK_FREQUENCY  STM32_SYSCLK_FREQUENCY
+
+#endif /* CONFIG_STM32N6570_DK_CLOCK_HSI */
+
+#define STM32_PCLK1_FREQUENCY   STM32_HCLK_FREQUENCY
+#define STM32_PCLK2_FREQUENCY   STM32_HCLK_FREQUENCY
+#define STM32_PCLK4_FREQUENCY   STM32_HCLK_FREQUENCY
+#define STM32_PCLK5_FREQUENCY   STM32_HCLK_FREQUENCY
+
+/* Timer kernel clock (TIMG = SYSCLK / TIMPRE) */
+
+#define STM32_APB1_TIM_FREQUENCY STM32_TIMCLK_FREQUENCY
+#define STM32_APB2_TIM_FREQUENCY STM32_TIMCLK_FREQUENCY
+
+#define STM32_TIM1_CLKIN         STM32_APB2_TIM_FREQUENCY
+#define STM32_TIM8_CLKIN         STM32_APB2_TIM_FREQUENCY
+#define STM32_TIM9_CLKIN         STM32_APB2_TIM_FREQUENCY
+#define STM32_TIM15_CLKIN        STM32_APB2_TIM_FREQUENCY
+#define STM32_TIM16_CLKIN        STM32_APB2_TIM_FREQUENCY
+#define STM32_TIM17_CLKIN        STM32_APB2_TIM_FREQUENCY
+#define STM32_TIM2_CLKIN         STM32_APB1_TIM_FREQUENCY
+#define STM32_TIM3_CLKIN         STM32_APB1_TIM_FREQUENCY
+#define STM32_TIM4_CLKIN         STM32_APB1_TIM_FREQUENCY
+#define STM32_TIM5_CLKIN         STM32_APB1_TIM_FREQUENCY
+#define STM32_TIM6_CLKIN         STM32_APB1_TIM_FREQUENCY
+#define STM32_TIM7_CLKIN         STM32_APB1_TIM_FREQUENCY
+#define STM32_TIM10_CLKIN        STM32_APB1_TIM_FREQUENCY
+#define STM32_TIM11_CLKIN        STM32_APB1_TIM_FREQUENCY
+#define STM32_TIM12_CLKIN        STM32_APB1_TIM_FREQUENCY
+#define STM32_TIM13_CLKIN        STM32_APB1_TIM_FREQUENCY
+#define STM32_TIM14_CLKIN        STM32_APB1_TIM_FREQUENCY
+
+/* USART1 kernel clock: HSI, independent of the system clock tree */
+
+#define STM32_RCC_CCIPR13_USART1SEL RCC_CCIPR13_USART1SEL_HSI
+#define STM32_USART1_FREQUENCY      STM32_HSI_FREQUENCY
+
+/* USART2 kernel clock: HSI as well */
+
+#define STM32_RCC_CCIPR13_USART2SEL RCC_CCIPR13_USART2SEL_HSI
+#define STM32_USART2_FREQUENCY      STM32_HSI_FREQUENCY
+
+/* LTDC kernel clock: IC16 (25 MHz pixel clock) */
+
+#define STM32_RCC_CCIPR4_LTDCSEL RCC_CCIPR4_LTDCSEL_IC16
+
+/* I/O voltage domains ******************************************************/
+
+/* VDDIO2 and VDDIO3 are supplied at 1.8 V on the Discovery kit.
+ * Mark both supplies valid and select their 1.8 V range before the
+ * common STM32N6 startup configures I/O compensation.
+ */
+
+#define BOARD_PWR_VDDIO  (PWR_SVMCR3_VDDIO2SV    | PWR_SVMCR3_VDDIO3SV | \
+                          PWR_SVMCR3_VDDIO2VRSEL | PWR_SVMCR3_VDDIO3VRSEL)
+
+/* VDDIO5 supplies the microSD pads (SDMMC2) in its 3.3 V range */
+
+#define BOARD_PWR_VDDIO5 PWR_SVMCR2_VDDIO5SV
+
+/* LED definitions **********************************************************/
+
+/* LD1 (green, PO1) is active high; LD2 (red, PG10) is active low. */
+
+/* LED index values for use with board_userled() */
+
+#define BOARD_LED1        0
+#define BOARD_LED2        1
+#define BOARD_NLEDS       2
+
+#define BOARD_LED_GREEN   BOARD_LED1
+#define BOARD_LED_RED     BOARD_LED2
+
+/* LED bits for use with board_userled_all() */
+
+#define BOARD_LED1_BIT    (1 << BOARD_LED1)
+#define BOARD_LED2_BIT    (1 << BOARD_LED2)
+
+/* OS event indications when CONFIG_ARCH_LEDS is enabled:
+ *
+ *   SYMBOL                 Meaning                  Green  Red
+ *   ---------------------  -----------------------  -----  -----
+ */
+
+#define LED_STARTED        0 /* NuttX has started     OFF    OFF   */
+#define LED_HEAPALLOCATE   0 /* Heap allocated        OFF    OFF   */
+#define LED_IRQSENABLED    0 /* Interrupts enabled    OFF    OFF   */
+#define LED_STACKCREATED   1 /* Idle stack created    ON     OFF   */
+#define LED_INIRQ          2 /* In an interrupt       N/C    N/C   */
+#define LED_SIGNAL         2 /* In a signal handler   N/C    N/C   */
+#define LED_ASSERTION      2 /* An assertion failed   N/C    N/C   */
+#define LED_PANIC          3 /* The system crashed    OFF    Blink */
+
+/* Button definitions *******************************************************/
+
+/* The STM32N6570-DK has two user buttons: USER1 (B2) on PC13 and TAMP (B4)
+ * on PE0.  Both read high when pressed.  The RESET button (B3) drives NRST.
+ */
+
+#define BUTTON_USER        0
+#define BUTTON_TAMP        1
+#define NUM_BUTTONS        2
+#define BUTTON_USER_BIT    (1 << BUTTON_USER)
+#define BUTTON_TAMP_BIT    (1 << BUTTON_TAMP)
+
+/* Alternate function pin selections ****************************************/
+
+/* Ethernet GPIOs ***********************************************************/
+
+/* ETH1 RGMII to the Realtek RTL8211F PHY at MDIO address 1: PD1 MDC,
+ * PD12 MDIO, PF0 GTX_CLK, PF2 CLK125, PF7 RX_CLK, PF10 RX_CTL, PF14 PF15
+ * PF8 PF9 RXD0-3, PF11 TX_CTL, PF12 PF13 PG3 PG4 TXD0-3.  The PHY drives
+ * the 125 MHz CLK125 that the MAC uses as GTX clock (the reset value of
+ * RCC CCIPR2 ETH1GTXCLKSEL).  The PHY interrupt on PD3 is not used.
+ * GTX_CLK gets a 1 ns pad delay, without it about 1% of the frames sent
+ * at 1000 Mbps are lost.
+ */
+
+#define GPIO_ETH_MDC            (GPIO_ETH_MDC_1 | GPIO_SPEED_100MHZ)
+#define GPIO_ETH_MDIO           (GPIO_ETH_MDIO_1 | GPIO_SPEED_100MHZ)
+#define GPIO_ETH_RGMII_CLK125   (GPIO_ETH_RGMII_CLK125_1 | GPIO_SPEED_100MHZ)
+#define GPIO_ETH_RGMII_GTX_CLK  (GPIO_ETH_RGMII_GTX_CLK_1 | GPIO_SPEED_100MHZ | \
+                                 GPIO_DELAY_1000PS)
+#define GPIO_ETH_RGMII_RX_CLK   (GPIO_ETH_RGMII_RX_CLK_1 | GPIO_SPEED_100MHZ)
+#define GPIO_ETH_RGMII_RX_CTL   (GPIO_ETH_RGMII_RX_CTL_1 | GPIO_SPEED_100MHZ)
+#define GPIO_ETH_RGMII_RXD0     (GPIO_ETH_RGMII_RXD0_1 | GPIO_SPEED_100MHZ)
+#define GPIO_ETH_RGMII_RXD1     (GPIO_ETH_RGMII_RXD1_1 | GPIO_SPEED_100MHZ)
+#define GPIO_ETH_RGMII_RXD2     (GPIO_ETH_RGMII_RXD2_1 | GPIO_SPEED_100MHZ)
+#define GPIO_ETH_RGMII_RXD3     (GPIO_ETH_RGMII_RXD3_1 | GPIO_SPEED_100MHZ)
+#define GPIO_ETH_RGMII_TX_CTL   (GPIO_ETH_RGMII_TX_CTL_1 | GPIO_SPEED_100MHZ)
+#define GPIO_ETH_RGMII_TXD0     (GPIO_ETH_RGMII_TXD0_1 | GPIO_SPEED_100MHZ)
+#define GPIO_ETH_RGMII_TXD1     (GPIO_ETH_RGMII_TXD1_1 | GPIO_SPEED_100MHZ)
+#define GPIO_ETH_RGMII_TXD2     (GPIO_ETH_RGMII_TXD2_1 | GPIO_SPEED_100MHZ)
+#define GPIO_ETH_RGMII_TXD3     (GPIO_ETH_RGMII_TXD3_1 | GPIO_SPEED_100MHZ)
+
+/* The RTL8211F adds the RGMII delays on both the TX and RX clocks */
+
+#define BOARD_ETH_PHY_INTERFACE PHY_INTERFACE_RGMII_ID
+
+/* The PTP clock is HCLK, as the Ethernet driver assumes */
+
+#define STM32_RCC_CCIPR2_ETH1PTPSEL RCC_CCIPR2_ETH1PTPSEL_HCLK
+
+/* I2C GPIOs ****************************************************************/
+
+/* I2C1: camera connector, Arduino D15/D14 (PH9 SCL, PC1 SDA)
+ * I2C2: WM8904 codec, GT911 touch, TCPP03 (PD14 SCL, PD4 SDA)
+ * I2C4: STMod+ connector (PE13 SCL, PE14 SDA)
+ *
+ * All I2C kernel clocks run from the 64 MHz HSI.
+ */
+
+#define GPIO_I2C1_SCL     (GPIO_I2C1_SCL_2 | GPIO_SPEED_50MHZ)
+#define GPIO_I2C1_SDA     (GPIO_I2C1_SDA_1 | GPIO_SPEED_50MHZ)
+#define GPIO_I2C2_SCL     (GPIO_I2C2_SCL_2 | GPIO_SPEED_50MHZ)
+#define GPIO_I2C2_SDA     (GPIO_I2C2_SDA_2 | GPIO_SPEED_50MHZ)
+#define GPIO_I2C4_SCL     (GPIO_I2C4_SCL_2 | GPIO_SPEED_50MHZ)
+#define GPIO_I2C4_SDA     (GPIO_I2C4_SDA_3 | GPIO_SPEED_50MHZ)
+
+#define STM32_RCC_CCIPR4_I2C1SEL RCC_CCIPR4_I2C1SEL_HSI
+#define STM32_RCC_CCIPR4_I2C2SEL RCC_CCIPR4_I2C2SEL_HSI
+#define STM32_RCC_CCIPR4_I2C4SEL RCC_CCIPR4_I2C4SEL_HSI
+#define STM32_I2C1_FREQUENCY     STM32_HSI_FREQUENCY
+#define STM32_I2C2_FREQUENCY     STM32_HSI_FREQUENCY
+#define STM32_I2C4_FREQUENCY     STM32_HSI_FREQUENCY
+
+/* SPI GPIOs ****************************************************************/
+
+/* SPI5 on the Arduino connector: PE15 SCK (D13), PH8 MISO (D12), PG2 MOSI
+ * (D11); PA3 (D10) is driven as a GPIO chip select by the board code.
+ * The kernel clock is PCLK2 (200 MHz).
+ */
+
+#define GPIO_SPI5_SCK     (GPIO_SPI5_SCK_1 | GPIO_SPEED_50MHZ)
+#define GPIO_SPI5_MISO    (GPIO_SPI5_MISO_4 | GPIO_SPEED_50MHZ)
+#define GPIO_SPI5_MOSI    (GPIO_SPI5_MOSI_4 | GPIO_SPEED_50MHZ)
+
+#define STM32_RCC_CCIPR9_SPI5SEL RCC_CCIPR9_SPI5SEL_PCLK2
+#define STM32_SPI5_FREQUENCY     STM32_PCLK2_FREQUENCY
+
+/* LTDC *********************************************************************/
+
+/* 5" 800x480 Rocktech RK050HR18 RGB888 panel on the LTDC.  Timings and
+ * polarities as in the Zephyr stm32n6570_dk board display-timings: syncs 4,
+ * porches 8, syncs and DE active low, pixel clock not inverted.  The 25 MHz
+ * IC16 pixel clock gives 820 x 500 clocks per frame, 61 Hz.
+ */
+
+#define GPIO_LTDC_R0     (GPIO_LTDC_R0_1 | GPIO_SPEED_100MHZ)
+#define GPIO_LTDC_R1     (GPIO_LTDC_R1_2 | GPIO_SPEED_100MHZ)
+#define GPIO_LTDC_R2     (GPIO_LTDC_R2_2 | GPIO_SPEED_100MHZ)
+#define GPIO_LTDC_R3     (GPIO_LTDC_R3_1 | GPIO_SPEED_100MHZ)
+#define GPIO_LTDC_R4     (GPIO_LTDC_R4_4 | GPIO_SPEED_100MHZ)
+#define GPIO_LTDC_R5     (GPIO_LTDC_R5_1 | GPIO_SPEED_100MHZ)
+#define GPIO_LTDC_R6     (GPIO_LTDC_R6_3 | GPIO_SPEED_100MHZ)
+#define GPIO_LTDC_R7     (GPIO_LTDC_R7_1 | GPIO_SPEED_100MHZ)
+
+#define GPIO_LTDC_G0     (GPIO_LTDC_G0_3 | GPIO_SPEED_100MHZ)
+#define GPIO_LTDC_G1     (GPIO_LTDC_G1_3 | GPIO_SPEED_100MHZ)
+#define GPIO_LTDC_G2     (GPIO_LTDC_G2_1 | GPIO_SPEED_100MHZ)
+#define GPIO_LTDC_G3     (GPIO_LTDC_G3_1 | GPIO_SPEED_100MHZ)
+#define GPIO_LTDC_G4     (GPIO_LTDC_G4_1 | GPIO_SPEED_100MHZ)
+#define GPIO_LTDC_G5     (GPIO_LTDC_G5_1 | GPIO_SPEED_100MHZ)
+#define GPIO_LTDC_G6     (GPIO_LTDC_G6_1 | GPIO_SPEED_100MHZ)
+#define GPIO_LTDC_G7     (GPIO_LTDC_G7_2 | GPIO_SPEED_100MHZ)
+
+#define GPIO_LTDC_B0     (GPIO_LTDC_B0_4 | GPIO_SPEED_100MHZ)
+#define GPIO_LTDC_B1     (GPIO_LTDC_B1_1 | GPIO_SPEED_100MHZ)
+#define GPIO_LTDC_B2     (GPIO_LTDC_B2_2 | GPIO_SPEED_100MHZ)
+#define GPIO_LTDC_B3     (GPIO_LTDC_B3_3 | GPIO_SPEED_100MHZ)
+#define GPIO_LTDC_B4     (GPIO_LTDC_B4_2 | GPIO_SPEED_100MHZ)
+#define GPIO_LTDC_B5     (GPIO_LTDC_B5_2 | GPIO_SPEED_100MHZ)
+#define GPIO_LTDC_B6     (GPIO_LTDC_B6_1 | GPIO_SPEED_100MHZ)
+#define GPIO_LTDC_B7     (GPIO_LTDC_B7_1 | GPIO_SPEED_100MHZ)
+
+#define GPIO_LTDC_CLK    (GPIO_LTDC_CLK_2 | GPIO_SPEED_100MHZ)
+#define GPIO_LTDC_DE     (GPIO_LTDC_DE_3 | GPIO_SPEED_100MHZ)
+#define GPIO_LTDC_HSYNC  (GPIO_LTDC_HSYNC_2 | GPIO_SPEED_100MHZ)
+#define GPIO_LTDC_VSYNC  (GPIO_LTDC_VSYNC_2 | GPIO_SPEED_100MHZ)
+
+#define BOARD_LTDC_WIDTH         800
+#define BOARD_LTDC_HEIGHT        480
+
+#define BOARD_LTDC_OUTPUT_BPP    24
+#define BOARD_LTDC_HSYNC         4
+#define BOARD_LTDC_HBP           8
+#define BOARD_LTDC_HFP           8
+#define BOARD_LTDC_VSYNC         4
+#define BOARD_LTDC_VBP           8
+#define BOARD_LTDC_VFP           8
+
+#define BOARD_LTDC_GCR_PCPOL     0 /* Input pixel clock */
+#define BOARD_LTDC_GCR_DEPOL     0 /* DE active low */
+#define BOARD_LTDC_GCR_VSPOL     0 /* VSYNC active low */
+#define BOARD_LTDC_GCR_HSPOL     0 /* HSYNC active low */
+
+/* SDMMC2 GPIOs *************************************************************/
+
+/* microSD slot: PC2 CK, PC3 CMD, PC4 D0, PC5 D1, PC0 D2, PE4 D3 (AF11).
+ * The kernel clock is IC4 (200 MHz):
+ *
+ *   SDMMC_CK = 200 MHz / (2 * CLKDIV)
+ *     init  CLKDIV 250 -> 400 kHz
+ *     xfer  CLKDIV 4   -> 25 MHz (default speed)
+ *     HS    CLKDIV 2   -> 50 MHz (CONFIG_SDMMC2_SD_HS_MODE)
+ */
+
+#define GPIO_SDMMC2_CK    (GPIO_SDMMC2_CK_1 | GPIO_SPEED_100MHZ)
+#define GPIO_SDMMC2_CMD   (GPIO_SDMMC2_CMD_2 | GPIO_SPEED_100MHZ)
+#define GPIO_SDMMC2_D0    (GPIO_SDMMC2_D0_2 | GPIO_SPEED_100MHZ)
+#define GPIO_SDMMC2_D1    (GPIO_SDMMC2_D1_1 | GPIO_SPEED_100MHZ)
+#define GPIO_SDMMC2_D2    (GPIO_SDMMC2_D2_2 | GPIO_SPEED_100MHZ)
+#define GPIO_SDMMC2_D3    (GPIO_SDMMC2_D3_2 | GPIO_SPEED_100MHZ)
+
+#define STM32_RCC_CCIPR8_SDMMC2SEL  RCC_CCIPR8_SDMMC2SEL_IC4
+#define STM32_SDMMC_CLK             (STM32_PLL1_FREQUENCY / STM32_IC4_DIV)
+
+#define STM32_SDMMC_INIT_CLKDIV     (250 << STM32_SDMMC_CLKCR_CLKDIV_SHIFT)
+#define STM32_SDMMC_MMCXFR_CLKDIV   (4 << STM32_SDMMC_CLKCR_CLKDIV_SHIFT)
+#define STM32_SDMMC_SDXFR_CLKDIV    (4 << STM32_SDMMC_CLKCR_CLKDIV_SHIFT)
+#define STM32_SDMMC_SDXFR_HS_CLKDIV (2 << STM32_SDMMC_CLKCR_CLKDIV_SHIFT)
+
+/* USART1 GPIOs *************************************************************/
+
+/* USART1 (ST-LINK Virtual COM Port): PE5=TX (AF7), PE6=RX (AF7)
+ * Connected to the on-board ST-Link to provide a Virtual COM Port.
+ */
+
+#define GPIO_USART1_TX   (GPIO_USART1_TX_3 | GPIO_SPEED_50MHZ)
+#define GPIO_USART1_RX   (GPIO_USART1_RX_3 | GPIO_SPEED_50MHZ)
+
+/* USART2 (STMod+ connector): PD5=TX, PF6=RX, PG5=CTS, PG14=RTS */
+
+#define GPIO_USART2_TX   (GPIO_USART2_TX_3 | GPIO_SPEED_50MHZ)
+#define GPIO_USART2_RX   (GPIO_USART2_RX_2 | GPIO_SPEED_50MHZ)
+#define GPIO_USART2_CTS  (GPIO_USART2_CTS_3 | GPIO_SPEED_50MHZ)
+#define GPIO_USART2_RTS  (GPIO_USART2_RTS_3 | GPIO_SPEED_50MHZ)
+
+/****************************************************************************
+ * Public Data
+ ****************************************************************************/
+
+#ifndef __ASSEMBLY__
+
+#if defined(__cplusplus)
+extern "C"
+{
+#endif
+
+/****************************************************************************
+ * Public Function Prototypes
+ ****************************************************************************/
+
+/****************************************************************************
+ * Name: stm32_board_initialize
+ *
+ * Description:
+ *   All STM32N6 architectures must provide the following entry point.
+ *   This entry point is called early in the initialization -- after all
+ *   memory has been configured and mapped but before any devices
+ *   have been initialized.
+ *
+ ****************************************************************************/
+
+void stm32_board_initialize(void);
+
+#if defined(__cplusplus)
+}
+#endif
+
+#endif /* __ASSEMBLY__ */
+#endif /* __BOARDS_ARM_STM32N6_STM32N6570_DK_INCLUDE_BOARD_H */

@@ -67,6 +67,9 @@ endif()
 #   NO_MAIN_ALIAS       : do not add a main=<app>_main alias(*)
 #   DYNLIB              : if "y", build as dynamic loadable library
 #   LINK_FLAGS          : link flags only for elf or loadable link
+#   UID                 : file owner user ID (CONFIG_SCHED_USER_IDENTITY)
+#   GID                 : file owner group ID (CONFIG_SCHED_USER_IDENTITY)
+#   MODE                : file mode (CONFIG_SCHED_USER_IDENTITY)
 #
 # (*) This is only really needed in convoluted cases where a single .c file
 # contains differently named <app>_main() entries for different <app>. This
@@ -182,6 +185,13 @@ function(nuttx_add_application)
                             nx_mode=${MODE})
           endif()
         endif()
+        # send the emulated TLS calls to libc, see tools/Config.mk
+        if(CONFIG_TLS_EMUTLS)
+          set(EMUTLS_WRAP
+              $<$<NOT:$<BOOL:${USE_LINKER}>>:-Wl,>--wrap=__emutls_get_address
+              $<$<NOT:$<BOOL:${USE_LINKER}>>:-Wl,>--wrap=__emutls_register_common
+          )
+        endif()
         add_custom_command(
           TARGET ${TARGET}
           POST_BUILD
@@ -194,7 +204,7 @@ function(nuttx_add_application)
             $<$<OR:$<BOOL:${KERNEL_ELF_MODE}>,$<BOOL:${LOADABLE_ELF_MODE}>>:$<TARGET_PROPERTY:nuttx_global,NUTTX_ELF_APP_LINK_OPTIONS>>
             # add local link option last
             ${LINK_FLAGS} ${SYMBOL_STACKSIZE} ${SYMBOL_PRIORITY} ${SYMBOL_UID}
-            ${SYMBOL_GID} ${SYMBOL_MODE}
+            ${SYMBOL_GID} ${SYMBOL_MODE} ${EMUTLS_WRAP}
             # link startup obj if m&kernel link
             $<$<AND:$<TARGET_EXISTS:STARTUP_OBJS>,$<NOT:$<BOOL:${DYNLIB_ELF_MODE}>>>:$<TARGET_OBJECTS:STARTUP_OBJS>>
             $<$<NOT:$<BOOL:${USE_LINKER}>>:-Wl,>--start-group
@@ -254,6 +264,19 @@ function(nuttx_add_application)
         )
       endif()
 
+      # A partial link (-r) of LTO objects keeps only LTO data, which the loader
+      # cannot use: compile the module and its crt0 to machine code.
+
+      if(NO_LTO
+         AND (CONFIG_LTO_FULL
+              OR CONFIG_LTO_THIN
+              OR CONFIG_LTO_FAT))
+        target_compile_options(${TARGET} PRIVATE ${NO_LTO})
+        if(TARGET STARTUP_OBJS)
+          target_compile_options(STARTUP_OBJS PRIVATE ${NO_LTO})
+        endif()
+      endif()
+
       install(TARGETS ${TARGET})
       set_property(
         TARGET nuttx
@@ -308,6 +331,21 @@ function(nuttx_add_application)
   else()
     set_target_properties(${TARGET} PROPERTIES APP_STACK
                                                ${CONFIG_DEFAULT_TASK_STACKSIZE})
+  endif()
+
+  # The builtin list of apps gives the file owner and mode of the application
+  # from these, and 0, 0 and 0555 without them.
+
+  if(UID)
+    set_target_properties(${TARGET} PROPERTIES APP_UID ${UID})
+  endif()
+
+  if(GID)
+    set_target_properties(${TARGET} PROPERTIES APP_GID ${GID})
+  endif()
+
+  if(MODE)
+    set_target_properties(${TARGET} PROPERTIES APP_MODE ${MODE})
   endif()
 
   # call target_ options only target is compilable

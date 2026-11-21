@@ -31,8 +31,6 @@
 #include <nuttx/fs/ioctl.h>
 #include <nuttx/signal.h>
 
-#include <nuttx/signal.h>
-
 /****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
@@ -134,9 +132,59 @@
 
 #define CAPIOC_UNREGISTER _CAPIOC(11)
 
+/* Command:     CAPIOC_SET_EDGE
+ * Description: Set the capture edge polarity (handled by the lower half).
+ * Arguments:   enum cap_edge_e value.
+ * Return:      OK on success; ERROR on failure.
+ */
+
+#define CAPIOC_SET_EDGE        _CAPIOC(12)
+
+/* Command:     CAPIOC_START_CAPTURE
+ * Description: Start capture on all channels.
+ * Arguments:   None.
+ * Return:      OK on success; ERROR on failure.
+ */
+
+#define CAPIOC_START_CAPTURE   _CAPIOC(13)
+
+/* Command:     CAPIOC_STOP_CAPTURE
+ * Description: Stop capture on all channels.
+ * Arguments:   None.
+ * Return:      OK on success; ERROR on failure.
+ */
+
+#define CAPIOC_STOP_CAPTURE    _CAPIOC(14)
+
+/* Command:     CAPIOC_GET_INPUT_STATE
+ * Description: Read the input pin state of each channel.
+ * Arguments:   uint8_t array (one entry per channel) to return
+ *              enum cap_input_state_e values.
+ * Return:      OK on success; ERROR on failure.
+ */
+
+#define CAPIOC_GET_INPUT_STATE _CAPIOC(15)
+
 /****************************************************************************
  * Public Types
  ****************************************************************************/
+
+/* Activation edge type */
+
+enum cap_edge_e
+{
+  CAP_EDGE_RISING  = 0,
+  CAP_EDGE_FALLING = 1,
+  CAP_EDGE_BOTH    = 2,
+};
+
+/* Input state */
+
+enum cap_input_state_e
+{
+  CAP_STATE_IDLE   = 0,
+  CAP_STATE_ACTIVE = 1,
+};
 
 struct cap_all_s
 {
@@ -199,7 +247,7 @@ struct cap_ops_s
   CODE int (*getfreq)(FAR struct cap_lowerhalf_s *lower,
                       FAR uint32_t *freq);
 
-  /* Get the result pwm capture edges value */
+  /* Get the result pwm capture edges value (optional) */
 
   CODE int (*getedges)(FAR struct cap_lowerhalf_s *lower,
                        FAR uint32_t *edges);
@@ -220,6 +268,34 @@ struct cap_ops_s
 
   CODE int (*unbind)(FAR struct cap_lowerhalf_s *lower);
 #endif
+
+  /* Start capture on a channel */
+
+  CODE int (*start_capture)(FAR struct cap_lowerhalf_s *lower);
+
+  /* Stop capture on a channel */
+
+  CODE int (*stop_capture)(FAR struct cap_lowerhalf_s *lower);
+
+  /* Read current input pin state (ACTIVE/IDLE) */
+
+  CODE int (*get_input_state)(FAR struct cap_lowerhalf_s *lower,
+                              FAR uint8_t *state);
+
+  /* Get the current value of the free running counter that time stamps
+   * the captured edges (optional).
+   */
+
+  CODE int (*getcount)(FAR struct cap_lowerhalf_s *lower,
+                       FAR uint32_t *count);
+
+  /* Get the counter value latched by the hardware on the last captured
+   * edge (optional).  Called from the notification callback, it gives the
+   * time of the edge independently of the interrupt latency.
+   */
+
+  CODE int (*getcapture)(FAR struct cap_lowerhalf_s *lower,
+                         FAR uint32_t *count);
 };
 
 /* This structure provides the publicly visible representation of the
@@ -238,11 +314,8 @@ struct cap_lowerhalf_s
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -276,6 +349,26 @@ int cap_register(FAR const char *devpath,
 int cap_register_multiple(FAR const char *devpath,
                           FAR struct cap_lowerhalf_s **lower, int n);
 
+#ifdef CONFIG_FAKE_CAPTURE
+/****************************************************************************
+ * Name: fake_capture_create
+ *
+ * Description:
+ *   Create a fake capture lower half, without registering it.  It
+ *   simulates a square wave whose edges are time stamped by a simulated
+ *   free running counter of CONFIG_FAKE_CAPTURE_COUNTER_FREQ Hz.
+ *
+ * Input Parameters:
+ *   freq - The frequency of the simulated signal, in Hz.
+ *   duty - The duty cycle of the simulated signal, in percent (1-99).
+ *
+ * Returned Value:
+ *   The new lower half on success; NULL on failure.
+ *
+ ****************************************************************************/
+
+FAR struct cap_lowerhalf_s *fake_capture_create(uint32_t freq, uint8_t duty);
+
 /****************************************************************************
  * Name: fake_capture_initialize
  *
@@ -293,11 +386,9 @@ int cap_register_multiple(FAR const char *devpath,
  *
  ****************************************************************************/
 
-#ifdef CONFIG_FAKE_CAPTURE
 int fake_capture_initialize(int channels);
 #endif
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

@@ -38,15 +38,36 @@
  * Pre-processor Definitions
  ****************************************************************************/
 
+/* U[S]ART clock enables used by the common U[S]ART driver */
+
+#define STM32_LPUART1_RCC_REG     STM32_RCC_APB4LENR
+#define STM32_LPUART1_RCC_EN      RCC_APB4LENR_LPUART1EN
+#define STM32_USART1_RCC_REG      STM32_RCC_APB2ENR
+#define STM32_USART1_RCC_EN       RCC_APB2ENR_USART1EN
+#define STM32_USART2_RCC_REG      STM32_RCC_APB1LENR
+#define STM32_USART2_RCC_EN       RCC_APB1LENR_USART2EN
+#define STM32_USART3_RCC_REG      STM32_RCC_APB1LENR
+#define STM32_USART3_RCC_EN       RCC_APB1LENR_USART3EN
+#define STM32_UART4_RCC_REG       STM32_RCC_APB1LENR
+#define STM32_UART4_RCC_EN        RCC_APB1LENR_UART4EN
+#define STM32_UART5_RCC_REG       STM32_RCC_APB1LENR
+#define STM32_UART5_RCC_EN        RCC_APB1LENR_UART5EN
+#define STM32_USART6_RCC_REG      STM32_RCC_APB2ENR
+#define STM32_USART6_RCC_EN       RCC_APB2ENR_USART6EN
+#define STM32_UART7_RCC_REG       STM32_RCC_APB1LENR
+#define STM32_UART7_RCC_EN        RCC_APB1LENR_UART7EN
+#define STM32_UART8_RCC_REG       STM32_RCC_APB1LENR
+#define STM32_UART8_RCC_EN        RCC_APB1LENR_UART8EN
+#define STM32_UART9_RCC_REG       STM32_RCC_APB2ENR
+#define STM32_UART9_RCC_EN        RCC_APB2ENR_UART9EN
+#define STM32_USART10_RCC_REG     STM32_RCC_APB2ENR
+#define STM32_USART10_RCC_EN      RCC_APB2ENR_USART10EN
+
 #ifndef __ASSEMBLY__
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -112,7 +133,26 @@ void stm32_clockenable(void);
 
 void stm32_rcc_enableperipherals(void);
 
-#undef EXTERN
+/****************************************************************************
+ * Name: stm32_rcc_enablelse
+ *
+ * Description:
+ *   Enable the External Low-Speed (LSE) oscillator.
+ *
+ ****************************************************************************/
+
+void stm32_rcc_enablelse(void);
+
+/****************************************************************************
+ * Name: stm32_rcc_enablelsi
+ *
+ * Description:
+ *   Enable the Internal Low-Speed (LSI) oscillator.
+ *
+ ****************************************************************************/
+
+void stm32_rcc_enablelsi(void);
+
 #if defined(__cplusplus)
 }
 #endif

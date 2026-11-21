@@ -482,8 +482,28 @@ endif()
 # This needs to happen before project() when binaries are searched for
 
 list(APPEND CMAKE_MODULE_PATH ${NUTTX_DIR}/arch/${CONFIG_ARCH}/src/cmake)
-set(CMAKE_TOOLCHAIN_FILE
-    "${NUTTX_DIR}/arch/${CONFIG_ARCH}/src/cmake/Toolchain.cmake")
+
+macro(nuttx_resolve_toolchain_file)
+  if(CMAKE_TOOLCHAIN_FILE AND NOT IS_ABSOLUTE "${CMAKE_TOOLCHAIN_FILE}")
+    if(EXISTS "${CMAKE_BINARY_DIR}/${CMAKE_TOOLCHAIN_FILE}")
+      set(CMAKE_TOOLCHAIN_FILE "${CMAKE_BINARY_DIR}/${CMAKE_TOOLCHAIN_FILE}")
+    elseif(EXISTS "${CMAKE_SOURCE_DIR}/${CMAKE_TOOLCHAIN_FILE}")
+      set(CMAKE_TOOLCHAIN_FILE "${CMAKE_SOURCE_DIR}/${CMAKE_TOOLCHAIN_FILE}")
+    elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${CMAKE_TOOLCHAIN_FILE}")
+      set(CMAKE_TOOLCHAIN_FILE
+          "${CMAKE_CURRENT_SOURCE_DIR}/${CMAKE_TOOLCHAIN_FILE}")
+    endif()
+  endif()
+endmacro()
+
+# Resolve CMAKE_TOOLCHAIN_FILE if provided by parent or cache, or default to the
+# architecture toolchain file for standalone builds.
+if(CMAKE_TOOLCHAIN_FILE)
+  nuttx_resolve_toolchain_file()
+else()
+  set(CMAKE_TOOLCHAIN_FILE
+      "${NUTTX_DIR}/arch/${CONFIG_ARCH}/src/cmake/Toolchain.cmake")
+endif()
 
 # Compiler detection must not try to link a full executable.  CMake validates a
 # compiler by building and linking a test program, but a bare metal cross
@@ -502,6 +522,63 @@ endif()
 # This triggers configuration
 
 project(NuttX LANGUAGES C CXX ASM)
+
+# When NuttX is embedded as a subproject via add_subdirectory(), CMake will not
+# automatically load CMAKE_TOOLCHAIN_FILE during project() if the parent project
+# already enabled languages. Explicitly include it to ensure architecture
+# settings, compiler definitions, and ARCH_SUBDIR are populated.
+if(NOT CMAKE_SOURCE_DIR STREQUAL NUTTX_DIR)
+  # Capture the compiler selected during language initialization before
+  # including the toolchain file, as the toolchain will assign CMAKE_C_COMPILER
+  # to the cross-compiler executable.
+  if(CMAKE_C_COMPILER)
+    set(_active_c_compiler "${CMAKE_C_COMPILER}")
+  elseif(DEFINED CACHE{CMAKE_C_COMPILER})
+    set(_active_c_compiler "$CACHE{CMAKE_C_COMPILER}")
+  endif()
+
+  # Ensure CMAKE_TOOLCHAIN_FILE is resolved using lookup rules before testing
+  # existence, in case a relative path was provided.
+  if(CMAKE_TOOLCHAIN_FILE)
+    nuttx_resolve_toolchain_file()
+
+    if(EXISTS "${CMAKE_TOOLCHAIN_FILE}" AND NOT IS_DIRECTORY
+                                            "${CMAKE_TOOLCHAIN_FILE}")
+      include(${CMAKE_TOOLCHAIN_FILE})
+    endif()
+  endif()
+
+  if(NOT CONFIG_ARCH STREQUAL "sim" AND _active_c_compiler)
+    if(TOOLCHAIN_PREFIX)
+      get_filename_component(_compiler_name "${_active_c_compiler}" NAME)
+      string(FIND "${_compiler_name}" "${TOOLCHAIN_PREFIX}" _prefix_pos)
+      if(NOT _prefix_pos EQUAL 0)
+        message(
+          FATAL_ERROR
+            "Active C compiler '${_active_c_compiler}' does not match expected "
+            "toolchain prefix '${TOOLCHAIN_PREFIX}'. When embedding NuttX via "
+            "add_subdirectory(), configure CMAKE_TOOLCHAIN_FILE before the "
+            "parent project's project() call.")
+      endif()
+      unset(_compiler_name)
+      unset(_prefix_pos)
+    endif()
+  endif()
+  unset(_active_c_compiler)
+
+  set(CMAKE_TOOLCHAIN_FILE
+      "${CMAKE_TOOLCHAIN_FILE}"
+      PARENT_SCOPE)
+  set(CMAKE_MODULE_PATH
+      "${CMAKE_MODULE_PATH}"
+      PARENT_SCOPE)
+  get_property(config_keys GLOBAL PROPERTY NUTTX_CONFIG_KEYS)
+  foreach(key ${config_keys})
+    set(${key}
+        ${${key}}
+        PARENT_SCOPE)
+  endforeach()
+endif()
 
 # include common toolchain setting
 include(nuttx_toolchain)
@@ -575,7 +652,7 @@ endif()
 
 add_definitions(-D__NuttX__)
 
-add_compile_options($<$<COMPILE_LANGUAGE:ASM>:-D__ASSEMBLY__>)
+add_compile_definitions($<$<COMPILE_LANGUAGE:ASM>:__ASSEMBLY__>)
 
 # Setup main nuttx target ####################################################
 
@@ -625,6 +702,8 @@ if(CONFIG_ARCH_SIM)
     target_link_libraries(nuttx PRIVATE ${NUTTX_BINARY_DIR}/nuttx.rel)
   endif()
 else()
+  # Make nuttx target can inheriting common compilation properties
+  nuttx_add_library_internal(nuttx)
   # These flags apply to source files not part of the library. In sim build this
   # corresponds to "host" files, so we only do this on non-sim build
   target_compile_definitions(
@@ -717,7 +796,11 @@ if(NOT CONFIG_ARCH_SIM)
     add_custom_target(ldscript_tmp_${LD_SCRIPT_NAME} DEPENDS ${LD_SCRIPT_TMP})
     add_dependencies(nuttx ldscript_tmp_${LD_SCRIPT_NAME})
 
-    list(APPEND ldscript_tmp_list -T ${LD_SCRIPT_TMP})
+    if(CONFIG_ARCH_TOOLCHAIN_TASKING)
+      list(APPEND ldscript_tmp_list --lsl-file=${LD_SCRIPT_TMP})
+    else()
+      list(APPEND ldscript_tmp_list -T ${LD_SCRIPT_TMP})
+    endif()
   endforeach()
   set(ldscript ${ldscript_tmp_list})
 endif()
@@ -752,10 +835,15 @@ set(nuttx_libs ${nuttx_kernel_libs} ${nuttx_system_libs} ${nuttx_apps_libs}
 if(NOT CONFIG_ARCH_SIM)
   # TODO: nostart/nodefault not applicable to nuttx toolchain
   if(CONFIG_ARCH_TOOLCHAIN_TASKING)
-    target_link_libraries(nuttx PRIVATE --lsl-file=${ldscript} ${nuttx_libs})
+    target_link_libraries(nuttx PRIVATE ${ldscript} ${nuttx_libs})
     # Remove executable suffix
     set(CMAKE_EXECUTABLE_SUFFIX "")
   else()
+    get_property(NUTTX_EXTRA_FLAGS GLOBAL PROPERTY NUTTX_EXTRA_FLAGS)
+    if(NUTTX_EXTRA_FLAGS)
+      list(REMOVE_DUPLICATES NUTTX_EXTRA_FLAGS)
+    endif()
+
     target_link_libraries(
       nuttx
       PRIVATE ${NUTTX_EXTRA_FLAGS}
@@ -819,6 +907,7 @@ else()
   # renamed. The final nuttx binary is built by linking the host-specific
   # objects with the relocatable binary.
   include(nuttx_redefine_symbols)
+  get_property(nuttx_sim_rel_options GLOBAL PROPERTY NUTTX_SIM_REL_LINK_OPTIONS)
 
   # TODO: do with single function call?
   set(nuttx_libs_paths)
@@ -841,9 +930,10 @@ else()
       OUTPUT nuttx.rel
       COMMAND
         ${CMAKE_C_COMPILER} ARGS -r $<$<BOOL:${CONFIG_SIM_M32}>:-m32>
-        $<$<BOOL:${LINUX}>:-Wl,-z,noexecstack> $<TARGET_OBJECTS:sim_head>
-        $<$<NOT:$<BOOL:${APPLE}>>:-Wl,--start-group> ${nuttx_libs_paths}
-        $<$<NOT:$<BOOL:${APPLE}>>:-Wl,--end-group> -o nuttx.rel
+        $<$<BOOL:${LINUX}>:-Wl,-z,noexecstack> ${nuttx_sim_rel_options}
+        $<TARGET_OBJECTS:sim_head> $<$<NOT:$<BOOL:${APPLE}>>:-Wl,--start-group>
+        ${nuttx_libs_paths} $<$<NOT:$<BOOL:${APPLE}>>:-Wl,--end-group> -o
+        nuttx.rel
       COMMAND ${CMAKE_OBJCOPY} --redefine-syms=nuttx-names.dat nuttx.rel
       DEPENDS ${nuttx_libs} sim_head sim_redefine_symbols
       COMMAND_EXPAND_LISTS)
@@ -890,18 +980,20 @@ if(CONFIG_BUILD_PROTECTED)
   get_property(user_ldscript GLOBAL PROPERTY LD_SCRIPT_USER)
 
   # Pre-compile linker script(s)
-  set(user_ldscript_tmp_list)
-  foreach(ldscript ${user_ldscript})
-    get_filename_component(LD_SCRIPT_USER_NAME ${ldscript} NAME)
-    set(LD_SCRIPT_USER_TMP "${NUTTX_BINARY_DIR}/${LD_SCRIPT_USER_NAME}.tmp")
-    nuttx_generate_preprocess_target(SOURCE_FILE ${ldscript} TARGET_FILE
-                                     ${LD_SCRIPT_USER_TMP})
-    add_custom_target(user_ldscript_tmp_${LD_SCRIPT_USER_NAME}
-                      DEPENDS ${LD_SCRIPT_USER_TMP})
-    add_dependencies(nuttx_user user_ldscript_tmp_${LD_SCRIPT_USER_NAME})
-    list(APPEND user_ldscript_tmp_list -T ${LD_SCRIPT_USER_TMP})
-  endforeach()
-  set(user_ldscript ${user_ldscript_tmp_list})
+  if(NOT CONFIG_ARCH_TOOLCHAIN_TASKING)
+    set(user_ldscript_tmp_list)
+    foreach(ldscript ${user_ldscript})
+      get_filename_component(LD_SCRIPT_USER_NAME ${ldscript} NAME)
+      set(LD_SCRIPT_USER_TMP "${NUTTX_BINARY_DIR}/${LD_SCRIPT_USER_NAME}.tmp")
+      nuttx_generate_preprocess_target(SOURCE_FILE ${ldscript} TARGET_FILE
+                                       ${LD_SCRIPT_USER_TMP})
+      add_custom_target(user_ldscript_tmp_${LD_SCRIPT_USER_NAME}
+                        DEPENDS ${LD_SCRIPT_USER_TMP})
+      add_dependencies(nuttx_user user_ldscript_tmp_${LD_SCRIPT_USER_NAME})
+      list(APPEND user_ldscript_tmp_list -T ${LD_SCRIPT_USER_TMP})
+    endforeach()
+    set(user_ldscript ${user_ldscript_tmp_list})
+  endif()
 
   # reset link options that don't fit userspace
   get_target_property(nuttx_user_LINK_OPTIONS nuttx_user LINK_OPTIONS)
@@ -911,6 +1003,12 @@ if(CONFIG_BUILD_PROTECTED)
     list(REMOVE_ITEM nuttx_user_LINK_OPTIONS "-entry=__start")
     list(REMOVE_ITEM nuttx_user_LINK_OPTIONS "-map=nuttx.map")
     list(APPEND nuttx_user_LINK_OPTIONS "-map=nuttx_user.map")
+  elseif(CONFIG_ARCH_TOOLCHAIN_TASKING)
+    list(REMOVE_ITEM nuttx_user_LINK_OPTIONS "-entry=__start")
+    list(REMOVE_ITEM nuttx_user_LINK_OPTIONS "--map-file=nuttx.map" "-lc_fpu"
+         "-lfp_fpu" "-lrt")
+    list(APPEND nuttx_user_LINK_OPTIONS "--map-file=nuttx_user.map" "-i"
+         "--first-library-first")
   else()
     list(REMOVE_ITEM nuttx_user_LINK_OPTIONS "-Wl,--entry=__start")
     list(APPEND nuttx_user_LINK_OPTIONS "-Wl,-Map=nuttx_user.map")
@@ -922,22 +1020,38 @@ if(CONFIG_BUILD_PROTECTED)
   if(CONFIG_ARCH_TOOLCHAIN_GHS)
     target_link_options(nuttx_user PRIVATE -nostartfiles -minlib
                         -entry=${CONFIG_INIT_ENTRYPOINT})
-  else()
+  elseif(NOT CONFIG_ARCH_TOOLCHAIN_TASKING)
     target_link_options(
       nuttx_user PRIVATE -nostartfiles -nodefaultlibs
       -Wl,--entry=${CONFIG_INIT_ENTRYPOINT}
       -Wl,--undefined=${CONFIG_INIT_ENTRYPOINT})
   endif()
 
-  target_link_libraries(
-    nuttx_user
-    PRIVATE ${user_ldscript}
-            $<$<NOT:$<BOOL:${DISABLE_LINK_GROUP}>>:-Wl,--start-group>
-            ${nuttx_system_libs}
-            ${nuttx_apps_libs}
-            ${nuttx_user_extra_libs}
-            $<$<BOOL:${CONFIG_HAVE_CXX}>:supc++>
-            $<$<NOT:$<BOOL:${DISABLE_LINK_GROUP}>>:-Wl,--end-group>)
+  if(CONFIG_ARCH_TOOLCHAIN_TASKING)
+    set(user_ldscript_lsl)
+    foreach(ldscript ${user_ldscript})
+      list(APPEND user_ldscript_lsl --lsl-file=${ldscript})
+    endforeach()
+    target_link_libraries(
+      nuttx_user
+      PRIVATE ${user_ldscript_lsl}
+              ${nuttx_system_libs}
+              ${nuttx_apps_libs}
+              ${nuttx_user_extra_libs}
+              -lc_fpu
+              -lfp_fpu
+              -lrt)
+  else()
+    target_link_libraries(
+      nuttx_user
+      PRIVATE ${user_ldscript}
+              $<$<NOT:$<BOOL:${DISABLE_LINK_GROUP}>>:-Wl,--start-group>
+              ${nuttx_system_libs}
+              ${nuttx_apps_libs}
+              ${nuttx_user_extra_libs}
+              $<$<BOOL:${CONFIG_HAVE_CXX}>:supc++>
+              $<$<NOT:$<BOOL:${DISABLE_LINK_GROUP}>>:-Wl,--end-group>)
+  endif()
 
   target_include_directories(
     nuttx_user SYSTEM PRIVATE ${NUTTX_DIR}/include ${NUTTX_BINARY_DIR}/include

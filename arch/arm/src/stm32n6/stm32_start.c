@@ -30,7 +30,9 @@
 #include <assert.h>
 #include <debug.h>
 
+#include <nuttx/cache.h>
 #include <nuttx/init.h>
+#include <nuttx/macro.h>
 #include <arch/barriers.h>
 #include <arch/board/board.h>
 
@@ -40,7 +42,10 @@
 #include "stm32.h"
 #include "stm32_gpio.h"
 #include "stm32_pwr.h"
+#include "stm32_rif.h"
 #include "stm32_start.h"
+#include "hardware/stm32n6xxx_bsec.h"
+#include "hardware/stm32n6xxx_ramcfg.h"
 #include "hardware/stm32n6xxx_syscfg.h"
 
 /****************************************************************************
@@ -100,22 +105,69 @@ static inline void stm32_enable_lob(void)
 
 void __start_c(void) noinstrument_function;
 
+/* Called from __start before the system clock is set up.  On some STM32
+ * families it runs before .data and .bss are initialized, so it must not
+ * rely on them.  A bootloader can hand over to the ROM bootloader here.
+ */
+
+void stm32_preclock_hook(void) weak_function;
+
 /****************************************************************************
  * Name: __start
  *
  * Description:
  *   Reset entry point.  The STM32N6 boot ROM (DEV mode) leaves MSPLIM and
- *   PSPLIM set such that the first stack push from C code can fault.
- *   This function is naked so the limits can be cleared before any
+ *   PSPLIM set such that the first stack push from C code can fault, and
+ *   it jumps here with MSP still pointing into its own stack in AXISRAM1.
+ *   This function is naked so the limits can be cleared and MSP loaded
+ *   from the vector table, as a hardware reset would, before any
  *   compiler-generated prologue runs.  It then tail-calls __start_c.
+ *
+ *   The boot ROM enables only AXISRAM1/2, but .data, .bss and the idle
+ *   stack may extend into AXISRAM3.  AXISRAM3-6 are clocked and taken out
+ *   of RAMCFG shutdown here, before anything uses memory.
  *
  ****************************************************************************/
 
 void __attribute__((naked)) noinstrument_function __start(void)
 {
+  /* Clear the stack limits, clock all AXISRAM banks and the RAMCFG, clear
+   * SRAMSD of AXISRAM3-6, then load MSP from the vector table.
+   */
+
   __asm__ volatile ("mov r0, #0\n\t"
                     "msr msplim, r0\n\t"
                     "msr psplim, r0\n\t"
+                    "ldr r0, =" STRINGIFY(STM32_RCC_MEMENSR) "\n\t"
+                    "ldr r1, =" STRINGIFY(RCC_MEMENR_ALLAXISRAM |
+                                          RCC_MEMENR_CACHEAXIRAMEN) "\n\t"
+                    "str r1, [r0]\n\t"
+                    "ldr r0, =" STRINGIFY(STM32_RCC_AHB2ENSR) "\n\t"
+                    "ldr r1, =" STRINGIFY(RCC_AHB2ENR_RAMCFGEN) "\n\t"
+                    "str r1, [r0]\n\t"
+                    "dsb\n\t"
+                    "ldr r2, =" STRINGIFY(RAMCFG_CR_SRAMSD) "\n\t"
+                    "ldr r0, =" STRINGIFY(STM32_RAMCFG_AXISRAM3_CR) "\n\t"
+                    "ldr r1, [r0]\n\t"
+                    "bic r1, r1, r2\n\t"
+                    "str r1, [r0]\n\t"
+                    "ldr r0, =" STRINGIFY(STM32_RAMCFG_AXISRAM4_CR) "\n\t"
+                    "ldr r1, [r0]\n\t"
+                    "bic r1, r1, r2\n\t"
+                    "str r1, [r0]\n\t"
+                    "ldr r0, =" STRINGIFY(STM32_RAMCFG_AXISRAM5_CR) "\n\t"
+                    "ldr r1, [r0]\n\t"
+                    "bic r1, r1, r2\n\t"
+                    "str r1, [r0]\n\t"
+                    "ldr r0, =" STRINGIFY(STM32_RAMCFG_AXISRAM6_CR) "\n\t"
+                    "ldr r1, [r0]\n\t"
+                    "bic r1, r1, r2\n\t"
+                    "str r1, [r0]\n\t"
+                    "dsb\n\t"
+                    "ldr r0, =_vectors\n\t"
+                    "ldr r0, [r0]\n\t"
+                    "msr msp, r0\n\t"
+                    "isb\n\t"
                     "b __start_c\n\t");
 }
 
@@ -138,13 +190,30 @@ void __start_c(void)
 
   putreg32((uint32_t)_vectors, NVIC_VECTAB);
 
-  /* When chain-loaded by an FSBL that called HAL_Init(), SysTick may be
-   * left running.  Disable it and clear any pending interrupt so it does
+  /* When chain-loaded by a first-stage boot loader, SysTick may be left
+   * running.  Disable it and clear any pending interrupt so it does
    * not fire before NuttX has attached its handler.
    */
 
   putreg32(0, NVIC_SYSTICK_CTRL);
   putreg32(NVIC_INTCTRL_PENDSTCLR, NVIC_INTCTRL);
+
+#ifdef CONFIG_STM32N6_DEBUG
+  /* Enable BSEC before accessing its debug control registers. */
+
+  putreg32(RCC_APB4HENR_BSECEN, STM32_RCC_APB4HENSR);
+  (void)getreg32(STM32_RCC_APB4HENR);
+
+  /* The boot ROM can close debug access in flash boot mode.  Reopen it
+   * at the current protection level before clock and memory initialization
+   * so a debugger can attach without changing the boot pins.
+   */
+
+  putreg32(BSEC_AP_UNLOCK_UNLOCK, STM32_BSEC_AP_UNLOCK);
+  putreg32(BSEC_DBGCR_AUTH_SEC | BSEC_DBGCR_UNLOCK |
+           ((getreg32(STM32_BSEC_HDPLSR) & BSEC_HDPLSR_HDPL_MASK) <<
+            BSEC_DBGCR_AUTH_HDPL_SHIFT), STM32_BSEC_DBGCR);
+#endif
 
   /* Force plain SLEEP (not DEEPSLEEP) on WFI so the system clock keeps
    * running and SysTick continues to wake us.  Cleared once here so
@@ -187,7 +256,18 @@ void __start_c(void)
 
   stm32_enable_lob();
 
+  /* Let the board act before the system clock is set up. */
+
+  if (stm32_preclock_hook)
+    {
+      stm32_preclock_hook();
+    }
+
   stm32_clockconfig();
+
+  /* Give the enabled bus masters access to Secure memory */
+
+  stm32_rifconfig();
 
   /* Per ES0620, BSECEN must remain set or WFI/sleep fails.  Set it via
    * the atomic SET register, together with SYSCFGEN which we need below.
@@ -205,8 +285,46 @@ void __start_c(void)
            STM32_RCC_BUSLPENSR);
   putreg32(RCC_MEMLPENR_ALLAXISRAM | RCC_MEMLPENR_CACHEAXIRAMLPEN,
            STM32_RCC_MEMLPENSR);
+#ifdef CONFIG_STM32_LPUART1
+  putreg32(RCC_APB4LLPENR_LPUART1LPEN, STM32_RCC_APB4LLPENSR);
+#endif
 #ifdef CONFIG_STM32_USART1
   putreg32(RCC_APB2LPENR_USART1LPEN, STM32_RCC_APB2LPENSR);
+#endif
+#ifdef CONFIG_STM32_USART2
+  putreg32(RCC_APB1LLPENR_USART2LPEN, STM32_RCC_APB1LLPENSR);
+#endif
+#ifdef CONFIG_STM32_USART3
+  putreg32(RCC_APB1LLPENR_USART3LPEN, STM32_RCC_APB1LLPENSR);
+#endif
+#ifdef CONFIG_STM32_UART4
+  putreg32(RCC_APB1LLPENR_UART4LPEN, STM32_RCC_APB1LLPENSR);
+#endif
+#ifdef CONFIG_STM32_UART5
+  putreg32(RCC_APB1LLPENR_UART5LPEN, STM32_RCC_APB1LLPENSR);
+#endif
+#ifdef CONFIG_STM32_USART6
+  putreg32(RCC_APB2LPENR_USART6LPEN, STM32_RCC_APB2LPENSR);
+#endif
+#ifdef CONFIG_STM32_UART7
+  putreg32(RCC_APB1LLPENR_UART7LPEN, STM32_RCC_APB1LLPENSR);
+#endif
+#ifdef CONFIG_STM32_UART8
+  putreg32(RCC_APB1LLPENR_UART8LPEN, STM32_RCC_APB1LLPENSR);
+#endif
+#ifdef CONFIG_STM32_UART9
+  putreg32(RCC_APB2LPENR_UART9LPEN, STM32_RCC_APB2LPENSR);
+#endif
+#ifdef CONFIG_STM32_USART10
+  putreg32(RCC_APB2LPENR_USART10LPEN, STM32_RCC_APB2LPENSR);
+#endif
+#ifdef CONFIG_STM32_TIM
+  putreg32(RCC_APB1LLPENR_ALLTIM, STM32_RCC_APB1LLPENSR);
+  putreg32(RCC_APB2LPENR_ALLTIM, STM32_RCC_APB2LPENSR);
+#endif
+#ifdef CONFIG_STM32_LPTIM
+  putreg32(RCC_APB1LLPENR_LPTIM1LPEN, STM32_RCC_APB1LLPENSR);
+  putreg32(RCC_APB4LLPENR_ALLLPTIM, STM32_RCC_APB4LLPENSR);
 #endif
 
   /* Mark the board's I/O voltage domains as supply-valid before any GPIO
@@ -216,15 +334,25 @@ void __start_c(void)
 
   stm32_pwr_enablevddio(BOARD_PWR_VDDIO);
 
+  /* VDDIO5 (SDMMC2 pads) is validated in PWR SVMCR2 when the board
+   * provides BOARD_PWR_VDDIO5 (PWR_SVMCR2_* bits).
+   */
+
+#ifdef BOARD_PWR_VDDIO5
+  modifyreg32(STM32_PWR_SVMCR2, 0, BOARD_PWR_VDDIO5);
+#endif
+
   /* Apply the ES0620 I/O-compensation mitigation (write 0x287) to the
-   * domains we use.  Only VDDIO2 and VDDIO3 are touched: the other
-   * VDDIOxCCCR registers cannot be accessed without their VDDIOxSV bit
-   * set first (separate ES0620 erratum), and only VDDIO2/3 are declared
-   * supply-valid in BOARD_PWR_VDDIO above.
+   * domains we use.  Only VDDIO2, VDDIO3 and the board's VDDIO5 are
+   * touched: the other VDDIOxCCCR registers cannot be accessed without
+   * their VDDIOxSV bit set first (separate ES0620 erratum).
    */
 
   putreg32(SYSCFG_CCCR_ES0620_MANUAL, STM32_SYSCFG_VDDIO2CCCR);
   putreg32(SYSCFG_CCCR_ES0620_MANUAL, STM32_SYSCFG_VDDIO3CCCR);
+#ifdef BOARD_PWR_VDDIO5
+  putreg32(SYSCFG_CCCR_ES0620_MANUAL, STM32_SYSCFG_VDDIO5CCCR);
+#endif
   putreg32(SYSCFG_CCCR_ES0620_MANUAL, STM32_SYSCFG_VDDCCCR);
 
   putreg32((uint32_t)_vectors, STM32_SYSCFG_INITSVTORCR);
@@ -233,14 +361,6 @@ void __start_c(void)
 
   (void)getreg32(STM32_SYSCFG_VDDCCCR);
 
-#ifdef CONFIG_STM32_USART1
-  /* Route USART1's kernel clock to HSI so the BRR computation is
-   * independent of any later SYSCLK changes.
-   */
-
-  putreg32(RCC_CCIPR13_USART1SEL_HSI, STM32_RCC_CCIPR13);
-#endif
-
   stm32_lowsetup();
 
 #ifdef USE_EARLYSERIALINIT
@@ -248,6 +368,13 @@ void __start_c(void)
 #endif
 
   stm32_board_initialize();
+
+  /* Enable the L1 I- and D-caches when configured.  As on STM32H7, this
+   * is done after the board initialization.
+   */
+
+  up_enable_icache();
+  up_enable_dcache();
 
   /* Final DSB+ISB after SCB writes (VTOR, SYSTICK_CTRL, SYSCFG INITSVTORCR)
    * before handing off to NuttX.

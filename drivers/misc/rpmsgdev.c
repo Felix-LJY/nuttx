@@ -96,7 +96,7 @@ struct rpmsgdev_cookie_s
 
 static int     rpmsgdev_open(FAR struct file *filep);
 static int     rpmsgdev_close(FAR struct file *filep);
-static void    rpmsgdev_wait_cb(FAR struct pollfd *fds);
+static void    rpmsgdev_wait_cb(FAR struct pollfd_s *fds);
 static int     rpmsgdev_wait(FAR struct file *filep, pollevent_t events);
 static ssize_t rpmsgdev_read(FAR struct file *filep, FAR char *buffer,
                              size_t buflen);
@@ -107,8 +107,8 @@ static off_t   rpmsgdev_seek(FAR struct file *filep, off_t offset,
 static ssize_t rpmsgdev_ioctl_arglen(int cmd, unsigned long arg);
 static int     rpmsgdev_ioctl(FAR struct file *filep, int cmd,
                               unsigned long arg);
-static int     rpmsgdev_poll(FAR struct file *filep, FAR struct pollfd *fds,
-                             bool setup);
+static int rpmsgdev_poll(FAR struct file *filep, FAR struct pollfd_s *fds,
+                         bool setup);
 
 /* Functions for sending data to the remote cpu */
 
@@ -300,7 +300,7 @@ static int rpmsgdev_close(FAR struct file *filep)
  *
  ****************************************************************************/
 
-static void rpmsgdev_wait_cb(FAR struct pollfd *fds)
+static void rpmsgdev_wait_cb(FAR struct pollfd_s *fds)
 {
   int semcount = 0;
   FAR sem_t *pollsem = (FAR sem_t *)fds->arg;
@@ -336,7 +336,7 @@ static int rpmsgdev_wait(FAR struct file *filep, pollevent_t events)
 {
   int ret;
   sem_t sem;
-  struct pollfd fds;
+  struct pollfd_s fds;
 
   nxsem_init(&sem, 0, 0);
 
@@ -615,6 +615,8 @@ static ssize_t rpmsgdev_ioctl_arglen(int cmd, unsigned long arg)
       case BATIOC_TEMPERATURE:
       case BATIOC_INPUT_CURRENT:
       case BATIOC_STATE:
+      case BATIOC_CAPACITY:
+      case BATIOC_CHIPID:
         return sizeof(int);
       case TUNSETIFF:
       case TUNGETIFF:
@@ -695,6 +697,7 @@ static int rpmsgdev_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
   if (cmd == FIONBIO && ret >= 0)
     {
       FAR int *nonblock = (FAR int *)(uintptr_t)arg;
+
       priv->nonblock = *nonblock;
     }
 
@@ -717,7 +720,7 @@ static int rpmsgdev_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
  *
  ****************************************************************************/
 
-static int rpmsgdev_poll(FAR struct file *filep, FAR struct pollfd *fds,
+static int rpmsgdev_poll(FAR struct file *filep, FAR struct pollfd_s *fds,
                          bool setup)
 {
   FAR struct rpmsgdev_s *dev;
@@ -995,9 +998,9 @@ static int rpmsgdev_notify_handler(FAR struct rpmsg_endpoint *ept,
                                    uint32_t src, FAR void *priv)
 {
   FAR struct rpmsgdev_notify_s *rsp = data;
-  FAR struct pollfd *fds;
+  FAR struct pollfd_s *fds;
 
-  fds = (FAR struct pollfd *)(uintptr_t)rsp->fds;
+  fds = (FAR struct pollfd_s *)(uintptr_t)rsp->fds;
   poll_notify(&fds, 1, rsp->revents);
 
   return 0;

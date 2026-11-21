@@ -1,6 +1,8 @@
-=============
-CanMV K230
-=============
+=================
+Canaan CanMV K230
+=================
+
+.. tags:: arch:risc-v, chip:k230, vendor:canaan
 
 The `CanMV K230 <https://developer.canaan-creative.com/k230/dev/zh/CanMV_K230_%E6%95%99%E7%A8%8B.html>`_ is a raspberry-pi sized single board computer with 512MB DRAM and a microSD card slot for booting. It comes with serial console, Ethernet, HDMI and USB/OTG ports. Unfortuunately it doesn't support JTAG alike debugging interfaces.
 
@@ -9,7 +11,7 @@ The `K230 SDK <https://github.com/kendryte/k230_sdk>`_ contains source code, lib
 K230 boots from CPU0 and loads U-Boot SPL into DRAM first, then U-Boot kicks off OpenSBI wrapped Linux/RTT OS images on respective CPU cores accordingly.
 
 The K230 U-Boot kicks off firmwares in machine mode, thus it allows flat, protected or kernel
-NuttX `build modes <https://nuttx.apache.org/docs/latest/implementation/processes_vs_tasks.html>`_. The kernel build mode further works with OpenSBI or a builtin minimal SBI layer.
+NuttX `build modes <https://nuttx.apache.org/docs/latest/os/scheduling/processes_vs_tasks.html>`_. The kernel build mode further works with OpenSBI or a builtin minimal SBI layer.
 
 Preparations
 ============

@@ -67,6 +67,10 @@
 #include "stm32_mt6816.h"
 #endif
 
+#ifdef CONFIG_SENSORS_SCL3300
+#include "stm32_scl3300.h"
+#endif
+
 #ifdef CONFIG_INPUT_MPR121_KEYPAD
 #include "stm32_mpr121.h"
 #endif
@@ -282,6 +286,18 @@ int stm32_bringup(void)
     }
 #endif
 
+#ifdef CONFIG_SENSORS_SCL3300
+  /* Initialize the SCL3300 inclinometer on SPI1 as
+   * /dev/uorb/sensor_inclinometer<SCL3300_DEVNO>
+   */
+
+  ret = board_scl3300_initialize(SCL3300_DEVNO, 1);
+  if (ret < 0)
+    {
+      syslog(LOG_ERR, "ERROR: board_scl3300_initialize failed: %d\n", ret);
+    }
+#endif
+
 #ifdef CONFIG_SENSORS_LIS3DSH_UORB
   /* Initialize the on-board LIS3DSH accelerometer as a uORB sensor on SPI1 */
 
@@ -421,7 +437,7 @@ int stm32_bringup(void)
     }
 #endif
 
-#ifdef CONFIG_CAPTURE
+#if defined(CONFIG_CAPTURE) && defined(CONFIG_STM32_TIM3_CAP)
   /* Initialize Capture and register the Capture driver. */
 
   ret = stm32_capture_setup("/dev/capture0");
@@ -666,6 +682,7 @@ int stm32_bringup(void)
 
 #if defined(CONFIG_RNDIS) && !defined(CONFIG_RNDIS_COMPOSITE)
   uint8_t mac[6];
+
   mac[0] = 0xa0; /* TODO */
   mac[1] = (CONFIG_NETINIT_MACADDR_2 >> (8 * 0)) & 0xff;
   mac[2] = (CONFIG_NETINIT_MACADDR_1 >> (8 * 3)) & 0xff;
@@ -709,6 +726,16 @@ int stm32_bringup(void)
   if (ret != OK)
     {
       aerr("ERROR: Failed to initialize hx711: %d\n", ret);
+    }
+#endif
+
+#ifdef CONFIG_PTP_PPS
+  /* PPS disciplined PTP clock: TIM5 counter, GNSS PPS on PA1 (TIM5_CH2) */
+
+  ret = stm32_ptp_pps_setup(0);
+  if (ret < 0)
+    {
+      syslog(LOG_ERR, "ERROR: stm32_ptp_pps_setup failed: %d\n", ret);
     }
 #endif
 

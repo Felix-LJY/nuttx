@@ -1,5 +1,5 @@
-============
-STM32F746-WS
-============
+===================
+Waveshare STM32F746
+===================
 
-.. tags:: chip:stm32, chip:stm32f7, chip:stm32f746
+.. tags:: arch:arm, chip:stm32f7, part:stm32f746, vendor:st

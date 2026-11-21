@@ -39,6 +39,7 @@
 #include <assert.h>
 #include <nuttx/debug.h>
 
+#include <nuttx/sched.h>
 #include <nuttx/fs/fs.h>
 #include <nuttx/fs/ioctl.h>
 #include <nuttx/drivers/drivers.h>
@@ -62,7 +63,7 @@ static ssize_t bch_write(FAR struct file *filep, FAR const char *buffer,
                          size_t buflen);
 static int     bch_ioctl(FAR struct file *filep, int cmd,
                          unsigned long arg);
-static int     bch_poll(FAR struct file *filep, FAR struct pollfd *fds,
+static int     bch_poll(FAR struct file *filep, FAR struct pollfd_s *fds,
                         bool setup);
 #ifndef CONFIG_DISABLE_PSEUDOFS_OPERATIONS
 static int     bch_unlink(FAR struct inode *inode);
@@ -98,7 +99,7 @@ const struct file_operations g_bch_fops =
  * Name: bch_poll
  ****************************************************************************/
 
-static int bch_poll(FAR struct file *filep, FAR struct pollfd *fds,
+static int bch_poll(FAR struct file *filep, FAR struct pollfd_s *fds,
                     bool setup)
 {
   if (setup)
@@ -121,6 +122,11 @@ static int bch_open(FAR struct file *filep)
   FAR struct inode *inode = filep->f_inode;
   FAR struct bchlib_s *bch;
   int ret = OK;
+
+  if (!nxsched_capable(PR_CAP_RAWIO))
+    {
+      return -EPERM;
+    }
 
   DEBUGASSERT(inode->i_private);
   bch = inode->i_private;
@@ -240,24 +246,24 @@ static off_t bch_seek(FAR struct file *filep, off_t offset, int whence)
 
   switch (whence)
     {
-    case SEEK_CUR:
-      newpos = filep->f_pos + offset;
-      break;
+      case SEEK_CUR:
+        newpos = filep->f_pos + offset;
+        break;
 
-    case SEEK_SET:
-      newpos = offset;
-      break;
+      case SEEK_SET:
+        newpos = offset;
+        break;
 
-    case SEEK_END:
-      newpos = (off_t)bch->sectsize * bch->nsectors + offset;
-      break;
+      case SEEK_END:
+        newpos = (off_t)bch->sectsize * bch->nsectors + offset;
+        break;
 
-    default:
+      default:
 
-      /* Return EINVAL if the whence argument is invalid */
+        /* Return EINVAL if the whence argument is invalid */
 
-      nxmutex_unlock(&bch->lock);
-      return -EINVAL;
+        nxmutex_unlock(&bch->lock);
+        return -EINVAL;
     }
 
   /* Opengroup.org:

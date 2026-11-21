@@ -28,8 +28,11 @@
 
 #include <signal.h>
 #include <errno.h>
+#include <unistd.h>
 
 #include <nuttx/sched.h>
+#include <string.h>
+
 #include <nuttx/signal.h>
 
 #include "sched/sched.h"
@@ -101,16 +104,24 @@ int nxsig_tgkill(pid_t pid, pid_t tid, int signo)
 
   /* Create the siginfo structure */
 
+  /* Zero the whole siginfo first: sigaction-queued signals carry a
+   * si_user field that only the sigaction queue path assigns, so a
+   * stack-garbage si_user here would be memcpy'd into the pending
+   * entry and handed back to a sigtimedwait() consumer.
+   */
+
+  memset(&info, 0, sizeof(siginfo_t));
   info.si_signo           = signo;
   info.si_code            = SI_USER;
   info.si_errno           = EINTR;
   info.si_value.sival_ptr = NULL;
 #ifdef CONFIG_SCHED_HAVE_PARENT
   info.si_pid             = rtcb->pid;
+  info.si_uid             = getuid();
   info.si_status          = OK;
 #endif
 
-  ret = nxsig_dispatch(tid, &info, pid == (pid_t)-1);
+  ret = nxsig_dispatch(tid, &info, pid == (pid_t)-1, NULL, false);
 
 errout:
   return ret;
@@ -148,6 +159,12 @@ errout:
 int tgkill(pid_t pid, pid_t tid, int signo)
 {
   int ret;
+
+  if (signo != 0 && !nxsched_may_control(tid))
+    {
+      set_errno(EPERM);
+      return ERROR;
+    }
 
   ret = nxsig_tgkill(pid, tid, signo);
   if (ret < 0)

@@ -345,6 +345,16 @@
 #define MII_LPA_LPACK                (1 << 14) /* Bit 14: Link partner acknowledgement */
 #define MII_LPA_NXTPAGE              (1 << 15) /* Bit 15: Next page requested */
 
+/* Master/slave control register bit definitions (1000BASE-T) */
+
+#define MII_MSCONTROL_1000BASETHALF  (1 << 8)  /* Bit 8:  Advertise 1000BASE-T half duplex */
+#define MII_MSCONTROL_1000BASETFULL  (1 << 9)  /* Bit 9:  Advertise 1000BASE-T full duplex */
+
+/* Master/slave status register bit definitions (1000BASE-T) */
+
+#define MII_MSSTATUS_LP1000BASETHALF (1 << 10) /* Bit 10: LP 1000BASE-T half duplex able */
+#define MII_MSSTATUS_LP1000BASETFULL (1 << 11) /* Bit 11: LP 1000BASE-T full duplex able */
+
 /* Link partner ability in next page format */
 
 #define MII_LPANP_MESSAGE            0x07ff    /* Bits 0-10: Link partner's message code */
@@ -391,6 +401,67 @@
 #define MII_ESTATUS_1000BASEXHALF    (1 << 14) /* Bit 14: 1000BASE-X Half Duplex able */
 #define MII_ESTATUS_1000BASEXFULL    (1 << 15) /* Bit 15: 1000BASE-X Full Duplex able */
 
+/* IEEE 802.3 Clause 45 MDIO Manageable Device (MMD) definitions ************/
+
+/* MMD device addresses (IEEE 802.3 Clause 45, 45.2) */
+
+#define MII_MMD_PMAPMD               1         /* PMA/PMD */
+#define MII_MMD_PCS                  3         /* PCS */
+#define MII_MMD_AN                   7         /* Auto-Negotiation */
+#define MII_MMD_VEND1                30        /* Vendor-specific 1 */
+#define MII_MMD_VEND2                31        /* Vendor-specific 2 */
+
+/* MMD register addresses (common across MMDs, IEEE 802.3 45.2.1) */
+
+#define MII_MMD_CTRL1                0         /* Control register 1 */
+#define MII_MMD_STAT1                1         /* Status register 1 */
+#define MII_MMD_DEVID1               2         /* Device identifier 1 (upper) */
+#define MII_MMD_DEVID2               3         /* Device identifier 2 (lower) */
+#define MII_MMD_SPEED                4         /* Speed ability */
+#define MII_MMD_DEVS1                5         /* Devices in package 1 */
+#define MII_MMD_DEVS2                6         /* Devices in package 2 */
+#define MII_MMD_CTRL2                7         /* Control register 2 */
+#define MII_MMD_STAT2                8         /* Status register 2 */
+#define MII_MMD_PMA_EXTABLE          11        /* PMA/PMD extended abilities */
+
+/* AN MMD registers (IEEE 802.3 45.2.7) */
+
+#define MII_MMD_AN_CTRL1             0         /* AN Control */
+#define MII_MMD_AN_STAT1             1         /* AN Status */
+#define MII_MMD_AN_ADV1              16        /* AN Advertisement 1 */
+#define MII_MMD_AN_ADV2              17        /* AN Advertisement 2 */
+#define MII_MMD_AN_ADV3              18        /* AN Advertisement 3 */
+#define MII_MMD_AN_LPA1              19        /* AN LP Ability 1 */
+#define MII_MMD_AN_LPA2              20        /* AN LP Ability 2 */
+#define MII_MMD_AN_LPA3              21        /* AN LP Ability 3 */
+
+/* MMD STAT1 register bits */
+
+#define MII_MMD_STAT1_LSTATUS        (1 << 2)  /* Bit 2:  Link status (latched low) */
+
+/* MMD CTRL1 register bits */
+
+#define MII_MMD_CTRL1_RESET          (1 << 15) /* Bit 15: Reset */
+
+/* AN CTRL1 register bits */
+
+#define MII_MMD_AN_CTRL1_ENABLE      (1 << 12) /* Bit 12: AN enable */
+#define MII_MMD_AN_CTRL1_RESTART     (1 << 9)  /* Bit 9:  AN restart */
+
+/* AN STAT1 register bits */
+
+#define MII_MMD_AN_STAT1_COMPLETE    (1 << 5)  /* Bit 5:  AN complete */
+#define MII_MMD_AN_STAT1_LPABLE      (1 << 0)  /* Bit 0:  LP AN able */
+
+/* PMA CTRL2 PMA/PMD type field (IEEE 802.3 45.2.1.11) */
+
+#define MII_MMD_PMA_CTRL2_TYPE       0x000f    /* Bits 0-3: PMA/PMD type */
+#define MII_MMD_PMA_CTRL2_10GBT      0x0009    /*         10GBASE-T */
+
+/* PMA extended ability bits (within PMA EXTABLE, reg 11) */
+
+#define MII_MMD_PMA_EXTABLE_10GBT    (1 << 2)  /* Bit 2:  10GBASE-T able */
+
 /* MII PHYADDR register bit definitions */
 
 #define DP83840_PHYADDR_DUPLEX       (1 << 7)
@@ -409,6 +480,14 @@
 
 #define MII_PHYID1_DP83848C          0x2000    /* ID1 value for DP83848C */
 #define MII_PHYID2_DP83848C          0x5c90    /* ID2 value for DP83848C */
+
+/* Texas Instruments DP83630 ************************************************/
+
+/* DP83630 MII ID1/2 register bits */
+
+#define MII_PHYID1_DP83630           0x2000    /* ID1 value for DP83630 */
+#define MII_PHYID2_DP83630           0x5ce0    /* ID2 value for DP83630 (rev in bits 3-0) */
+#define MII_PHYID2_DP83630_REV_MASK  0x000f
 
 /* RMII and Bypass Register (0x17) */
 
@@ -468,6 +547,16 @@
 #define MII_LAN8720_SPSCR_GPIO1      (1 << 8)  /* Bit 8:  GPIO1 */
 #define MII_LAN8720_SPSCR_GPIO2      (1 << 9)  /* Bit 9:  GPIO2 */
                                                /* Bit 10-11: Reserved */
+
+/* SMSC LAN8720 ISR and IMR register bits (same layout on the LAN8740) */
+
+#define MII_LAN8720_INT_ANPAGE       (1 << 1)  /* Bit 1:  Auto-negotiation page received */
+#define MII_LAN8720_INT_PDFAULT      (1 << 2)  /* Bit 2:  Parallel detection fault */
+#define MII_LAN8720_INT_ANLPACK      (1 << 3)  /* Bit 3:  Auto-negotiation LP acknowledge */
+#define MII_LAN8720_INT_LINKDOWN     (1 << 4)  /* Bit 4:  Link down */
+#define MII_LAN8720_INT_REMFAULT     (1 << 5)  /* Bit 5:  Remote fault detected */
+#define MII_LAN8720_INT_ANCOMPLETE   (1 << 6)  /* Bit 6:  Auto-negotiation complete */
+#define MII_LAN8720_INT_ENERGYON     (1 << 7)  /* Bit 7:  ENERGYON generated */
 #define MII_LAN8720_SPSCR_ANEGDONE   (1 << 12) /* Bit 12: Autonegotiation complete */
                                                /* Bits 13-15: Reserved */
 
@@ -969,14 +1058,10 @@ struct phy_desc_s
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

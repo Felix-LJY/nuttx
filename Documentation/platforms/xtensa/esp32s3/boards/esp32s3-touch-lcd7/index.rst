@@ -1,8 +1,8 @@
-==================
-esp32s3-touch-lcd7
-==================
+==============================
+Waveshare ESP32-S3-Touch-LCD-7
+==============================
 
-.. tags:: chip:esp32, chip:esp32s3
+.. tags:: arch:xtensa, chip:esp32s3, vendor:espressif
 
 This page discusses issues unique to NuttX configurations for the
 ESP32S3-Touch-LCD-7 board.

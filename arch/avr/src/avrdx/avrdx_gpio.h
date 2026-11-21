@@ -43,15 +43,15 @@
 #define AVRDX_GPIO_PORTD_IDX 3
 #define AVRDX_GPIO_PORTF_IDX 5
 
-#ifdef CONFIG_AVR_HAS_PORTB
+#ifdef CONFIG_AVR_HAVE_PORTB
 #  define AVRDX_GPIO_PORTB_IDX 1
 #endif
 
-#ifdef CONFIG_AVR_HAS_PORTE
+#ifdef CONFIG_AVR_HAVE_PORTE
 #  define AVRDX_GPIO_PORTE_IDX 4
 #endif
 
-#ifdef CONFIG_AVR_HAS_PORTG
+#ifdef CONFIG_AVR_HAVE_PORTG
 #  define AVRDX_GPIO_PORTG_IDX 6
 #endif
 
@@ -66,14 +66,11 @@
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
-EXTERN const IOBJ uint8_t avrdx_gpio_irq_vectors[];
+extern const IOBJ uint8_t avrdx_gpio_irq_vectors[];
 
 /****************************************************************************
  * Inline Functions
@@ -146,7 +143,6 @@ int avrdx_irq_detach_gpio_mux(uint8_t port_idx, uint8_t pins,
                               bool keep_handler);
 #endif
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

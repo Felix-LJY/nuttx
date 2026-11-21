@@ -33,7 +33,7 @@
 
 #if STM32_NETHERNET > 0
 
-#include "hardware/stm32_eth.h"
+#include "hardware/stm32_eth_v1.h"
 
 #ifndef __ASSEMBLY__
 
@@ -41,13 +41,9 @@
  * Public Function Prototypes
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -99,7 +95,6 @@ int stm32_ethinitialize(int intf);
 int stm32_phy_boardinitialize(int intf);
 #endif
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

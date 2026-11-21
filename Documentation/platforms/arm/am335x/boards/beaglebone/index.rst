@@ -1,8 +1,8 @@
-==========
-BeagleBone
-==========
+=============
+TI BeagleBone
+=============
 
-.. tags:: arch:arm, chip:am335x
+.. tags:: arch:arm, chip:am335x, vendor:ti
 
 .. figure:: beaglebone.jpg
    :figwidth: 100%

@@ -34,6 +34,7 @@
 #include <poll.h>
 #include <errno.h>
 #include <nuttx/debug.h>
+#include <sys/param.h>
 #include <sys/stat.h>
 
 #include <nuttx/kmalloc.h>
@@ -166,7 +167,7 @@ struct cxd56_gnss_dev_s
   uint8_t                         notify_data;
   struct file                     cepfp;
   void                           *cepbuf;
-  struct pollfd                  *fds[CONFIG_CXD56_GNSS_NPOLLWAITERS];
+  struct pollfd_s                *fds[CONFIG_CXD56_GNSS_NPOLLWAITERS];
 #if CONFIG_CXD56_GNSS_NSIGNALRECEIVERS != 0
   struct cxd56_gnss_sig_s         sigs[CONFIG_CXD56_GNSS_NSIGNALRECEIVERS];
 #endif
@@ -302,7 +303,7 @@ static ssize_t cxd56_gnss_write(struct file *filep,
                                 const char *buffer, size_t buflen);
 static int cxd56_gnss_ioctl(struct file *filep, int cmd,
                             unsigned long arg);
-static int cxd56_gnss_poll(struct file *filep, struct pollfd *fds,
+static int cxd56_gnss_poll(struct file *filep, struct pollfd_s *fds,
                            bool setup);
 static int8_t cxd56_gnss_select_notifytype(off_t fpos, uint32_t *offset);
 
@@ -637,6 +638,7 @@ static int cxd56_gnss_set_receiver_position_orthogonal(
 static int cxd56_gnss_set_ope_mode(struct file *filep, unsigned long arg)
 {
   struct cxd56_gnss_ope_mode_param_s *ope_mode;
+
   if (!arg)
     {
       return -EINVAL;
@@ -666,6 +668,7 @@ static int cxd56_gnss_set_ope_mode(struct file *filep, unsigned long arg)
 static int cxd56_gnss_get_ope_mode(struct file *filep, unsigned long arg)
 {
   struct cxd56_gnss_ope_mode_param_s *ope_mode;
+
   if (!arg)
     {
       return -EINVAL;
@@ -2455,6 +2458,7 @@ static void cxd56_gnss_common_signalhandler(uint32_t data,
   for (i = 0; i < CONFIG_CXD56_GNSS_NSIGNALRECEIVERS; i++)
     {
       struct cxd56_gnss_sig_s *sig = &priv->sigs[i];
+
       if (sig->enable && sig->info.gnsssig == sigtype)
         {
           union sigval value;
@@ -2499,60 +2503,60 @@ static void cxd56_gnss_default_sighandler(uint32_t data, void *userdata)
 
   switch (dtype)
     {
-    case CXD56_GNSS_NOTIFY_TYPE_REQCEPDAT:
-      {
-        priv->cepbuf = cxd56_gnss_read_cep_file(
-          &priv->cepfp, priv->shared_info.argv[GNSS_ARGS_FILE_OFFSET],
-          priv->shared_info.argv[GNSS_ARGS_FILE_LENGTH],
-          &priv->shared_info.retval);
+      case CXD56_GNSS_NOTIFY_TYPE_REQCEPDAT:
+        {
+          priv->cepbuf = cxd56_gnss_read_cep_file(
+            &priv->cepfp, priv->shared_info.argv[GNSS_ARGS_FILE_OFFSET],
+            priv->shared_info.argv[GNSS_ARGS_FILE_LENGTH],
+            &priv->shared_info.retval);
+          return;
+        }
+
+      case CXD56_GNSS_NOTIFY_TYPE_REQCEPBUFFREE:
+        if (priv->cepbuf)
+          {
+            kmm_free(priv->cepbuf);
+          }
+
         return;
-      }
 
-    case CXD56_GNSS_NOTIFY_TYPE_REQCEPBUFFREE:
-      if (priv->cepbuf)
-        {
-          kmm_free(priv->cepbuf);
-        }
+      case CXD56_GNSS_NOTIFY_TYPE_BOOTCOMP:
+        if (priv->num_open == 0)
+          {
+            /* Post to wait-semaphore in cxd56_gnss_open to notify completion
+             * of GNSS core initialization in first device open.
+             */
 
-      return;
+            priv->notify_data = dtype;
+            nxsem_post(&priv->syncsem);
+          }
 
-    case CXD56_GNSS_NOTIFY_TYPE_BOOTCOMP:
-      if (priv->num_open == 0)
-        {
-          /* Post to wait-semaphore in cxd56_gnss_open to notify completion
-           * of GNSS core initialization in first device open.
-           */
+        return;
 
-          priv->notify_data = dtype;
-          nxsem_post(&priv->syncsem);
-        }
+      case CXD56_GNSS_NOTIFY_TYPE_REQBKUPDAT:
+        cxd56_gnss_read_backup_file(&priv->shared_info.retval);
+        return;
 
-      return;
+      case CXD56_GNSS_NOTIFY_TYPE_REQCEPOPEN:
+        if (priv->cepfp.f_inode != NULL)
+          {
+            file_close(&priv->cepfp);
+          }
 
-    case CXD56_GNSS_NOTIFY_TYPE_REQBKUPDAT:
-      cxd56_gnss_read_backup_file(&priv->shared_info.retval);
-      return;
+        file_open(&priv->cepfp, CONFIG_CXD56_GNSS_CEP_FILENAME,
+                  O_RDONLY | O_CLOEXEC);
+        return;
 
-    case CXD56_GNSS_NOTIFY_TYPE_REQCEPOPEN:
-      if (priv->cepfp.f_inode != NULL)
-        {
-          file_close(&priv->cepfp);
-        }
+      case CXD56_GNSS_NOTIFY_TYPE_REQCEPCLOSE:
+        if (priv->cepfp.f_inode != NULL)
+          {
+            file_close(&priv->cepfp);
+          }
 
-      file_open(&priv->cepfp, CONFIG_CXD56_GNSS_CEP_FILENAME,
-                O_RDONLY | O_CLOEXEC);
-      return;
+        return;
 
-    case CXD56_GNSS_NOTIFY_TYPE_REQCEPCLOSE:
-      if (priv->cepfp.f_inode != NULL)
-        {
-          file_close(&priv->cepfp);
-        }
-
-      return;
-
-    default:
-      break;
+      default:
+        break;
     }
 
   ret = nxmutex_lock(&priv->devlock);
@@ -3047,7 +3051,7 @@ static int cxd56_gnss_ioctl(struct file *filep, int cmd,
  *
  ****************************************************************************/
 
-static int cxd56_gnss_poll(struct file *filep, struct pollfd *fds,
+static int cxd56_gnss_poll(struct file *filep, struct pollfd_s *fds,
                            bool setup)
 {
   struct inode            *inode;
@@ -3107,7 +3111,7 @@ static int cxd56_gnss_poll(struct file *filep, struct pollfd *fds,
     {
       /* This is a request to tear down the poll. */
 
-      struct pollfd **slot = (struct pollfd **)fds->priv;
+      struct pollfd_s **slot = (struct pollfd_s **)fds->priv;
 
       /* Remove all memory of the poll setup */
 
@@ -3214,7 +3218,7 @@ static int cxd56_gnss_register(const char *devpath)
       goto err0;
     }
 
-  for (i = 0; i < sizeof(devsig_table) / sizeof(devsig_table[0]); i++)
+  for (i = 0; i < nitems(devsig_table); i++)
     {
       ret = cxd56_cpu1siginit(devsig_table[i].sigtype, priv);
       if (ret < 0)

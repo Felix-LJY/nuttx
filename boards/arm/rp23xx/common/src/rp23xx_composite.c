@@ -1,6 +1,8 @@
 /****************************************************************************
  * boards/arm/rp23xx/common/src/rp23xx_composite.c
  *
+ * SPDX-License-Identifier: Apache-2.0
+ *
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.  The
@@ -31,6 +33,10 @@
 #include <nuttx/usb/cdcacm.h>
 #include <nuttx/usb/usbmsc.h>
 #include <nuttx/usb/composite.h>
+
+#ifdef CONFIG_CDCNCM_COMPOSITE
+#  include <nuttx/usb/cdcncm.h>
+#endif
 
 #if defined(CONFIG_BOARDCTL_USBDEVCTRL) && defined(CONFIG_USBDEV_COMPOSITE)
 
@@ -186,11 +192,12 @@ void *board_composite_connect(int port, int configid)
   /* Here we are composing the configuration of the usb composite device.
    *
    * The standard is to use one CDC/ACM and one USB mass storage device.
+   * A CDC/NCM network device can be added after them.
    */
 
   if (configid == 0)
     {
-      struct composite_devdesc_s dev[2];
+      struct composite_devdesc_s dev[3];
       int ifnobase = 0;
       int strbase  = COMPOSITE_NSTRIDS;
       int n = 0;
@@ -262,6 +269,37 @@ void *board_composite_connect(int port, int configid)
       dev[n].devinfo.epno[CDCACM_EP_INTIN_IDX]   = 3;
       dev[n].devinfo.epno[CDCACM_EP_BULKIN_IDX]  = 4;
       dev[n].devinfo.epno[CDCACM_EP_BULKOUT_IDX] = 5;
+
+      /* Count up the base numbers */
+
+      ifnobase += dev[n].devinfo.ninterfaces;
+      strbase  += dev[n].devinfo.nstrings;
+      n++;
+#endif
+
+#ifdef CONFIG_CDCNCM_COMPOSITE
+      /* Configure the CDC/NCM network device */
+
+      /* Ask the cdcncm driver to fill in the constants we didn't
+       * know here.
+       */
+
+      cdcncm_get_composite_devdesc(&dev[n]);
+
+      /* Interfaces */
+
+      dev[n].devinfo.ifnobase = ifnobase;             /* Offset to Interface-IDs */
+      dev[n].minor = 0;                               /* The minor interface number */
+
+      /* Strings */
+
+      dev[n].devinfo.strbase = strbase;               /* Offset to String Numbers */
+
+      /* Endpoints */
+
+      dev[n].devinfo.epno[CDCNCM_EP_INTIN_IDX]   = 6;
+      dev[n].devinfo.epno[CDCNCM_EP_BULKIN_IDX]  = 7;
+      dev[n].devinfo.epno[CDCNCM_EP_BULKOUT_IDX] = 8;
       n++;
 #endif
 

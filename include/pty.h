@@ -30,6 +30,7 @@
 #include <nuttx/config.h>
 #include <nuttx/compiler.h>
 
+#include <sys/types.h>
 #include <termios.h>
 #include <sys/ioctl.h>
 
@@ -39,13 +40,9 @@
  * Public Function Prototypes
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -56,7 +53,17 @@ extern "C"
 int openpty(FAR int *master, FAR int *slave, FAR char *name,
             FAR const struct termios *term, FAR const struct winsize *win);
 
-#undef EXTERN
+/****************************************************************************
+ * Open a pseudo tty pair as openpty() does and fork.  The child has the
+ * slave as its controlling terminal and its standard streams; the parent
+ * gets the master.
+ ****************************************************************************/
+
+#ifdef CONFIG_ARCH_HAVE_FORK
+pid_t forkpty(FAR int *master, FAR char *name,
+              FAR const struct termios *term, FAR const struct winsize *win);
+#endif
+
 #if defined(__cplusplus)
 }
 #endif

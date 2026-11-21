@@ -25,7 +25,6 @@
  ****************************************************************************/
 
 #include <nuttx/config.h>
-#include <nuttx/reboot_notifier.h>
 #include <nuttx/trace.h>
 
 #include "rpmsgfs/rpmsgfs.h"
@@ -33,38 +32,8 @@
 #include "aio/aio.h"
 #include "vfs/vfs.h"
 #include "fs_heap.h"
-
-/****************************************************************************
- * Private Functions
- ****************************************************************************/
-
-/****************************************************************************
- * Name: sync_reboot_handler
- ****************************************************************************/
-
-static int sync_reboot_handler(FAR struct notifier_block *nb,
-                               unsigned long action, FAR void *data)
-{
-  if (action == SYS_POWER_OFF || action == SYS_RESTART)
-    {
-      sync();
-    }
-
-  return 0;
-}
-
-/****************************************************************************
- * Private Data
- ****************************************************************************/
-
-/****************************************************************************
- * Name: fs_sync_reboot_nb
- ****************************************************************************/
-
-static struct notifier_block g_sync_nb =
-{
-  sync_reboot_handler
-};
+#include "fs_reboot.h"
+#include "shm/shmfs.h"
 
 /****************************************************************************
  * Public Functions
@@ -106,6 +75,12 @@ void fs_initialize(void)
   notify_initialize();
 #endif
 
-  register_reboot_notifier(&g_sync_nb);
+#ifdef CONFIG_FS_SHMFS
+  /* The directory of the shared memory objects */
+
+  shmfs_initialize();
+#endif
+
+  fs_reboot_initialize();
   fs_trace_end();
 }

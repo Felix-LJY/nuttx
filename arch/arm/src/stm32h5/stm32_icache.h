@@ -38,15 +38,17 @@
  * Pre-processor Definitions
  ****************************************************************************/
 
+/* Bound on the BUSYF polling loops.  RM0481 gives no invalidate duration, so
+ * this is a margin, not a measured limit.
+ */
+
+#define STM32_ICACHE_BUSY_TIMEOUT 100000
+
 #ifndef __ASSEMBLY__
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -89,23 +91,27 @@ size_t stm32_get_icache_size(void);
  * Name: stm32_enable_icache
  *
  * Description:
- *   Initializes the STM32H5 ICACHE
+ *   Initializes (on first call) and enables the STM32H5 ICACHE.  The first
+ *   call disables and invalidates it first, in case a bootloader left it
+ *   enabled, and maps the uncacheable flash areas with the MPU.
  *
  * Input Parameters:
  *   None
  *
  * Returned Value:
- *   None
+ *   OK, or -ETIMEDOUT if the invalidate did not complete; the ICACHE is
+ *   then left disabled.
  *
  ****************************************************************************/
 
-void stm32_enable_icache(void);
+int stm32_enable_icache(void);
 
 /****************************************************************************
  * Name: stm32_disable_icache
  *
  * Description:
- *   Disables the STM32H5 ICACHE.
+ *   Disables the STM32H5 ICACHE and waits, for a bounded time, for the
+ *   invalidate that this starts.
  *
  * Input Parameters:
  *   None
@@ -165,7 +171,6 @@ void stm32_icache_reset_monitors(void);
 
 void stm32_invalidate_icache(void);
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

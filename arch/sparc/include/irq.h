@@ -69,16 +69,33 @@
 #ifndef __ASSEMBLY__
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
  * Inline functions
  ****************************************************************************/
+
+/* Return program counter */
+
+static inline_function uint32_t up_getpc(void)
+{
+  uint32_t pc;
+
+  __asm__ volatile
+    (
+      "call 1f\n\t"
+      "nop\n"
+      "1:\n\t"
+      "mov %%o7, %0\n\t"
+      : "=r" (pc)
+      :
+      : "%o7"
+    );
+
+  return pc;
+}
 
 /* Return the current value of the stack pointer */
 
@@ -110,7 +127,7 @@ static inline_function uint32_t up_getsp(void)
  * such value for each processor that can receive an interrupt.
  */
 
-EXTERN volatile uint32_t *g_current_regs[CONFIG_SMP_NCPUS];
+extern volatile uint32_t *g_current_regs[CONFIG_SMP_NCPUS];
 
 /****************************************************************************
  * Public Function Prototypes
@@ -192,7 +209,6 @@ static inline_function bool up_interrupt_context(void)
  * Public Function Prototypes
  ****************************************************************************/
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

@@ -32,6 +32,10 @@ CRYPTO_CSRCS += crypto.c testmngr.c
 
 ifeq ($(CONFIG_CRYPTO_CRYPTODEV),y)
   CRYPTO_CSRCS += cryptodev.c
+endif
+
+ifeq ($(CONFIG_CRYPTO_BACKENDS),y)
+  CRYPTO_CSRCS += backends.c
 ifneq ($(CONFIG_CRYPTO_CRYPTODEV_SOFTWARE_CRYPTO)$(CONFIG_CRYPTO_CRYPTODEV_SOFTWARE_KEYMGMT),)
   CRYPTO_CSRCS += cryptosoft.c
   CRYPTO_CSRCS += xform.c
@@ -72,6 +76,7 @@ CRYPTO_CSRCS += key_wrap.c
 CRYPTO_CSRCS += siphash.c
 CRYPTO_CSRCS += hmac_buff.c
 CRYPTO_CSRCS += bn.c
+CRYPTO_CSRCS += rsa.c
 
 # Entropy pool random number generator
 

@@ -88,6 +88,13 @@ Driver Operations
   error) has occurred for any of the file descriptors, then ``poll()``
   blocks until one of the events occurs.
 
+  Each entry of ``fds`` is a ``struct pollfd`` with the POSIX fields
+  ``int fd``, ``short events`` and ``short revents``, as in
+  `<poll.h> <https://pubs.opengroup.org/onlinepubs/9699919799.2018edition/basedefs/poll.h.html>`_
+  of IEEE Std 1003.1-2017 (Revision of IEEE Std 1003.1-2008) / The Open
+  Group Base Specifications Issue 7, 2018 edition. The kernel does not
+  keep any state in the array, so several threads can poll the same array.
+
   **Configuration Settings**. In order to use the select with TCP/IP
   sockets test, you must have the following things selected in your NuttX
   configuration file:
@@ -219,6 +226,9 @@ UNIX Standard Operations (``unistd.h``)
   /* Working directory operations */
 
   int     chdir(FAR const char *path);
+  #ifdef CONFIG_FS_CHROOT
+  int     chroot(FAR const char *path);
+  #endif
   FAR char *getcwd(FAR char *buf, size_t size);
 
   /* File path operations */
@@ -245,6 +255,11 @@ UNIX Standard Operations (``unistd.h``)
   int     gethostname(FAR char *name, size_t size);
   int     sethostname(FAR const char *name, size_t size);
   #endif
+
+  /* NIS domain name: empty at boot, at most HOST_NAME_MAX bytes */
+
+  int     getdomainname(FAR char *name, size_t size);
+  int     setdomainname(FAR const char *name, size_t size);
 
   /* Other */
 
@@ -323,6 +338,10 @@ Standard I/O
   FAR char *tempnam(FAR const char *dir, FAR const char *pfx);
   int       remove(FAR const char *path);
 
+  /* Controlling terminal */
+
+  FAR char *ctermid(FAR char *s);
+
   #include <sys/stat.h>
 
   int mkdir(FAR const char *pathname, mode_t mode);
@@ -341,8 +360,36 @@ Standard Library (``stdlib.h``)
 Generally addresses other operating system interfaces.
 However, the following may also be considered as file system interfaces:
 
-.. c:function:: int mktemp(FAR char *template);
+.. c:function:: FAR char *mktemp(FAR char *template);
 .. c:function:: int mkstemp(FAR char *template);
+.. c:function:: int mkostemp(FAR char *template, int flags);
+.. c:function:: int mkstemps(FAR char *template, int suffixlen);
+.. c:function:: int mkostemps(FAR char *template, int suffixlen, int flags);
+
+Pathname Pattern Matching (``glob.h``)
+--------------------------------------
+
+.. code-block:: c
+
+  #include <glob.h>
+
+  int  glob(FAR const char *pattern, int flags,
+            CODE int (*errfunc)(FAR const char *epath, int eerrno),
+            FAR glob_t *pglob);
+  void globfree(FAR glob_t *pglob);
+
+``glob()`` finds the pathnames that match ``pattern`` (the rules of
+``fnmatch()``) and puts them in ``pglob->gl_pathv``. The POSIX flags are
+``GLOB_APPEND``, ``GLOB_DOOFFS``, ``GLOB_ERR``, ``GLOB_MARK``,
+``GLOB_NOCHECK``, ``GLOB_NOESCAPE`` and ``GLOB_NOSORT``. Two extensions of
+other C libraries are also available:
+
+- ``GLOB_TILDE``: a ``~`` at the start of the pattern is the home directory
+  (``HOME``, else the home directory of the user in the password database),
+  and ``~name`` is the home directory of the user ``name``. When the home
+  directory is not known, the pattern is used as it is.
+- ``GLOB_TILDE_CHECK``: the same, but ``glob()`` returns ``GLOB_NOMATCH`` when
+  the home directory is not known.
 
 Asynchronous I/O
 ----------------
@@ -398,11 +445,11 @@ Standard String Operations
 
   #include <strings.h>
 
-  #define bcmp(b1,b2,len)  memcmp(b1,b2,(size_t)len)
-  #define bcopy(b1,b2,len) memmove(b2,b1,len)
-  #define bzero(s,n)       memset(s,0,n)
-  #define index(s,c)       strchr(s,c)
-  #define rindex(s,c)      strrchr(s,c)
+  int    bcmp(const void *b1, const void *b2, size_t len);
+  void   bcopy(const void *b1, void *b2, size_t len);
+  void   bzero(void *s, size_t n);
+  char  *index(const char *s, int c);
+  char  *rindex(const char *s, int c);
 
   int    ffs(int j);
   int    strcasecmp(const char *, const char *);
@@ -425,7 +472,9 @@ Pipes and FIFOs
 
   mkfifo() makes a FIFO device driver file with name pathname. Unlike Linux,
   a NuttX FIFO is not a special file type but simply a device driver instance.
-  mode specifies the FIFO's permissions (but is ignored in the current implementation).
+  mode specifies the FIFO's permissions. The file mode creation mask
+  (``umask()``) clears bits in it. NuttX keeps the permissions only with
+  ``CONFIG_PSEUDOFS_ATTRIBUTES``.
 
   Once the FIFO has been created by mkfifo(), any thread can open it for reading
   or writing, in the same way as an ordinary file. However, it must have been
@@ -436,9 +485,14 @@ Pipes and FIFOs
   If all threads that write to the FIFO have closed, subsequent calls to
   read() on the FIFO will return 0 (end-of-file).
 
+  A FIFO can exist only in the pseudo file system. If ``pathname`` is inside
+  a mounted file system and no file exists at that path, mkfifo() fails with
+  ``EPERM``. If a file exists at that path, it fails with ``EEXIST``.
+
   :param pathname: The full path to the FIFO instance to attach to or to
     create (if not already created).
-  :param mode: Ignored for now
+  :param mode: The permissions of the FIFO, less the bits in the file mode
+    creation mask.
 
   :return: 0 is returned on success; otherwise, -1 is returned with errno set appropriately.
 
@@ -503,8 +557,10 @@ are two conditions where ``mmap()`` can be supported:
       there are limitations in the size of files that may be memory
       mapped (especially on MCUs with no significant RAM resources).
 
-   c. All mapped files are read-only. You can write to the in-memory
-      image, but the file contents will not change.
+   c. Writes to a private mapping (``MAP_PRIVATE``) change only the
+      in-memory image, never the file. Writes to a shared, writable
+      mapping (``MAP_SHARED`` with ``PROT_WRITE``) reach the file when
+      ``msync()`` is called and when ``munmap()`` removes the mapping.
 
    d. There are no access privileges.
 

@@ -2,11 +2,9 @@
  * libs/libc/stdlib/lib_qsort.c
  *
  * SPDX-License-Identifier: BSD-3-Clause
- * SPDX-FileCopyrightText: 2007, 2009, 2011 Gregory Nutt.
- * SPDX-FileCopyrightText: 1993 The Regents of the University of California.
- * SPDX-FileCopyrightText: 1990 The Regents of the University of California.
+ * SPDX-FileCopyrightText: 2007, 2009, 2011 Gregory Nutt. All rights reserved.
+ * SPDX-FileCopyrightText: 1992, 1993 The Regents of the University of California.  All rights reserved.
  * SPDX-FileContributor: Gregory Nutt <gnutt@nuttx.org>
- * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -44,6 +42,10 @@
 #include <sys/types.h>
 #include <sys/param.h>
 #include <stdlib.h>
+
+#ifdef CONFIG_FDPIC
+#  include <nuttx/fdpic.h>
+#endif
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -156,8 +158,9 @@ static inline FAR char *med3(FAR char *a, FAR char *b, FAR char *c,
  *
  ****************************************************************************/
 
-void qsort(FAR void *base, size_t nel, size_t width,
-           CODE int(*compar)(FAR const void *, FAR const void *))
+static void qsort_internal(FAR void *base, size_t nel, size_t width,
+                           CODE int(*compar)(FAR const void *,
+                                             FAR const void *))
 {
   FAR char *pa;
   FAR char *pb;
@@ -277,7 +280,7 @@ loop:
 
   if ((r = pb - pa) > width)
     {
-      qsort(base, r / width, width, compar);
+      qsort_internal(base, r / width, width, compar);
     }
 
   if ((r = pd - pc) > width)
@@ -288,4 +291,28 @@ loop:
       nel = r / width;
       goto loop;
     }
+}
+
+/****************************************************************************
+ * Name: qsort
+ *
+ * Description:
+ *   Public entry point.  Resolves the comparison function once, then hands
+ *   an ordinary pointer to the implementation, which recurses.
+ *
+ ****************************************************************************/
+
+void qsort(FAR void *base, size_t nel, size_t width,
+           CODE int(*compar)(FAR const void *, FAR const void *))
+{
+#ifdef CONFIG_FDPIC
+  /* An FDPIC module passes the address of a function descriptor, not a
+   * code address.
+   */
+
+  compar = (CODE int (*)(FAR const void *, FAR const void *))
+           fdpic_callback((FAR void *)compar);
+#endif
+
+  qsort_internal(base, nel, width, compar);
 }

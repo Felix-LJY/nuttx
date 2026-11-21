@@ -61,45 +61,6 @@
 
 #if defined(CONFIG_STM32_TIMX_CAP)
 
-/* Check if any channel is enabled.
- * This is done to simplify the logic below.
- */
-
-#if defined(GPIO_TIM1_CH1IN) || defined(GPIO_TIM2_CH1IN) || defined(GPIO_TIM3_CH1IN) || \
-    defined(GPIO_TIM4_CH1IN) || defined(GPIO_TIM5_CH1IN) || defined(GPIO_TIM8_CH1IN) || \
-    defined(GPIO_TIM12_CH1IN) || defined(GPIO_TIM13_CH1IN) || defined(GPIO_TIM14_CH1IN) || \
-    defined(GPIO_TIM15_CH1IN) || defined(GPIO_TIM16_CH1IN) || defined(GPIO_TIM17_CH1IN) || \
-    defined(GPIO_LPTIM1_CH1IN) || defined(GPIO_LPTIM2_CH1IN) || defined(GPIO_LPTIM3_CH1IN) || \
-    defined(GPIO_LPTIM4_CH1IN) || defined(GPIO_LPTIM5_CH1IN)
-#  define HAVE_CH1IN 1
-#endif
-
-#if defined(GPIO_TIM1_CH2IN) || defined(GPIO_TIM2_CH2IN) || defined(GPIO_TIM3_CH2IN) || \
-    defined(GPIO_TIM4_CH2IN) || defined(GPIO_TIM5_CH2IN) || defined(GPIO_TIM8_CH2IN) || \
-    defined(GPIO_TIM12_CH2IN) || defined(GPIO_TIM15_CH2IN) || \
-    defined(GPIO_LPTIM1_CH2IN) || defined(GPIO_LPTIM2_CH2IN) || defined(GPIO_LPTIM3_CH2IN) || \
-    defined(GPIO_LPTIM4_CH2IN) || defined(GPIO_LPTIM5_CH2IN)
-#  define HAVE_CH2IN 1
-#endif
-
-#if defined(GPIO_TIM1_CH3IN) || defined(GPIO_TIM2_CH3IN) || defined(GPIO_TIM3_CH3IN) || \
-    defined(GPIO_TIM4_CH3IN) || defined(GPIO_TIM5_CH3IN) || defined(GPIO_TIM8_CH3IN)
-#  define HAVE_CH3IN 1
-#endif
-
-#if defined(GPIO_TIM1_CH4IN) || defined(GPIO_TIM2_CH4IN) || defined(GPIO_TIM3_CH4IN) || \
-    defined(GPIO_TIM4_CH4IN) || defined(GPIO_TIM5_CH4IN) || defined(GPIO_TIM8_CH4IN)
-#  define HAVE_CH4IN 1
-#endif
-
-#if defined(GPIO_TIM1_CH5IN) || defined(GPIO_TIM8_CH5IN)
-#  define HAVE_CH5IN 1
-#endif
-
-#if defined(GPIO_TIM1_CH6IN) || defined(GPIO_TIM8_CH6IN)
-#  define HAVE_CH6IN 1
-#endif
-
 /* Check if we have any advanced timers */
 
 #if defined(CONFIG_STM32_TIM1_CAP) || defined(CONFIG_STM32_TIM8_CAP)
@@ -377,7 +338,7 @@ uint32_t stm32_cap_gpio(const struct stm32_cap_priv_s *priv,
         break;
 #endif
 
-  /* TIM6 and TIM7 cannot be used in capture */
+      /* TIM6 and TIM7 cannot be used in capture */
 
 #ifdef CONFIG_STM32_TIM8_CAP
       case STM32_TIM8_BASE:
@@ -435,61 +396,7 @@ uint32_t stm32_cap_gpio(const struct stm32_cap_priv_s *priv,
         break;
 #endif
 
-#ifdef CONFIG_STM32_TIM10_CAP
-      case STM32_TIM10_BASE:
-        switch (channel)
-          {
-#ifdef GPIO_TIM10_EXT_CLK_IN
-            case STM32_CAP_CHANNEL_COUNTER:
-              return GPIO_TIM10_EXT_CLK_IN;
-#endif
-#ifdef GPIO_TIM10_CH1IN
-            case 1:
-              return GPIO_TIM10_CH1IN;
-#endif
-#ifdef GPIO_TIM10_CH2IN
-            case 2:
-              return GPIO_TIM10_CH2IN;
-#endif
-#ifdef GPIO_TIM10_CH4IN
-            case 3:
-              return GPIO_TIM10_CH4IN;
-#endif
-#ifdef GPIO_TIM10_CH5IN
-            case 4:
-              return GPIO_TIM10_CH5IN;
-#endif
-          }
-        break;
-#endif
-
-#ifdef CONFIG_STM32_TIM11_CAP
-      case STM32_TIM11_BASE:
-        switch (channel)
-          {
-#ifdef GPIO_TIM11_EXT_CLK_IN
-            case STM32_CAP_CHANNEL_COUNTER:
-              return GPIO_TIM11_EXT_CLK_IN;
-#endif
-#ifdef GPIO_TIM11_CH1IN
-            case 1:
-              return GPIO_TIM11_CH1IN;
-#endif
-#ifdef GPIO_TIM11_CH2IN
-            case 2:
-              return GPIO_TIM11_CH2IN;
-#endif
-#ifdef GPIO_TIM11_CH4IN
-            case 3:
-              return GPIO_TIM11_CH4IN;
-#endif
-#ifdef GPIO_TIM11_CH5IN
-            case 4:
-              return GPIO_TIM11_CH5IN;
-#endif
-          }
-        break;
-#endif
+      /* Note: TIM10 and TIM11 do not exist on STM32H7 */
 
 #ifdef CONFIG_STM32_TIM12_CAP
       case STM32_TIM12_BASE:
@@ -779,16 +686,8 @@ static int stm32_cap_setclock(struct stm32_cap_dev_s *dev,
         freqin = STM32_TIM9_CLKIN;
         break;
 #endif
-#ifdef CONFIG_STM32_TIM10
-      case STM32_TIM10_BASE:
-        freqin = STM32_TIM10_CLKIN;
-        break;
-#endif
-#ifdef CONFIG_STM32_TIM11
-      case STM32_TIM11_BASE:
-        freqin = STM32_TIM11_CLKIN;
-        break;
-#endif
+      /* Note: TIM10 and TIM11 do not exist on STM32H7 */
+
 #ifdef CONFIG_STM32_TIM12
       case STM32_TIM12_BASE:
         freqin = STM32_TIM12_CLKIN;
@@ -882,77 +781,77 @@ static int stm32_cap_setsmc(struct stm32_cap_dev_s *dev,
   switch (cfg & STM32_CAP_SMS_MASK)
     {
       case STM32_CAP_SMS_INT:
-          regval |= GTIM_SMCR_DISAB;
-          break;
+        regval |= GTIM_SMCR_DISAB;
+        break;
 
       case STM32_CAP_SMS_ENC1:
-          regval |= GTIM_SMCR_ENCMD1;
-          break;
+        regval |= GTIM_SMCR_ENCMD1;
+        break;
 
       case STM32_CAP_SMS_ENC2:
-          regval |= GTIM_SMCR_ENCMD2;
-          break;
+        regval |= GTIM_SMCR_ENCMD2;
+        break;
 
       case STM32_CAP_SMS_ENC3:
-          regval |= GTIM_SMCR_ENCMD3;
-          break;
+        regval |= GTIM_SMCR_ENCMD3;
+        break;
 
       case STM32_CAP_SMS_RST:
-          regval |= GTIM_SMCR_RESET;
-          break;
+        regval |= GTIM_SMCR_RESET;
+        break;
 
       case STM32_CAP_SMS_GAT:
-          regval |= GTIM_SMCR_GATED;
-          break;
+        regval |= GTIM_SMCR_GATED;
+        break;
 
       case STM32_CAP_SMS_TRG:
-          regval |= GTIM_SMCR_TRIGGER;
-          break;
+        regval |= GTIM_SMCR_TRIGGER;
+        break;
 
       case STM32_CAP_SMS_EXT:
-          regval |= GTIM_SMCR_EXTCLK1;
-          break;
+        regval |= GTIM_SMCR_EXTCLK1;
+        break;
 
       default:
-          break;
+        break;
     }
 
   switch (cfg & STM32_CAP_TS_MASK)
     {
       case STM32_CAP_TS_ITR0:
-          regval |= GTIM_SMCR_ITR0;
-          break;
+        regval |= GTIM_SMCR_ITR0;
+        break;
 
       case STM32_CAP_TS_ITR1:
-          regval |= GTIM_SMCR_ITR1;
-          break;
+        regval |= GTIM_SMCR_ITR1;
+        break;
 
       case STM32_CAP_TS_ITR2:
-          regval |= GTIM_SMCR_ITR2;
-          break;
+        regval |= GTIM_SMCR_ITR2;
+        break;
 
       case STM32_CAP_TS_ITR3:
-          regval |= GTIM_SMCR_ITR3;
-          break;
+        regval |= GTIM_SMCR_ITR3;
+        break;
 
       case STM32_CAP_TS_TI1FED:
-          regval |= GTIM_SMCR_TI1FED;
-          break;
+        regval |= GTIM_SMCR_TI1FED;
+        break;
 
       case STM32_CAP_TS_TI1FP1:
-          regval |= GTIM_SMCR_TI1FP1;
-          break;
+        regval |= GTIM_SMCR_TI1FP1;
+        break;
 
       case STM32_CAP_TS_TI2FP2:
-          regval |= GTIM_SMCR_TI2FP2;
-          break;
+        regval |= GTIM_SMCR_TI2FP2;
+        break;
 
       case STM32_CAP_TS_ETRF:
-          regval |= GTIM_SMCR_ETRF;
-          break;
+        regval |= GTIM_SMCR_ETRF;
+        break;
 
       default:
-          break;
+        break;
     }
 
   if (cfg & STM32_CAP_MSM_MASK)
@@ -1186,16 +1085,25 @@ static int stm32_cap_setchannel(struct stm32_cap_dev_s *dev,
 
   DEBUGASSERT(dev != NULL);
 
-  gpio = stm32_cap_gpio(priv, channel);
-
-  if (gpio == 0)
-    {
-      return ERROR;
-    }
-
   if ((cfg & STM32_CAP_MAPPED_MASK) == 0)
     {
       return ERROR; /* MAPPED not selected */
+    }
+
+  /* Only a channel mapped to its own input needs a pin.  A channel mapped
+   * to the input of its paired channel (as the second channel in PWM input
+   * mode) shares the pin of that channel.
+   */
+
+  if ((cfg & STM32_CAP_MAPPED_MASK) == STM32_CAP_MAPPED_TI1)
+    {
+      gpio = stm32_cap_gpio(priv, channel);
+
+      if (gpio == 0 &&
+          (cfg & STM32_CAP_EDGE_MASK) != STM32_CAP_EDGE_DISABLED)
+        {
+          return ERROR;
+        }
     }
 
   /* Change to zero base index */
@@ -1268,13 +1176,16 @@ static int stm32_cap_setchannel(struct stm32_cap_dev_s *dev,
 
   /* Set GPIO */
 
-  if ((cfg & STM32_CAP_EDGE_MASK) == STM32_CAP_EDGE_DISABLED)
+  if (gpio != 0)
     {
-      stm32_unconfiggpio(gpio);
-    }
-  else
-    {
-      stm32_configgpio(gpio);
+      if ((cfg & STM32_CAP_EDGE_MASK) == STM32_CAP_EDGE_DISABLED)
+        {
+          stm32_unconfiggpio(gpio);
+        }
+      else
+        {
+          stm32_configgpio(gpio);
+        }
     }
 
   /* Enable this channel timer */
@@ -1296,26 +1207,18 @@ static uint32_t stm32_cap_getcapture(struct stm32_cap_dev_s *dev,
       case STM32_CAP_CHANNEL_COUNTER:
         offset = STM32_GTIM_CNT_OFFSET;
         break;
-#ifdef HAVE_CH1IN
       case 1:
         offset = STM32_GTIM_CCR1_OFFSET;
         break;
-#endif
-#ifdef HAVE_CH2IN
       case 2:
         offset = STM32_GTIM_CCR2_OFFSET;
         break;
-#endif
-#ifdef HAVE_CH3IN
       case 3:
         offset = STM32_GTIM_CCR3_OFFSET;
         break;
-#endif
-#ifdef HAVE_CH4IN
       case 4:
         offset = STM32_GTIM_CCR4_OFFSET;
         break;
-#endif
       default:
         return ERROR;
     }
@@ -1436,30 +1339,6 @@ const struct stm32_cap_priv_s stm32_tim9_priv =
 };
 #endif
 
-#ifdef CONFIG_STM32_TIM10_CAP
-const struct stm32_cap_priv_s stm32_tim10_priv =
-{
-  .ops          = &stm32_cap_ops,
-  .base         = STM32_TIM10_BASE,
-  .irq          = STM32_IRQ_TIM10,
-#ifdef USE_ADVANCED_TIM
-  .irq_of       = 0,
-#endif
-};
-#endif
-
-#ifdef CONFIG_STM32_TIM11_CAP
-const struct stm32_cap_priv_s stm32_tim11_priv =
-{
-  .ops          = &stm32_cap_ops,
-  .base         = STM32_TIM11_BASE,
-  .irq          = STM32_IRQ_TIM11,
-#ifdef USE_ADVANCED_TIM
-  .irq_of       = 0,
-#endif
-};
-#endif
-
 #ifdef CONFIG_STM32_TIM12_CAP
 const struct stm32_cap_priv_s stm32_tim12_priv =
 {
@@ -1566,14 +1445,6 @@ static inline const struct stm32_cap_priv_s * stm32_cap_get_priv(int timer)
 #ifdef CONFIG_STM32_TIM9_CAP
       case 9:
         return &stm32_tim9_priv;
-#endif
-#ifdef CONFIG_STM32_TIM10_CAP
-      case 10:
-        return &stm32_tim10_priv;
-#endif
-#ifdef CONFIG_STM32_TIM11_CAP
-      case 11:
-        return &stm32_tim11_priv;
 #endif
 #ifdef CONFIG_STM32_TIM12_CAP
       case 12:

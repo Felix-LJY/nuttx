@@ -28,6 +28,7 @@
  ****************************************************************************/
 
 #include <nuttx/config.h>
+#include <stdbool.h>
 
 #ifdef CONFIG_DRIVERS_WIFI_SIM
 
@@ -38,11 +39,8 @@
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -66,7 +64,6 @@ int  wifi_sim_init(FAR struct wifi_sim_lowerhalf_s *netdev);
 void wifi_sim_remove(FAR struct wifi_sim_lowerhalf_s *netdev);
 bool wifi_sim_connected(FAR struct wifi_sim_lowerhalf_s *dev);
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

@@ -2,8 +2,7 @@
  * include/nuttx/net/can.h
  *
  * SPDX-License-Identifier: BSD-3-Clause
- * SPDX-FileCopyrightText: 2007, 2009-2012, 2015 Gregory Nutt. All
- * rights reserved.
+ * SPDX-FileCopyrightText: 2007, 2009-2012, 2015 Gregory Nutt. All rights reserved.
  * SPDX-FileCopyrightText: 2001-2003, Adam Dunkels. All rights reserved.
  * SPDX-FileContributor: Gregory Nutt <gnutt@nuttx.org>
  * SPDX-FileContributor: Adam Dunkels <adam@dunkels.com>
@@ -47,6 +46,7 @@
 #include <nuttx/mm/iob.h>
 #include <nuttx/net/netconfig.h>
 #include <stdint.h>
+#include <stdbool.h>
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -89,16 +89,36 @@ extern const uint8_t g_len_to_can_dlc[65];
 #endif
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
  * Public Function Prototypes
  ****************************************************************************/
+
+typedef CODE int (*can_rx_cb_t)(FAR void *arg, FAR const void *frame);
+
+/****************************************************************************
+ * Name: can_set_rx_callback
+ *
+ * Description:
+ *   register rx sync callback to the can connection structures.
+ *
+ * Input Parameters:
+ *   psock    - The socket structure of the CAN connection
+ *   callback - The callback function to be called when a frame is received
+ *   args     - The argument to be passed to the callback function
+ *
+ * Returned Value:
+ *   Zero (OK) is returned on success.  Otherwise, a negated errno value is
+ *   returned.
+ *
+ ****************************************************************************/
+
+struct socket; /* Forward reference */
+int can_set_rx_callback(FAR struct socket *psock, can_rx_cb_t callback,
+                        FAR void *args);
 
 /****************************************************************************
  * Name: can_input
@@ -136,9 +156,12 @@ int can_input(FAR struct net_driver_s *dev);
  ****************************************************************************/
 
 #if CONFIG_NET_CAN_NBUFFERS > 0
-FAR struct iob_s *can_iob_timedalloc(unsigned int timeout);
+struct socket_conn_s; /* Forward reference */
+FAR struct iob_s *can_iob_timedalloc(bool throttled, unsigned int timeout,
+                                     FAR struct socket_conn_s *sconn,
+                                     FAR struct net_driver_s *dev);
 #else
-#define can_iob_timedalloc(t) net_iobtimedalloc(true, t)
+#define can_iob_timedalloc(th,t,s,d) conn_dev_iobtimedalloc(th, t, s, d)
 #endif
 
 /****************************************************************************
@@ -169,7 +192,6 @@ int can_iob_navail(void);
 #define can_iob_navail() iob_navail(false)
 #endif
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

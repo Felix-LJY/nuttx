@@ -72,7 +72,7 @@ Power Management
    Manage power state transition and query. The supplied argument
    indicates the specific PM operation to perform, which map to
    corresponding internal ``pm_<operation>`` functions
-   (see :doc:`/components/drivers/special/power/pm/index`).
+   (see :doc:`/os/drivers/special/power/pm/index`).
 
    With this interface you can interact with PM handling arch/board logic
    (typically done in IDLE loop) or you can directly manage state transitions
@@ -146,26 +146,6 @@ Symbol Handling
    :Argument: A pointer to an instance of :c:struct:`boardioc_symtab_s`.
 
    :configuration: CONFIG_BOARDCTL_OS_SYMTAB
-
-.. c:macro:: BOARDIOC_BUILTINS
-
-   Provide the user-space list of built-in applications for
-   use by BINFS in protected mode.  Normally this is small
-   set of globals provided by user-space logic.  It provides
-   name-value pairs for associating built-in application
-   names with user-space entry point addresses.  These
-   globals are only needed for use by BINFS which executes
-   built-in applications from kernel-space in PROTECTED mode.
-   In the FLAT build, the user space globals are readily
-   available.  (BINFS is not supportable in KERNEL mode since
-   user-space address have no general meaning that
-   configuration).
-
-   :Argument: A pointer to an instance of :c:struct:`boardioc_builtin_s`.
-
-   :configuration: This command is always available when
-     CONFIG_BUILTIN is enabled, but does nothing unless
-     CONFIG_BUILD_PROTECTED is also selected.
 
 USB
 ---

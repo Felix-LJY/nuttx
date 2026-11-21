@@ -441,7 +441,7 @@ static const struct sensor_ops_s g_sensor_ops =
   NULL,             /* set_calibvalue */
   bme680_calibrate, /* calibrate */
   NULL,             /* get_info */
-  NULL,             /* set_nonwakeup */
+  NULL,             /* set_wakeup */
   bme680_control    /* control */
 };
 
@@ -1598,6 +1598,7 @@ static int bme680_control(FAR struct sensor_lowerhalf_s *lower,
           /* Perform Soft Reset */
 
           uint8_t regval = 0xb6;
+
           ret = bme680_putreg8(priv, BME680_RESET_REG_ADDR, regval);
 
           if (ret < 0)
@@ -1672,7 +1673,7 @@ static int bme680_thread(int argc, char **argv)
           deliver_data[sensor](priv, &data);
         }
 
-    thread_sleep:
+      thread_sleep:
       nxsched_usleep(CONFIG_SENSORS_BME680_POLL_INTERVAL);
     }
 

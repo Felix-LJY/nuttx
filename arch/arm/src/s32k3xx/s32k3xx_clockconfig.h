@@ -1,6 +1,8 @@
 /****************************************************************************
  * arch/arm/src/s32k3xx/s32k3xx_clockconfig.h
  *
+ * SPDX-License-Identifier: Apache-2.0
+ *
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.  The
@@ -333,13 +335,9 @@ struct clock_configuration_s
  * Public Data
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -417,7 +415,6 @@ uint32_t s32k3xx_get_sysclk(enum cgm_system_clock_type_e type);
 
 uint32_t s32k3xx_get_freq(enum clock_names_e clksrc);
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

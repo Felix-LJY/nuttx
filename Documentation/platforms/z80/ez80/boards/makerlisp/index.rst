@@ -1,6 +1,8 @@
-=========
-makerlisp
-=========
+==============
+MakerLisp eZ80
+==============
+
+.. tags:: arch:z80, chip:ez80, vendor:zilog
 
 This port use the MakerLisp machine based on an eZ80F091 ez80Acclaim!
 Microcontroller, and the Zilog ZDS-II Windows command line tools.  The

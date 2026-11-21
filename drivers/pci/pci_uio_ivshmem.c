@@ -34,6 +34,7 @@
 #include <stdlib.h>
 
 #include <nuttx/fs/fs.h>
+#include <nuttx/kmalloc.h>
 #include <nuttx/mm/map.h>
 #include <nuttx/pci/pci_ivshmem.h>
 #include <nuttx/semaphore.h>
@@ -69,7 +70,7 @@ struct uio_ivshmem_read_s
 struct uio_ivshmem_poll_s
 {
   struct uio_ivshmem_notify_s  notify;
-  FAR struct pollfd           *fds;
+  FAR struct pollfd_s         *fds;
   FAR void                   **ppriv;
 };
 
@@ -100,7 +101,7 @@ static int uio_ivshmem_unmap(FAR struct task_group_s *group,
                              FAR void *start, size_t length);
 static int uio_ivshmem_mmap(FAR struct file *filep,
                             FAR struct mm_map_entry_s *map);
-static int uio_ivshmem_poll(FAR struct file *filep, FAR struct pollfd *fds,
+static int uio_ivshmem_poll(FAR struct file *filep, FAR struct pollfd_s *fds,
                             bool setup);
 
 static int uio_ivshmem_probe(FAR struct ivshmem_device_s *dev);
@@ -379,7 +380,7 @@ void uio_ivshmem_notify_poll(FAR struct uio_ivshmem_notify_s *notify,
  * Name: uio_ivshmem_poll
  ****************************************************************************/
 
-static int uio_ivshmem_poll(FAR struct file *filep, FAR struct pollfd *fds,
+static int uio_ivshmem_poll(FAR struct file *filep, FAR struct pollfd_s *fds,
                             bool setup)
 {
   FAR struct uio_ivshmem_poll_s *poll;

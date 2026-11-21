@@ -59,6 +59,8 @@ void task_initialize(void);
 /* Task group data structure management */
 
 int  group_allocate(FAR struct tcb_s *tcb, uint8_t ttype);
+void group_init_rlimit(FAR struct task_group_s *group,
+                       FAR struct task_group_s *parent);
 void group_initialize(FAR struct tcb_s *tcb);
 #ifndef CONFIG_DISABLE_PTHREAD
 void group_bind(FAR struct tcb_s *tcb);
@@ -85,9 +87,17 @@ int group_continue(FAR struct tcb_s *tcb);
 
 FAR struct task_group_s *task_getgroup(pid_t pid);
 
+/* Process groups and sessions */
+
+#ifdef CONFIG_SCHED_PROCESS_GROUPS
+bool group_in_pgrp(FAR struct tcb_s *tcb, pid_t pgid);
+int  group_setpgid(pid_t pid, pid_t pgid);
+#endif
+
 /* Signaling group members */
 
-int group_signal(FAR struct task_group_s *group, FAR siginfo_t *siginfo);
+int group_signal(FAR struct task_group_s *group, FAR siginfo_t *siginfo,
+                 FAR const void *source, bool limit);
 
 /* Parent/child data management */
 
@@ -105,6 +115,7 @@ FAR struct child_status_s *group_find_child(FAR struct task_group_s *group,
 FAR struct child_status_s *group_remove_child(FAR struct task_group_s *group,
                                               pid_t pid);
 void group_remove_children(FAR struct task_group_s *group);
+bool group_has_child(FAR struct task_group_s *group, pid_t pid);
 
 #endif /* CONFIG_SCHED_CHILD_STATUS */
 #endif /* CONFIG_SCHED_HAVE_PARENT */
@@ -114,6 +125,6 @@ void group_remove_children(FAR struct task_group_s *group);
 int  group_setupidlefiles(void);
 int  group_setuptaskfiles(FAR struct tcb_s *tcb,
                           FAR const posix_spawn_file_actions_t *actions,
-                          bool cloexec);
+                          bool exec);
 
 #endif /* __SCHED_GROUP_GROUP_H */

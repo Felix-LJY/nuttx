@@ -154,6 +154,25 @@
 
 #define ARM_SMCCC_RET_NOT_SUPPORTED     ((unsigned long)-1)
 
+/* NuttX SPD (Secure Payload Dispatcher) SMC function IDs.
+ * Used for BL32 <-> BL31 communication in TrustZone configurations.
+ *
+ * Yielding SMCs: world-switch / long-running ops, may be preempted.
+ * Fast SMCs: short atomic ops, non-preemptible.
+ */
+
+#define ARM64_SMCCC_NUTTX_SEND_SECURE_SGI \
+  ARM_SMCCC_CALL_VAL(ARM_SMCCC_FAST_CALL, ARM_SMCCC_SMC_64, \
+                     ARM_SMCCC_OWNER_TRUSTED_OS_END, 0x0000)
+
+#define ARM64_SMCCC_NUTTX_TEE_IDLE \
+  ARM_SMCCC_CALL_VAL(ARM_SMCCC_STD_CALL, ARM_SMCCC_SMC_64, \
+                     ARM_SMCCC_OWNER_TRUSTED_OS_END, 0x0001)
+
+#define ARM64_SMCCC_NUTTX_REE_IDLE \
+  ARM_SMCCC_CALL_VAL(ARM_SMCCC_STD_CALL, ARM_SMCCC_SMC_64, \
+                     ARM_SMCCC_OWNER_TRUSTED_OS_END, 0x0002)
+
 #ifndef __ASSEMBLY__
 
 /****************************************************************************
@@ -344,10 +363,10 @@ static inline uintptr_t sys_call6(unsigned int nbr, uintptr_t parm1,
 
 /* semihosting(SMH) call with call number and one parameter */
 
-static inline long smh_call(unsigned int nbr, void *param)
+static inline long smh_call(unsigned int nbr, void *parm)
 {
   register uint64_t reg0 __asm__("x0") = (uint64_t)(nbr);
-  register uint64_t reg1 __asm__("x1") = (uint64_t)(param);
+  register uint64_t reg1 __asm__("x1") = (uint64_t)(parm);
 
   __asm__ __volatile__
   (
@@ -395,14 +414,10 @@ void arm64_smccc_smc(unsigned long a0, unsigned long a1,
                      struct arm64_smccc_res *res);
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

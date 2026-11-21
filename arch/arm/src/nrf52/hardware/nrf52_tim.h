@@ -73,6 +73,10 @@
 
 #define TIM_TASKS_CLEAR                    (1 << 0)                /* Bit 0: Clear Timer */
 
+/* TASKS_CAPTURE[x] Register */
+
+#define TIM_TASKS_CAPTURE                  (1 << 0)                /* Bit 0: Capture Timer value */
+
 /* SHORTS Register */
 
 #define TIM_SHORTS_COMPARE_CLEAR(x)        (1 << (x))              /* Bits 0-5: */
@@ -103,6 +107,6 @@
 
 #define TIM_PRESCALER_SHIFT                (0)                        /* Bits 0-3: Prescaler value */
 #define TIM_PRESCALER_MAX                  (9)
-#define TIM_PRESCALER_MASK                 (TIM_PRESCALER_MAX << TIM_PRESCALER_SHIFT)
+#define TIM_PRESCALER_MASK                 (0xf << TIM_PRESCALER_SHIFT)
 
 #endif /* __ARCH_ARM_SRC_NRF52_HARDWARE_NRF52_TIM_H */

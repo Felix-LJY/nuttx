@@ -88,6 +88,7 @@
 #define PORT_ISC_GM ( PORT_ISC_0_bm | PORT_ISC_1_bm | PORT_ISC_2_bm )
 
 #define PORT_ISC_BOTHEDGES_GC ( PORT_ISC_0_bm )
+#define PORT_ISC_LEVEL_GC ( PORT_ISC_2_bm | PORT_ISC_0_bm )
 
 /* CLKCTRL.MCLKCTRLA */
 
@@ -137,14 +138,19 @@
 /* USART.CTRLC */
 
 #define USART_PMODE_DISABLED_GC (0)
-#define USART_PMODE_EVEN_GC = (USART_PMODE_1_bm)
-#define USART_PMODE_ODD_GC = (USART_PMODE_1_bm | USART_PMODE_0_bm)
+#define USART_PMODE_EVEN_GC (USART_PMODE_1_bm)
+#define USART_PMODE_ODD_GC (USART_PMODE_1_bm | USART_PMODE_0_bm)
 
 #define USART_SBMODE_1BIT_GC (0)
 #define USART_SBMODE_2BIT_GC (USART_SBMODE_bm)
 
 #define USART_CHSIZE_7BIT_GC (USART_CHSIZE_1_bm)
 #define USART_CHSIZE_8BIT_GC (USART_CHSIZE_1_bm | USART_CHSIZE_0_bm)
+#define USART_CHSIZE_9BITL_GC (USART_CHSIZE_2_bm | USART_CHSIZE_1_bm)
+#define USART_CHSIZE_9BITH_GC ( \
+    USART_CHSIZE_2_bm \
+    | USART_CHSIZE_1_bm \
+    | USART_CHSIZE_0_bm )
 
 /* TWI.MCTRLA */
 
@@ -224,13 +230,9 @@ typedef struct avr_twi_struct
  * Public Data
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -241,7 +243,6 @@ extern "C"
  * Public Function Prototypes
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

@@ -12,6 +12,13 @@ priority. The signal handler is a user-supplied function that is bound
 to a specific signal and performs whatever actions are necessary
 whenever the signal is received.
 
+**Pending signals**.  A signal that the receiver blocks stays pending
+until the receiver unblocks it.  A signal sent to the whole task group
+(``kill()``) and a signal sent to one thread (``pthread_kill()``,
+``tgkill()``) are pending apart: each target has at most one pending
+instance of a signal that is not a real-time signal.  The signals that
+are pending for a thread are discarded when the thread exits.
+
 By default, there are no predefined actions for any signal. The default
 action for all signals (i.e., when no signal handler has been supplied
 by the user) is to ignore the signal. In this sense, all NuttX are *real
@@ -111,6 +118,9 @@ multi-threaded task group:
 -  If a task group receives a signal and more than one thread is waiting
    on that signal, then one and only one indeterminate thread out of
    that waiting group will receive the signal.
+-  If the action of the signal is the default action *Abnormal
+   Termination*, all threads of the task group end at once, also the
+   threads that block the signal.
 
 You can mask out that signal using ''sigprocmask()'' (or
 ''pthread_sigmask()''). That signal will then be effectively disabled
@@ -241,6 +251,9 @@ provided by NuttX:
   in the location pointed to by the argument oact. If the argument act is
   NULL, signal handling is unchanged by this function call; thus, the call
   can be used to inquire about the current handling of a given signal.
+  With ``CONFIG_SIG_DEFAULT``, oact reports ``SIG_DFL`` for a signal at its
+  default action, also when the default action is to ignore the signal
+  (``SIGCHLD``, for example).
 
   When a signal is caught by a signal-catching function installed by the
   sigaction() function, a new signal mask is calculated and installed for
@@ -266,12 +279,14 @@ provided by NuttX:
   **POSIX Compatibility:** Comparable to the POSIX interface of the same
   name. Differences from the POSIX implementation include:
 
-    -  There are no default actions so the special value ``SIG_DFL`` is
-       treated like ``SIG_IGN``.
+    -  Without ``CONFIG_SIG_DEFAULT``, there are no default actions so the
+       special value ``SIG_DFL`` is treated like ``SIG_IGN``.
     -  All ``sa_flags`` in struct sigaction of act input are ignored (all
        treated like ``SA_SIGINFO``). The one exception is if
        ``CONFIG_SCHED_CHILD_STATUS`` is defined; then ``SA_NOCLDWAIT`` is
-       supported but only for ``SIGCHLD``.
+       supported but only for ``SIGCHLD``.  ``SIGCHLD`` set to ``SIG_IGN``
+       has the same effect if ``CONFIG_SIG_DEFAULT`` is defined.  Any
+       other action for ``SIGCHLD`` keeps the child status again.
 
 .. c:function:: int sigignore(int signo);
 
@@ -386,7 +401,9 @@ provided by NuttX:
   If the effect of the set argument is to unblock a pending signal, then
   no wait is performed.
 
-  The original signal mask is restored when sigsuspend() returns.
+  The original signal mask is restored when sigsuspend() returns.  The
+  handlers of the signals that ``set`` unblocks run first, with ``set``
+  still installed, also when sigsuspend() is a system call.
 
   Waiting for an empty signal set stops a task without freeing any
   resources (a very bad idea).
@@ -398,7 +415,6 @@ provided by NuttX:
   **POSIX Compatibility:** Comparable to the POSIX interface of the same
   name. Differences from the POSIX specification include:
 
-  -  POSIX does not indicate that the original signal mask is restored.
   -  POSIX states that sigsuspend() "suspends the task until delivery of a
      signal whose action is either to execute a signal-catching function
      or to terminate the task." Only delivery of the signal is required in
@@ -496,8 +512,8 @@ Equivalent to sigtimedwait() with a NULL timeout parameter. (see below).
     On error, -1 (``ERROR``) is returned, and
     ```errno`` <#ErrnoAccess>`__ is set appropriately.
 
-    -  ``EGAIN``. The limit of signals which may be queued has been
-       reached.
+    -  ``EAGAIN``. ``SIGQUEUE_MAX`` signals are still pending at the
+       receiving task.
     -  ``EINVAL``. signo was invalid.
     -  ``EPERM``. The task does not have permission to send the signal to
        the receiving process.
@@ -527,8 +543,12 @@ Equivalent to sigtimedwait() with a NULL timeout parameter. (see below).
 
   :param pid: The id of the task to receive the signal. The POSIX
     ``kill()`` specification encodes process group information as zero
-    and negative pid values. Only positive, non-zero values of pid are
-    supported by this implementation. ID of the task to receive signal
+    and negative pid values. With ``CONFIG_SCHED_PROCESS_GROUPS``, ``0``
+    is the process group of the caller and ``-pid`` is the process group
+    ``pid``: each process of the group that the caller may control gets
+    the signal. Without it, a process group is one process: ``0`` is the
+    caller and ``-pid`` is the process ``pid``. ``-1`` (all processes) is
+    not supported and gives ``ENOSYS``.
   :param signo: The signal number to send. If signo is zero, no signal is
     sent, but all error checking is performed.
 
@@ -539,7 +559,9 @@ Equivalent to sigtimedwait() with a NULL timeout parameter. (see below).
 
   -  Default action is to ignore signals.
   -  Signals are processed one at a time in order
-  -  Sending of signals to 'process groups' is not supported in NuttX.
+  -  Without ``CONFIG_SCHED_PROCESS_GROUPS``, a process group is one
+     process, so a signal to a process group goes to that process. A
+     signal to all processes (``pid`` -1) is not supported.
 
 .. c:function:: int pause(void);
 

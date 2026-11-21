@@ -1,6 +1,8 @@
-===============
-z16f2800100zcog
-===============
+=====================
+Zilog Z16F2800100ZCOG
+=====================
+
+.. tags:: arch:z16, chip:z16f, vendor:zilog
 
 z16f Microcontroller.  This port use the Zilog z16f2800100zcog
 development kit and the Zilog ZDS-II Windows command line tools.  The

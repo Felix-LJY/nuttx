@@ -44,9 +44,9 @@
 /* Allocate a new IEEE 802.15.4 socket data callback */
 
 #define ieee802154_callback_alloc(dev,conn) \
-  devif_callback_alloc(dev, &conn->sconn.list, &conn->sconn.list_tail)
+  devif_callback_alloc(dev, &conn->sconn.s_list, &conn->sconn.s_listtail)
 #define ieee802154_callback_free(dev,conn,cb) \
-  devif_conn_callback_free(dev, cb, &conn->sconn.list, &conn->sconn.list_tail)
+  devif_conn_callback_free(dev, cb, &conn->sconn.s_list, &conn->sconn.s_listtail)
 
 /* Memory Pools */
 
@@ -123,16 +123,13 @@ struct ieee802154_conn_s
  ****************************************************************************/
 
 #ifdef __cplusplus
-#  define EXTERN extern "C"
 extern "C"
 {
-#else
-#  define EXTERN extern
 #endif
 
 /* The IEEE 802.15.4 socket interface */
 
-EXTERN const struct sock_intf_s g_ieee802154_sockif;
+extern const struct sock_intf_s g_ieee802154_sockif;
 
 /* The IEEE 802.15.4 connections rmutex */
 
@@ -473,7 +470,6 @@ FAR struct ieee802154_container_s *ieee802154_container_allocate(void);
 
 void ieee802154_container_free(FAR struct ieee802154_container_s *container);
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

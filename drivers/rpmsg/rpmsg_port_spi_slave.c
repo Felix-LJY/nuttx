@@ -29,9 +29,9 @@
 #include <stdio.h>
 
 #include <nuttx/atomic.h>
-#include <nuttx/crc16.h>
 #include <nuttx/kmalloc.h>
 #include <nuttx/kthread.h>
+#include <nuttx/lib/xorsum.h>
 #include <nuttx/nuttx.h>
 #include <nuttx/power/pm.h>
 #include <nuttx/irq.h>
@@ -46,7 +46,7 @@
  ****************************************************************************/
 
 #ifdef CONFIG_RPMSG_PORT_SPI_CRC
-#  define rpmsg_port_spi_crc16(hdr)     crc16ibm((FAR uint8_t *)&(hdr)->cmd, \
+#  define rpmsg_port_spi_crc16(hdr)     xorsum16(&(hdr)->cmd, \
                                                  (hdr)->len - sizeof((hdr)->crc))
 #else
 #  define rpmsg_port_spi_crc16(hdr)     0
@@ -423,6 +423,14 @@ static void rpmsg_port_spi_slave_notify(FAR struct spi_slave_dev_s *dev,
       rpspi->shutdown = false;
     }
 
+  if (rpspi->rxhdr->len < sizeof(struct rpmsg_port_header_s) ||
+      rpspi->rxhdr->len > rpspi->port.rxq.len)
+    {
+      rpmsgerr("drop malformed rx: len=%u crc=%u cmd=%u\n",
+               rpspi->rxhdr->len, rpspi->rxhdr->crc, rpspi->rxhdr->cmd);
+      goto out;
+    }
+
   if (rpspi->rxhdr->crc != 0)
     {
       uint16_t crc = rpmsg_port_spi_crc16(rpspi->rxhdr);
@@ -590,6 +598,10 @@ rpmsg_port_spi_process_packet(FAR struct rpmsg_port_spi_s *rpspi,
             spin_unlock_irqrestore(&rpspi->lock, flags);
             rpmsg_port_register(&rpspi->port, (FAR const char *)(rxhdr + 1));
           }
+        else
+          {
+            spin_unlock_irqrestore(&rpspi->lock, flags);
+          }
 
         rpmsg_port_queue_return_buffer(&rpspi->port.rxq, rxhdr);
         break;
@@ -599,8 +611,14 @@ rpmsg_port_spi_process_packet(FAR struct rpmsg_port_spi_s *rpspi,
         break;
 
       case RPMSG_PORT_SPI_CMD_SHUTDOWN:
-        rpmsg_port_unregister(&rpspi->port);
         flags = spin_lock_irqsave(&rpspi->lock);
+        if (rpspi->state != RPMSG_PORT_SPI_STATE_UNCONNECTED)
+          {
+            spin_unlock_irqrestore(&rpspi->lock, flags);
+            rpmsg_port_unregister(&rpspi->port);
+            flags = spin_lock_irqsave(&rpspi->lock);
+          }
+
         if (rpspi->state == RPMSG_PORT_SPI_STATE_DISCONNECTING)
           {
             SPIS_CTRLR_UNBIND(rpspi->spictrlr);
@@ -614,6 +632,10 @@ rpmsg_port_spi_process_packet(FAR struct rpmsg_port_spi_s *rpspi,
             rpspi->state = RPMSG_PORT_SPI_STATE_UNCONNECTED;
             spin_unlock_irqrestore(&rpspi->lock, flags);
             rpmsg_port_spi_connect(rpspi);
+          }
+        else
+          {
+            spin_unlock_irqrestore(&rpspi->lock, flags);
           }
 
         rpmsg_port_queue_return_buffer(&rpspi->port.rxq, rxhdr);
@@ -650,7 +672,7 @@ static int rpmsg_port_spi_thread(int argc, FAR char *argv[])
 }
 
 /****************************************************************************
- * Name: rpmsg_port_spi_gpio_init
+ * Name: rpmsg_port_spi_init_gpio
  ****************************************************************************/
 
 static int
@@ -724,27 +746,6 @@ rpmsg_port_spi_init_hardware(FAR struct rpmsg_port_spi_s *rpspi,
       return -EINVAL;
     }
 
-  /* Init mreq gpio */
-
-  ret = rpmsg_port_spi_init_gpio(ioe, &rpspi->mreq, spicfg->mreq_pin,
-                                 spicfg->mreq_invert,
-                                 rpmsg_port_spi_mreq_handler, rpspi);
-  if (ret < 0)
-    {
-      rpmsgerr("mreq init failed\n");
-      return ret;
-    }
-
-  /* Init sreq gpio */
-
-  ret = rpmsg_port_spi_init_gpio(ioe, &rpspi->sreq, spicfg->sreq_pin,
-                                 spicfg->sreq_invert, NULL, NULL);
-  if (ret < 0)
-    {
-      rpmsgerr("sreq init failed\n");
-      return ret;
-    }
-
   rpspi->ioe = ioe;
   rpspi->spictrlr = spictrlr;
   rpspi->spislv.ops = &g_rpmsg_port_spi_slave_ops;
@@ -753,7 +754,32 @@ rpmsg_port_spi_init_hardware(FAR struct rpmsg_port_spi_s *rpspi,
   SPIS_CTRLR_BIND(spictrlr, &rpspi->spislv, spicfg->mode, spicfg->nbits);
   rpspi->bound = true;
 
+  /* Init sreq gpio */
+
+  ret = rpmsg_port_spi_init_gpio(ioe, &rpspi->sreq, spicfg->sreq_pin,
+                                 spicfg->sreq_invert, NULL, NULL);
+  if (ret < 0)
+    {
+      rpmsgerr("sreq init failed\n");
+      goto out;
+    }
+
+  /* Init mreq gpio */
+
+  ret = rpmsg_port_spi_init_gpio(ioe, &rpspi->mreq, spicfg->mreq_pin,
+                                 spicfg->mreq_invert,
+                                 rpmsg_port_spi_mreq_handler, rpspi);
+  if (ret < 0)
+    {
+      rpmsgerr("mreq init failed\n");
+      goto out;
+    }
+
   return 0;
+
+out:
+  SPIS_CTRLR_UNBIND(spictrlr);
+  return ret;
 }
 
 /****************************************************************************

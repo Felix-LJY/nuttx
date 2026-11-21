@@ -1,8 +1,8 @@
-===========
-smartl-c906
-===========
+==================
+T-HEAD SmartL-C906
+==================
 
-.. tags:: arch:riscv, experimental
+.. tags:: arch:risc-v, chip:c906, vendor:thead
 
 .. todo::
 

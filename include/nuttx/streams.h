@@ -235,6 +235,7 @@ struct lib_rawsostream_s
   int                    fd;
 };
 
+#if CONFIG_STREAM_OUT_BUFFER_SIZE > 0
 struct lib_bufferedoutstream_s
 {
   struct lib_outstream_s      common;
@@ -242,6 +243,7 @@ struct lib_bufferedoutstream_s
   size_t                      pending;
   char                        buffer[CONFIG_STREAM_OUT_BUFFER_SIZE];
 };
+#endif
 
 struct lib_hexdumpstream_s
 {
@@ -280,6 +282,9 @@ struct lib_syslograwstream_s
   off_t offset;
 #endif
   int last_ch;
+#ifdef CONFIG_SYSLOG_DROPMASK
+  int priority;  /* Of the message, or SYSLOG_PRIORITY_NONE */
+#endif
 };
 
 /* LZF compressed stream pipeline */
@@ -334,13 +339,9 @@ struct va_format
  * Public Data
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#  define EXTERN extern "C"
 extern "C"
 {
-#else
-#  define EXTERN extern
 #endif
 
 extern struct lib_outstream_s g_lowoutstream;
@@ -478,8 +479,10 @@ void lib_rawsostream(FAR struct lib_rawsostream_s *stream, int fd);
  *
  ****************************************************************************/
 
+#if CONFIG_STREAM_OUT_BUFFER_SIZE > 0
 void lib_bufferedoutstream(FAR struct lib_bufferedoutstream_s *stream,
                            FAR struct lib_outstream_s *backend);
+#endif
 
 /****************************************************************************
  * Name: lib_hexdumpstream
@@ -889,7 +892,6 @@ int lib_vscanf(FAR struct lib_instream_s *stream, FAR int *lastc,
 int lib_bscanf(FAR struct lib_instream_s *stream, FAR int *lastc,
                FAR const IPTR char *fmt, FAR void *data);
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

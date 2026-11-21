@@ -180,6 +180,7 @@ static inline void fakesensor_read_accel(FAR struct fakesensor_s *sensor,
 {
   struct sensor_accel accel;
   char raw[50];
+
   fakesensor_read_csv_line(
           &sensor->data, raw, sizeof(raw), sensor->raw_start);
   sscanf(raw, "%f,%f,%f\n", &accel.x, &accel.y, &accel.z);
@@ -189,11 +190,30 @@ static inline void fakesensor_read_accel(FAR struct fakesensor_s *sensor,
                     sizeof(struct sensor_accel));
 }
 
+static inline void
+fakesensor_read_accel_uncal(FAR struct fakesensor_s *sensor,
+                            uint64_t event_timestamp)
+{
+  struct sensor_accel_uncal accel;
+  char raw[128];
+
+  fakesensor_read_csv_line(&sensor->data, raw, sizeof(raw),
+                           sensor->raw_start);
+  sscanf(raw, "%f,%f,%f,%f,%f,%f,%" SCNi32 "\n", &accel.x, &accel.y,
+         &accel.z, &accel.x_bias, &accel.y_bias, &accel.z_bias,
+         &accel.status);
+  accel.temperature = NAN;
+  accel.timestamp = event_timestamp;
+  sensor->lower.push_event(sensor->lower.priv, &accel,
+                           sizeof(struct sensor_accel_uncal));
+}
+
 static inline void fakesensor_read_mag(FAR struct fakesensor_s *sensor,
                                        uint64_t event_timestamp)
 {
   struct sensor_mag mag;
   char raw[50];
+
   fakesensor_read_csv_line(
           &sensor->data, raw, sizeof(raw), sensor->raw_start);
   sscanf(raw, "%f,%f,%f\n", &mag.x, &mag.y, &mag.z);
@@ -203,11 +223,29 @@ static inline void fakesensor_read_mag(FAR struct fakesensor_s *sensor,
                            sizeof(struct sensor_mag));
 }
 
+static inline void
+fakesensor_read_mag_uncal(FAR struct fakesensor_s *sensor,
+                          uint64_t event_timestamp)
+{
+  struct sensor_mag_uncal mag;
+  char raw[128];
+
+  fakesensor_read_csv_line(&sensor->data, raw, sizeof(raw),
+                           sensor->raw_start);
+  sscanf(raw, "%f,%f,%f,%f,%f,%f,%" SCNi32 "\n", &mag.x, &mag.y,
+         &mag.z, &mag.x_bias, &mag.y_bias, &mag.z_bias, &mag.status);
+  mag.temperature = NAN;
+  mag.timestamp = event_timestamp;
+  sensor->lower.push_event(sensor->lower.priv, &mag,
+                           sizeof(struct sensor_mag_uncal));
+}
+
 static inline void fakesensor_read_gyro(FAR struct fakesensor_s *sensor,
                                         uint64_t event_timestamp)
 {
   struct sensor_gyro gyro;
   char raw[50];
+
   fakesensor_read_csv_line(
           &sensor->data, raw, sizeof(raw), sensor->raw_start);
   sscanf(raw, "%f,%f,%f\n", &gyro.x, &gyro.y, &gyro.z);
@@ -215,6 +253,37 @@ static inline void fakesensor_read_gyro(FAR struct fakesensor_s *sensor,
   gyro.timestamp = event_timestamp;
   sensor->lower.push_event(sensor->lower.priv, &gyro,
                     sizeof(struct sensor_gyro));
+}
+
+static inline void
+fakesensor_read_gyro_uncal(FAR struct fakesensor_s *sensor,
+                           uint64_t event_timestamp)
+{
+  struct sensor_gyro_uncal gyro;
+  char raw[128];
+
+  fakesensor_read_csv_line(&sensor->data, raw, sizeof(raw),
+                           sensor->raw_start);
+  sscanf(raw, "%f,%f,%f,%f,%f,%f,%" SCNi32 "\n", &gyro.x, &gyro.y,
+         &gyro.z, &gyro.x_bias, &gyro.y_bias, &gyro.z_bias, &gyro.status);
+  gyro.temperature = NAN;
+  gyro.timestamp = event_timestamp;
+  sensor->lower.push_event(sensor->lower.priv, &gyro,
+                           sizeof(struct sensor_gyro_uncal));
+}
+
+static inline void fakesensor_read_light(FAR struct fakesensor_s *sensor,
+                                         uint64_t event_timestamp)
+{
+  struct sensor_light light;
+  char raw[64];
+
+  fakesensor_read_csv_line(&sensor->data, raw, sizeof(raw),
+                           sensor->raw_start);
+  sscanf(raw, "%f,%f\n", &light.light, &light.ir);
+  light.timestamp = event_timestamp;
+  sensor->lower.push_event(sensor->lower.priv, &light,
+                           sizeof(struct sensor_light));
 }
 
 static inline void fakesensor_read_baro(FAR struct fakesensor_s *sensor,
@@ -229,6 +298,23 @@ static inline void fakesensor_read_baro(FAR struct fakesensor_s *sensor,
   baro.timestamp = event_timestamp;
   sensor->lower.push_event(sensor->lower.priv, &baro,
                            sizeof(struct sensor_baro));
+}
+
+static inline void fakesensor_read_ppgq(FAR struct fakesensor_s *sensor,
+                                        uint64_t event_timestamp)
+{
+  struct sensor_ppgq ppgq;
+  char raw[128];
+
+  fakesensor_read_csv_line(&sensor->data, raw, sizeof(raw),
+                           sensor->raw_start);
+  sscanf(raw, "%" SCNu32 ",%" SCNu32 ",%" SCNu32 ",%" SCNu32 ",%" SCNu32 ","
+         "%" SCNu16 ",%" SCNu16 ",%" SCNu16 ",%" SCNu16 "\n", &ppgq.ppg[0],
+         &ppgq.ppg[1], &ppgq.ppg[2], &ppgq.ppg[3], &ppgq.current,
+         &ppgq.gain[0], &ppgq.gain[1], &ppgq.gain[2], &ppgq.gain[3]);
+  ppgq.timestamp = event_timestamp;
+  sensor->lower.push_event(sensor->lower.priv, &ppgq,
+                           sizeof(struct sensor_ppgq));
 }
 
 #ifdef CONFIG_SENSORS_GNSS
@@ -255,6 +341,7 @@ static int fakesensor_activate(FAR struct sensor_lowerhalf_s *lower,
 {
   FAR struct fakesensor_s *sensor = container_of(lower,
                                                  struct fakesensor_s, lower);
+
   if (enable)
     {
       sensor->running = true;
@@ -285,6 +372,7 @@ static int fakesensor_set_interval(FAR struct sensor_lowerhalf_s *lower,
 {
   FAR struct fakesensor_s *sensor = container_of(lower,
                                                  struct fakesensor_s, lower);
+
   sensor->interval = *period_us;
   return OK;
 }
@@ -305,6 +393,7 @@ static int fakesensor_batch(FAR struct sensor_lowerhalf_s *lower,
   FAR struct fakesensor_s *sensor = container_of(lower,
                                                  struct fakesensor_s, lower);
   uint32_t max_latency = sensor->lower.nbuffer * sensor->interval;
+
   if (*latency_us > max_latency)
     {
       *latency_us = max_latency;
@@ -322,34 +411,56 @@ void fakesensor_push_event(FAR struct fakesensor_s *sensor,
                            uint64_t event_timestamp)
 {
   switch (sensor->type)
-  {
-    case SENSOR_TYPE_ACCELEROMETER:
-      fakesensor_read_accel(sensor, event_timestamp);
-      break;
+    {
+      case SENSOR_TYPE_ACCELEROMETER:
+        fakesensor_read_accel(sensor, event_timestamp);
+        break;
 
-    case SENSOR_TYPE_MAGNETIC_FIELD:
-      fakesensor_read_mag(sensor, event_timestamp);
-      break;
+      case SENSOR_TYPE_MAGNETIC_FIELD:
+        fakesensor_read_mag(sensor, event_timestamp);
+        break;
 
-    case SENSOR_TYPE_GYROSCOPE:
-      fakesensor_read_gyro(sensor, event_timestamp);
-      break;
+      case SENSOR_TYPE_GYROSCOPE:
+        fakesensor_read_gyro(sensor, event_timestamp);
+        break;
 
-    case SENSOR_TYPE_BAROMETER:
-      fakesensor_read_baro(sensor, event_timestamp);
-      break;
+      case SENSOR_TYPE_LIGHT:
+      case SENSOR_TYPE_LIGHT_UNCALIBRATED:
+        fakesensor_read_light(sensor, event_timestamp);
+        break;
+
+      case SENSOR_TYPE_BAROMETER:
+        fakesensor_read_baro(sensor, event_timestamp);
+        break;
+
+      case SENSOR_TYPE_ACCELEROMETER_UNCALIBRATED:
+        fakesensor_read_accel_uncal(sensor, event_timestamp);
+        break;
+
+      case SENSOR_TYPE_MAGNETIC_FIELD_UNCALIBRATED:
+        fakesensor_read_mag_uncal(sensor, event_timestamp);
+        break;
+
+      case SENSOR_TYPE_GYROSCOPE_UNCALIBRATED:
+        fakesensor_read_gyro_uncal(sensor, event_timestamp);
+        break;
+
+      case SENSOR_TYPE_PPGQ:
+        fakesensor_read_ppgq(sensor, event_timestamp);
+        break;
 
 #ifdef CONFIG_SENSORS_GNSS
-    case SENSOR_TYPE_GNSS:
-    case SENSOR_TYPE_GNSS_SATELLITE:
-      fakesensor_read_gnss(sensor);
-      break;
+      case SENSOR_TYPE_GNSS:
+      case SENSOR_TYPE_GNSS_SATELLITE:
+        fakesensor_read_gnss(sensor);
+        break;
 #endif
 
-    default:
-      snerr("fakesensor: unsupported type sensor type\n");
-      break;
-  }
+      default:
+        snerr("fakesensor: unsupported sensor type:%d\n",
+              sensor->type);
+        break;
+    }
 }
 
 static int fakesensor_thread(int argc, char** argv)
@@ -373,6 +484,9 @@ static int fakesensor_thread(int argc, char** argv)
           snerr("Failed to open file:%s, err:%d", sensor->file_path, ret);
           return ret;
         }
+
+      sninfo("fakesensor_thread: reading %s, type:%d\n",
+             sensor->file_path, sensor->type);
 
       fakesensor_read_csv_header(sensor);
 
@@ -449,7 +563,8 @@ int fakesensor_init(int type, FAR const char *file_name,
   FAR char *argv[2];
   char arg1[32];
 #ifdef CONFIG_SENSORS_GNSS
-  uint32_t nbuffer[] = {
+  uint32_t nbuffer[] =
+  {
     [SENSOR_GNSS_IDX_GNSS] = batch_number,
     [SENSOR_GNSS_IDX_GNSS_SATELLITE] = batch_number,
     [SENSOR_GNSS_IDX_GNSS_MEASUREMENT] = batch_number,
@@ -479,7 +594,8 @@ int fakesensor_init(int type, FAR const char *file_name,
   snprintf(arg1, 32, "%p", sensor);
   argv[0] = arg1;
   argv[1] = NULL;
-  ret = kthread_create("fakesensor_thread", SCHED_PRIORITY_DEFAULT,
+  ret = kthread_create("fakesensor_thread",
+                       CONFIG_FAKESENSOR_SCHED_PRIORITY,
                        CONFIG_DEFAULT_TASK_STACKSIZE,
                        fakesensor_thread, argv);
   if (ret < 0)
@@ -494,7 +610,11 @@ int fakesensor_init(int type, FAR const char *file_name,
   if (type == SENSOR_TYPE_GNSS || type == SENSOR_TYPE_GNSS_SATELLITE)
     {
       sensor->gnss.ops = &g_fakegnss_ops;
-      gnss_register(&sensor->gnss, devno, nbuffer, nitems(nbuffer));
+      ret = gnss_register(&sensor->gnss, devno, nbuffer, nitems(nbuffer));
+      if (ret < 0)
+        {
+          snerr("fakesensor_init: gnss_register failed: %d\n", ret);
+        }
     }
   else
 #endif
@@ -502,7 +622,11 @@ int fakesensor_init(int type, FAR const char *file_name,
       sensor->lower.type = type;
       sensor->lower.ops = &g_fakesensor_ops;
       sensor->lower.nbuffer = batch_number;
-      sensor_register(&sensor->lower, devno);
+      ret = sensor_register(&sensor->lower, devno);
+      if (ret < 0)
+        {
+          snerr("fakesensor_init: sensor_register failed: %d\n", ret);
+        }
     }
 
   return OK;

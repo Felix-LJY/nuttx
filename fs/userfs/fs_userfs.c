@@ -48,6 +48,7 @@
 #include <nuttx/fs/ioctl.h>
 #include <nuttx/net/net.h>
 #include <nuttx/mutex.h>
+#include <nuttx/signal.h>
 
 #include "fs_heap.h"
 
@@ -56,6 +57,10 @@
  ****************************************************************************/
 
 #define IOBUFFER_SIZE(p) (USERFS_REQ_MAXSIZE + (p)->mxwrite)
+
+/* FIOC_SETLKW retry period (microseconds) */
+
+#define USERFS_SETLK_RETRY_USEC 20000
 
 /****************************************************************************
  * Private Types
@@ -106,6 +111,10 @@ static ssize_t userfs_write(FAR struct file *filep, FAR const char *buffer,
 static off_t   userfs_seek(FAR struct file *filep, off_t offset, int whence);
 static int     userfs_ioctl(FAR struct file *filep, int cmd,
                  unsigned long arg);
+#ifdef CONFIG_FS_NOTIFY
+static int     userfs_notify(FAR struct inode *mountpt, int wd,
+                 FAR const char *relpath, int action, uint32_t mask);
+#endif
 
 static int     userfs_sync(FAR struct file *filep);
 static int     userfs_dup(FAR const struct file *oldp,
@@ -189,7 +198,19 @@ const struct mountpt_operations g_userfs_operations =
   userfs_rmdir,      /* rmdir */
   userfs_rename,     /* rename */
   userfs_stat,       /* stat */
-  userfs_chstat      /* chstat */
+  userfs_chstat,     /* chstat */
+  NULL,              /* syncfs */
+  NULL,              /* ioctldir */
+  NULL,              /* permission */
+#ifdef CONFIG_FS_LINKS
+  NULL,              /* link */
+  NULL,              /* symlink */
+  NULL,              /* readlink */
+  NULL,              /* lstat */
+#endif
+#ifdef CONFIG_FS_NOTIFY
+  userfs_notify,     /* notify */
+#endif
 };
 
 /****************************************************************************
@@ -221,7 +242,7 @@ static int userfs_open(FAR struct file *filep, FAR const char *relpath,
   /* Check the path length */
 
   DEBUGASSERT(relpath != NULL);
-  pathlen = strlen(relpath);
+  pathlen = strlen(relpath) + 1;
   if (pathlen > priv->mxwrite)
     {
       return -E2BIG;
@@ -242,10 +263,10 @@ static int userfs_open(FAR struct file *filep, FAR const char *relpath,
   req->oflags = oflags;
   req->mode   = mode;
 
-  strlcpy(req->relpath, relpath, priv->mxwrite);
+  memcpy(req->relpath, relpath, pathlen);
 
   nsent = psock_sendto(&priv->psock, priv->iobuffer,
-                       SIZEOF_USERFS_OPEN_REQUEST_S(pathlen + 1), 0,
+                       SIZEOF_USERFS_OPEN_REQUEST_S(pathlen), 0,
                        (FAR struct sockaddr *)&priv->server,
                        sizeof(struct sockaddr_in));
   if (nsent < 0)
@@ -469,6 +490,10 @@ static ssize_t userfs_read(FAR struct file *filep, char *buffer,
 
   memcpy(buffer, resp->rddata, resp->nread);
   nread = resp->nread;
+  if (nread > 0)
+    {
+      filep->f_pos += nread;
+    }
 
   nxmutex_unlock(&priv->lock);
 
@@ -561,6 +586,10 @@ static ssize_t userfs_write(FAR struct file *filep, FAR const char *buffer,
     }
 
   nwritten = resp->nwritten;
+  if (nwritten > 0)
+    {
+      filep->f_pos += nwritten;
+    }
 
   nxmutex_unlock(&priv->lock);
 
@@ -643,10 +672,108 @@ static off_t userfs_seek(FAR struct file *filep, off_t offset, int whence)
     }
 
   off_ret = resp->ret;
+  if (off_ret >= 0)
+    {
+      filep->f_pos = off_ret;
+    }
 
   nxmutex_unlock(&priv->lock);
 
   return off_ret;
+}
+
+/****************************************************************************
+ * Name: userfs_flock
+ ****************************************************************************/
+
+static int userfs_flock(FAR struct file *filep, int request,
+                        FAR struct flock *fl)
+{
+  FAR struct userfs_state_s *priv;
+  FAR struct userfs_flock_request_s *req;
+  FAR struct userfs_flock_response_s *resp;
+  uint8_t expected;
+  ssize_t nsent;
+  ssize_t nrecvd;
+  int ret;
+
+  DEBUGASSERT(filep->f_inode != NULL &&
+              filep->f_inode->i_private != NULL);
+  priv = filep->f_inode->i_private;
+
+  /* Get exclusive access */
+
+  ret = nxmutex_lock(&priv->lock);
+  if (ret < 0)
+    {
+      return ret;
+    }
+
+  /* Construct and send the request (FIOC_SETLKW is sent as a
+   * non-blocking set; the caller retries on -EAGAIN).
+   */
+
+  req           = (FAR struct userfs_flock_request_s *)priv->iobuffer;
+  req->openinfo = filep->f_priv;
+  memcpy(&req->lock, fl, sizeof(req->lock));
+
+  if (request == FIOC_GETLK)
+    {
+      req->req = USERFS_REQ_GETLK;
+      expected = USERFS_RESP_GETLK;
+    }
+  else
+    {
+      req->req = USERFS_REQ_SETLK;
+      expected = USERFS_RESP_SETLK;
+    }
+
+  nsent = psock_sendto(&priv->psock, priv->iobuffer,
+                       sizeof(*req), 0,
+                       (FAR struct sockaddr *)&priv->server,
+                       sizeof(priv->server));
+  if (nsent < 0)
+    {
+      ferr("ERROR: psock_sendto failed: %zd\n", nsent);
+      nxmutex_unlock(&priv->lock);
+      return nsent;
+    }
+
+  /* Then get the response from the server */
+
+  nrecvd = psock_recvfrom(&priv->psock, priv->iobuffer, IOBUFFER_SIZE(priv),
+                          0, NULL, NULL);
+  nxmutex_unlock(&priv->lock);
+
+  if (nrecvd < 0)
+    {
+      ferr("ERROR: psock_recvfrom failed: %zd\n", nrecvd);
+      return nrecvd;
+    }
+
+  if (nrecvd != sizeof(*resp))
+    {
+      ferr("ERROR: Response size incorrect: %zd\n", nrecvd);
+      return -EIO;
+    }
+
+  resp = (FAR struct userfs_flock_response_s *)priv->iobuffer;
+  if (resp->resp != expected)
+    {
+      ferr("ERROR: Incorrect response: %u\n", resp->resp);
+      return -EIO;
+    }
+
+  if (request == FIOC_GETLK && resp->ret >= 0)
+    {
+      memcpy(fl, &resp->lock, sizeof(*fl));
+    }
+
+  /* A daemon without the lock methods answers -ENOSYS: report -ENOTTY
+   * so the VFS falls back to the local lock table.
+   */
+
+  return resp->ret == -ENOSYS ? -ENOTTY : resp->ret;
 }
 
 /****************************************************************************
@@ -663,6 +790,30 @@ static int userfs_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
   int ret;
 
   finfo("cmd: %d arg: %08lx\n", cmd, arg);
+
+  /* Advisory locks are marshaled explicitly: the daemon cannot
+   * dereference the struct flock pointer in arg.
+   */
+
+  if (cmd == FIOC_GETLK || cmd == FIOC_SETLK || cmd == FIOC_SETLKW)
+    {
+      FAR struct flock *fl = (FAR struct flock *)(uintptr_t)arg;
+
+      for (; ; )
+        {
+          ret = userfs_flock(filep, cmd, fl);
+          if (cmd != FIOC_SETLKW || ret != -EAGAIN)
+            {
+              return ret;
+            }
+
+          ret = nxsig_usleep(USERFS_SETLK_RETRY_USEC);
+          if (ret < 0)
+            {
+              return ret;
+            }
+        }
+    }
 
   DEBUGASSERT(
               filep->f_inode != NULL &&
@@ -729,6 +880,94 @@ static int userfs_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
 
   return ret;
 }
+
+#ifdef CONFIG_FS_NOTIFY
+
+/****************************************************************************
+ * Name: userfs_notify
+ ****************************************************************************/
+
+static int userfs_notify(FAR struct inode *mountpt, int wd,
+                         FAR const char *relpath, int action,
+                         uint32_t mask)
+{
+  FAR struct userfs_state_s *priv;
+  FAR struct userfs_notify_request_s *req;
+  FAR struct userfs_notify_response_s *resp;
+  ssize_t nsent;
+  ssize_t nrecvd;
+  int pathlen;
+  int ret;
+
+  DEBUGASSERT(mountpt != NULL && mountpt->i_private != NULL);
+  priv = mountpt->i_private;
+
+  /* Check the path length */
+
+  DEBUGASSERT(relpath != NULL);
+  pathlen = strlen(relpath) + 1;
+  if (pathlen > priv->mxwrite)
+    {
+      return -E2BIG;
+    }
+
+  /* Get exclusive access */
+
+  ret = nxmutex_lock(&priv->lock);
+  if (ret < 0)
+    {
+      return ret;
+    }
+
+  /* Construct and send the request to the server */
+
+  req         = (FAR struct userfs_notify_request_s *)priv->iobuffer;
+  req->req    = USERFS_REQ_NOTIFY;
+  req->action = action;
+  req->wd     = wd;
+  req->mask   = mask;
+
+  memcpy(req->relpath, relpath, pathlen);
+
+  nsent = psock_sendto(&priv->psock, priv->iobuffer,
+                       SIZEOF_USERFS_NOTIFY_REQUEST_S(pathlen), 0,
+                       (FAR struct sockaddr *)&priv->server,
+                       sizeof(priv->server));
+  if (nsent < 0)
+    {
+      ferr("ERROR: psock_sendto failed: %zd\n", nsent);
+      nxmutex_unlock(&priv->lock);
+      return nsent;
+    }
+
+  /* Then get the response from the server */
+
+  nrecvd = psock_recvfrom(&priv->psock, priv->iobuffer, IOBUFFER_SIZE(priv),
+                          0, NULL, NULL);
+  nxmutex_unlock(&priv->lock);
+
+  if (nrecvd < 0)
+    {
+      ferr("ERROR: psock_recvfrom failed: %zd\n", nrecvd);
+      return nrecvd;
+    }
+
+  if (nrecvd != sizeof(*resp))
+    {
+      ferr("ERROR: Response size incorrect: %zd\n", nrecvd);
+      return -EIO;
+    }
+
+  resp = (FAR struct userfs_notify_response_s *)priv->iobuffer;
+  if (resp->resp != USERFS_RESP_NOTIFY)
+    {
+      ferr("ERROR: Incorrect response: %u\n", resp->resp);
+      return -EIO;
+    }
+
+  return resp->ret;
+}
+#endif /* CONFIG_FS_NOTIFY */
 
 /****************************************************************************
  * Name: userfs_sync
@@ -1130,7 +1369,7 @@ static int userfs_truncate(FAR struct file *filep, off_t length)
     }
 
   resp = (FAR struct userfs_truncate_response_s *)priv->iobuffer;
-  if (resp->resp != USERFS_RESP_FSTAT)
+  if (resp->resp != USERFS_RESP_TRUNCATE)
     {
       ferr("ERROR: Incorrect response: %u\n", resp->resp);
       nxmutex_unlock(&priv->lock);
@@ -1175,7 +1414,7 @@ static int userfs_opendir(FAR struct inode *mountpt, FAR const char *relpath,
   /* Check the path length */
 
   DEBUGASSERT(relpath != NULL);
-  pathlen = strlen(relpath);
+  pathlen = strlen(relpath) + 1;
   if (pathlen > priv->mxwrite)
     {
       return -E2BIG;
@@ -1194,10 +1433,10 @@ static int userfs_opendir(FAR struct inode *mountpt, FAR const char *relpath,
   req      = (FAR struct userfs_opendir_request_s *)priv->iobuffer;
   req->req = USERFS_REQ_OPENDIR;
 
-  strlcpy(req->relpath, relpath, priv->mxwrite);
+  memcpy(req->relpath, relpath, pathlen);
 
   nsent = psock_sendto(&priv->psock, priv->iobuffer,
-                       SIZEOF_USERFS_OPENDIR_REQUEST_S(pathlen + 1), 0,
+                       SIZEOF_USERFS_OPENDIR_REQUEST_S(pathlen), 0,
                        (FAR struct sockaddr *)&priv->server,
                        sizeof(struct sockaddr_in));
   if (nsent < 0)
@@ -1795,7 +2034,7 @@ static int userfs_unlink(FAR struct inode *mountpt,
   /* Check the path length */
 
   DEBUGASSERT(relpath != NULL);
-  pathlen     = strlen(relpath);
+  pathlen = strlen(relpath) + 1;
   if (pathlen > priv->mxwrite)
     {
       return -E2BIG;
@@ -1814,10 +2053,10 @@ static int userfs_unlink(FAR struct inode *mountpt,
   req      = (FAR struct userfs_unlink_request_s *)priv->iobuffer;
   req->req = USERFS_REQ_UNLINK;
 
-  strlcpy(req->relpath, relpath, priv->mxwrite);
+  memcpy(req->relpath, relpath, pathlen);
 
   nsent = psock_sendto(&priv->psock, priv->iobuffer,
-                       SIZEOF_USERFS_UNLINK_REQUEST_S(pathlen + 1), 0,
+                       SIZEOF_USERFS_UNLINK_REQUEST_S(pathlen), 0,
                        (FAR struct sockaddr *)&priv->server,
                        sizeof(struct sockaddr_in));
   if (nsent < 0)
@@ -1887,7 +2126,7 @@ static int userfs_mkdir(FAR struct inode *mountpt,
   /* Check the path length */
 
   DEBUGASSERT(relpath != NULL);
-  pathlen = strlen(relpath);
+  pathlen = strlen(relpath) + 1;
   if (pathlen > priv->mxwrite)
     {
       return -E2BIG;
@@ -1907,10 +2146,10 @@ static int userfs_mkdir(FAR struct inode *mountpt,
   req->req  = USERFS_REQ_MKDIR;
   req->mode = mode;
 
-  strlcpy(req->relpath, relpath, priv->mxwrite);
+  memcpy(req->relpath, relpath, pathlen);
 
   nsent = psock_sendto(&priv->psock, priv->iobuffer,
-                       SIZEOF_USERFS_MKDIR_REQUEST_S(pathlen + 1), 0,
+                       SIZEOF_USERFS_MKDIR_REQUEST_S(pathlen), 0,
                        (FAR struct sockaddr *)&priv->server,
                        sizeof(struct sockaddr_in));
   if (nsent < 0)
@@ -1980,7 +2219,7 @@ static int userfs_rmdir(FAR struct inode *mountpt,
   /* Check the path length */
 
   DEBUGASSERT(relpath != NULL);
-  pathlen = strlen(relpath);
+  pathlen = strlen(relpath) + 1;
   if (pathlen > priv->mxwrite)
     {
       return -E2BIG;
@@ -1999,10 +2238,10 @@ static int userfs_rmdir(FAR struct inode *mountpt,
   req      = (FAR struct userfs_rmdir_request_s *)priv->iobuffer;
   req->req = USERFS_REQ_RMDIR;
 
-  strlcpy(req->relpath, relpath, priv->mxwrite);
+  memcpy(req->relpath, relpath, pathlen);
 
   nsent = psock_sendto(&priv->psock, priv->iobuffer,
-                       SIZEOF_USERFS_RMDIR_REQUEST_S(pathlen + 1), 0,
+                       SIZEOF_USERFS_RMDIR_REQUEST_S(pathlen), 0,
                        (FAR struct sockaddr *)&priv->server,
                        sizeof(struct sockaddr_in));
   if (nsent < 0)
@@ -2061,6 +2300,7 @@ static int userfs_rename(FAR struct inode *mountpt,
   FAR struct userfs_state_s *priv;
   FAR struct userfs_rename_request_s *req;
   FAR struct userfs_rename_response_s *resp;
+  struct stat buf;
   int oldpathlen;
   int newpathlen;
   ssize_t nsent;
@@ -2070,6 +2310,15 @@ static int userfs_rename(FAR struct inode *mountpt,
   DEBUGASSERT(mountpt != NULL &&
               mountpt->i_private != NULL);
   priv = mountpt->i_private;
+
+  /* The server may not replace an existing newrelpath.  EEXIST makes the
+   * VFS remove it first.
+   */
+
+  if (userfs_stat(mountpt, newrelpath, &buf) >= 0)
+    {
+      return -EEXIST;
+    }
 
   /* Check the path lengths */
 
@@ -2096,8 +2345,8 @@ static int userfs_rename(FAR struct inode *mountpt,
   req->req       = USERFS_REQ_RENAME;
   req->newoffset = oldpathlen;
 
-  strlcpy(req->oldrelpath, oldrelpath, oldpathlen);
-  strlcpy(&req->oldrelpath[oldpathlen], newrelpath, newpathlen);
+  memcpy(req->oldrelpath, oldrelpath, oldpathlen);
+  memcpy(&req->oldrelpath[oldpathlen], newrelpath, newpathlen);
 
   nsent = psock_sendto(&priv->psock, priv->iobuffer,
                       SIZEOF_USERFS_RENAME_REQUEST_S(oldpathlen, newpathlen),
@@ -2170,7 +2419,7 @@ static int userfs_stat(FAR struct inode *mountpt, FAR const char *relpath,
   /* Check the path length */
 
   DEBUGASSERT(relpath != NULL);
-  pathlen = strlen(relpath);
+  pathlen = strlen(relpath) + 1;
   if (pathlen > priv->mxwrite)
     {
       return -E2BIG;
@@ -2189,10 +2438,10 @@ static int userfs_stat(FAR struct inode *mountpt, FAR const char *relpath,
   req      = (FAR struct userfs_stat_request_s *)priv->iobuffer;
   req->req = USERFS_REQ_STAT;
 
-  strlcpy(req->relpath, relpath, priv->mxwrite);
+  memcpy(req->relpath, relpath, pathlen);
 
   nsent = psock_sendto(&priv->psock, priv->iobuffer,
-                       SIZEOF_USERFS_STAT_REQUEST_S(pathlen + 1), 0,
+                       SIZEOF_USERFS_STAT_REQUEST_S(pathlen), 0,
                        (FAR struct sockaddr *)&priv->server,
                        sizeof(struct sockaddr_in));
   if (nsent < 0)
@@ -2266,7 +2515,7 @@ static int userfs_chstat(FAR struct inode *mountpt, FAR const char *relpath,
   /* Check the path length */
 
   DEBUGASSERT(relpath != NULL);
-  pathlen = strlen(relpath);
+  pathlen = strlen(relpath) + 1;
   if (pathlen > priv->mxwrite)
     {
       return -E2BIG;
@@ -2287,10 +2536,10 @@ static int userfs_chstat(FAR struct inode *mountpt, FAR const char *relpath,
   req->buf   = *buf;
   req->flags = flags;
 
-  strlcpy(req->relpath, relpath, priv->mxwrite);
+  memcpy(req->relpath, relpath, pathlen);
 
   nsent = psock_sendto(&priv->psock, priv->iobuffer,
-                       SIZEOF_USERFS_CHSTAT_REQUEST_S(pathlen + 1), 0,
+                       SIZEOF_USERFS_CHSTAT_REQUEST_S(pathlen), 0,
                        (FAR struct sockaddr *)&priv->server,
                        sizeof(struct sockaddr_in));
   if (nsent < 0)
@@ -2320,7 +2569,7 @@ static int userfs_chstat(FAR struct inode *mountpt, FAR const char *relpath,
     }
 
   resp = (FAR struct userfs_chstat_response_s *)priv->iobuffer;
-  if (resp->resp != USERFS_RESP_STAT)
+  if (resp->resp != USERFS_RESP_CHSTAT)
     {
       ferr("ERROR: Incorrect response: %u\n", resp->resp);
       nxmutex_unlock(&priv->lock);

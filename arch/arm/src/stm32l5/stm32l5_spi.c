@@ -75,7 +75,7 @@
 #include "arm_internal.h"
 #include "chip.h"
 #include "stm32.h"
-#include "stm32l5_gpio.h"
+#include "stm32_gpio.h"
 #ifdef CONFIG_STM32_SPI_DMA
 #  include "stm32l5_dma.h"
 #endif
@@ -107,17 +107,7 @@
 /* SPI DMA priority */
 
 #ifdef CONFIG_STM32_SPI_DMA
-
-#  if defined(CONFIG_SPI_DMAPRIO)
-#    define SPI_DMA_PRIO  CONFIG_SPI_DMAPRIO
-#  else
-#    define SPI_DMA_PRIO  DMA_CCR_PRIMED
-#  endif
-
-#  if (SPI_DMA_PRIO & ~DMA_CCR_PL_MASK) != 0
-#    error "Illegal value for CONFIG_SPI_DMAPRIO"
-#  endif
-
+#  define SPI_DMA_PRIO  DMA_CCR_PRIMED
 #endif
 
 /* DMA channel configuration */
@@ -219,7 +209,7 @@ static int         spi_hwfeatures(struct spi_dev_s *dev,
                                   spi_hwfeatures_t features);
 #endif
 static uint32_t    spi_send(struct spi_dev_s *dev, uint32_t wd);
-static void        spi_exchange(struct spi_dev_s *dev,
+static int         spi_exchange(struct spi_dev_s *dev,
                                 const void *txbuffer,
                                 void *rxbuffer, size_t nwords);
 #ifdef CONFIG_SPI_TRIGGER
@@ -1101,39 +1091,39 @@ static void spi_setmode(struct spi_dev_s *dev, enum spi_mode_e mode)
 
       switch (mode)
         {
-        case SPIDEV_MODE0: /* CPOL=0; CPHA=0 */
-          setbits = 0;
-          clrbits = SPI_CR1_CPOL | SPI_CR1_CPHA;
-          break;
+          case SPIDEV_MODE0: /* CPOL=0; CPHA=0 */
+            setbits = 0;
+            clrbits = SPI_CR1_CPOL | SPI_CR1_CPHA;
+            break;
 
-        case SPIDEV_MODE1: /* CPOL=0; CPHA=1 */
-          setbits = SPI_CR1_CPHA;
-          clrbits = SPI_CR1_CPOL;
-          break;
+          case SPIDEV_MODE1: /* CPOL=0; CPHA=1 */
+            setbits = SPI_CR1_CPHA;
+            clrbits = SPI_CR1_CPOL;
+            break;
 
-        case SPIDEV_MODE2: /* CPOL=1; CPHA=0 */
-          setbits = SPI_CR1_CPOL;
-          clrbits = SPI_CR1_CPHA;
-          break;
+          case SPIDEV_MODE2: /* CPOL=1; CPHA=0 */
+            setbits = SPI_CR1_CPOL;
+            clrbits = SPI_CR1_CPHA;
+            break;
 
-        case SPIDEV_MODE3: /* CPOL=1; CPHA=1 */
-          setbits = SPI_CR1_CPOL | SPI_CR1_CPHA;
-          clrbits = 0;
-          break;
+          case SPIDEV_MODE3: /* CPOL=1; CPHA=1 */
+            setbits = SPI_CR1_CPOL | SPI_CR1_CPHA;
+            clrbits = 0;
+            break;
 
-        default:
-          return;
+          default:
+            return;
         }
 
-        spi_modifycr(STM32_SPI_CR1_OFFSET, priv, 0, SPI_CR1_SPE);
-        spi_modifycr(STM32_SPI_CR1_OFFSET, priv, setbits, clrbits);
-        spi_modifycr(STM32_SPI_CR1_OFFSET, priv, SPI_CR1_SPE, 0);
+      spi_modifycr(STM32_SPI_CR1_OFFSET, priv, 0, SPI_CR1_SPE);
+      spi_modifycr(STM32_SPI_CR1_OFFSET, priv, setbits, clrbits);
+      spi_modifycr(STM32_SPI_CR1_OFFSET, priv, SPI_CR1_SPE, 0);
 
-        /* Save the mode so that subsequent re-configurations will be
-         * faster
-         */
+      /* Save the mode so that subsequent re-configurations will be
+       * faster
+       */
 
-        priv->mode = mode;
+      priv->mode = mode;
     }
 }
 
@@ -1349,21 +1339,22 @@ static uint32_t spi_send(struct spi_dev_s *dev, uint32_t wd)
  *              uint16_t's
  *
  * Returned Value:
- *   None
+ *   Returns zero (OK) on success; a negated errno value on failure.
  *
  ****************************************************************************/
 
 #if !defined(CONFIG_STM32_SPI_DMA) || defined(CONFIG_STM32_DMACAPABLE)
 #if !defined(CONFIG_STM32_SPI_DMA)
-static void spi_exchange(struct spi_dev_s *dev, const void *txbuffer,
+static int  spi_exchange(struct spi_dev_s *dev, const void *txbuffer,
                          void *rxbuffer, size_t nwords)
 #else
-static void spi_exchange_nodma(struct spi_dev_s *dev,
+static int  spi_exchange_nodma(struct spi_dev_s *dev,
                                const void *txbuffer,
                                void *rxbuffer, size_t nwords)
 #endif
 {
   struct stm32_spidev_s *priv = (struct stm32_spidev_s *)dev;
+
   DEBUGASSERT(priv && priv->spibase);
 
   spiinfo("txbuffer=%p rxbuffer=%p nwords=%d\n", txbuffer, rxbuffer, nwords);
@@ -1375,8 +1366,8 @@ static void spi_exchange_nodma(struct spi_dev_s *dev,
       /* 16-bit mode */
 
       const uint16_t *src  = (const uint16_t *)txbuffer;
-            uint16_t *dest = (uint16_t *)rxbuffer;
-            uint16_t  word;
+      uint16_t *dest = (uint16_t *)rxbuffer;
+      uint16_t  word;
 
       while (nwords-- > 0)
         {
@@ -1408,8 +1399,8 @@ static void spi_exchange_nodma(struct spi_dev_s *dev,
       /* 8-bit mode */
 
       const uint8_t *src  = (const uint8_t *)txbuffer;
-            uint8_t *dest = (uint8_t *)rxbuffer;
-            uint8_t  word;
+      uint8_t *dest = (uint8_t *)rxbuffer;
+      uint8_t  word;
 
       while (nwords-- > 0)
         {
@@ -1436,6 +1427,8 @@ static void spi_exchange_nodma(struct spi_dev_s *dev,
             }
         }
     }
+
+  return OK;
 }
 #endif /* !CONFIG_STM32_SPI_DMA || CONFIG_STM32_DMACAPABLE */
 
@@ -1456,12 +1449,12 @@ static void spi_exchange_nodma(struct spi_dev_s *dev,
  *              uint16_t's
  *
  * Returned Value:
- *   None
+ *   Returns zero (OK) on success; a negated errno value on failure.
  *
  ****************************************************************************/
 
 #ifdef CONFIG_STM32_SPI_DMA
-static void spi_exchange(struct spi_dev_s *dev, const void *txbuffer,
+static int  spi_exchange(struct spi_dev_s *dev, const void *txbuffer,
                          void *rxbuffer, size_t nwords)
 {
   struct stm32_spidev_s *priv = (struct stm32_spidev_s *)dev;
@@ -1523,6 +1516,8 @@ static void spi_exchange(struct spi_dev_s *dev, const void *txbuffer,
       priv->trigarmed = false;
 #endif
     }
+
+  return OK;
 }
 #endif /* CONFIG_STM32_SPI_DMA */
 
@@ -1588,7 +1583,7 @@ static void spi_sndblock(struct spi_dev_s *dev, const void *txbuffer,
                          size_t nwords)
 {
   spiinfo("txbuffer=%p nwords=%d\n", txbuffer, nwords);
-  return spi_exchange(dev, txbuffer, NULL, nwords);
+  spi_exchange(dev, txbuffer, NULL, nwords);
 }
 #endif
 
@@ -1617,7 +1612,7 @@ static void spi_recvblock(struct spi_dev_s *dev, void *rxbuffer,
                           size_t nwords)
 {
   spiinfo("rxbuffer=%p nwords=%d\n", rxbuffer, nwords);
-  return spi_exchange(dev, NULL, rxbuffer, nwords);
+  spi_exchange(dev, NULL, rxbuffer, nwords);
 }
 #endif
 
@@ -1662,30 +1657,31 @@ static int spi_pm_prepare(struct pm_callback_s *cb, int domain,
 
   switch (pmstate)
     {
-    case PM_NORMAL:
-    case PM_IDLE:
-      break;
+      case PM_NORMAL:
+      case PM_IDLE:
+        break;
 
-    case PM_STANDBY:
-    case PM_SLEEP:
+      case PM_STANDBY:
+      case PM_SLEEP:
 
-      /* Check if exclusive lock for SPI bus is held. */
+        /* Check if exclusive lock for SPI bus is held. */
 
-      if (nxmutex_is_locked(&priv->lock))
-        {
-          /* Exclusive lock is held, do not allow entry to deeper PM states.
-           */
+        if (nxmutex_is_locked(&priv->lock))
+          {
+            /* Exclusive lock is held, do not allow entry to deeper PM
+             * states.
+             */
 
-          return -EBUSY;
-        }
+            return -EBUSY;
+          }
 
-      break;
+        break;
 
-    default:
+      default:
 
-      /* Should not get here */
+        /* Should not get here */
 
-      break;
+        break;
     }
 
   return OK;

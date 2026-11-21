@@ -29,6 +29,8 @@
 
 #include <nuttx/config.h>
 
+#include <stdbool.h>
+
 #include <nuttx/compiler.h>
 #include <nuttx/clock.h>
 
@@ -74,13 +76,9 @@ struct intel64_oneshot_s
 
 #ifndef __ASSEMBLY__
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -182,7 +180,6 @@ int intel64_oneshot_cancel(struct intel64_oneshot_s *oneshot,
 int intel64_oneshot_current(struct intel64_oneshot_s *oneshot,
                             uint64_t *usec);
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

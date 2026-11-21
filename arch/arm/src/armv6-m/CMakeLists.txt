@@ -29,7 +29,6 @@ set(SRCS
     arm_initialstate.c
     arm_svcall.c
     arm_systemreset.c
-    arm_tcbinfo.c
     arm_trigger_irq.c)
 
 if(CONFIG_ENABLE_ALL_SIGNALS)
@@ -47,10 +46,6 @@ endif()
 
 if(CONFIG_ARCH_RAMVECTORS)
   list(APPEND SRCS arm_ramvec_initialize.c arm_ramvec_attach.c)
-endif()
-
-if(CONFIG_LIB_SYSCALL)
-  list(APPEND SRCS arm_dispatch_syscall.S)
 endif()
 
 target_sources(arch PRIVATE ${SRCS})

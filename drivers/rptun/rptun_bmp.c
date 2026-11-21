@@ -24,6 +24,9 @@
  * Included Files
  ****************************************************************************/
 
+#include <nuttx/kmalloc.h>
+#include <nuttx/nuttx.h>
+#include <nuttx/reboot_notifier.h>
 #include <nuttx/rptun/rptun.h>
 #include <nuttx/rptun/rptun_bmp.h>
 #include <nuttx/sched.h>
@@ -47,6 +50,7 @@ struct rptun_bmp_dev_s
   int                     irq_event;
   int                     irq_trigger;
   cpu_set_t               cpuset;
+  struct notifier_block   rebootnb;
 };
 
 /****************************************************************************
@@ -65,6 +69,8 @@ static int rptun_bmp_notify(FAR struct rptun_dev_s *dev,
 static int rptun_bmp_register_callback(FAR struct rptun_dev_s *dev,
                                        rptun_callback_t callback,
                                        FAR void *arg);
+static int rptun_bmp_notifier(FAR struct notifier_block *nb,
+                              unsigned long action, FAR void *data);
 
 /****************************************************************************
  * Private Data
@@ -86,9 +92,20 @@ static const struct rptun_ops_s g_rptun_bmp_ops =
  * Private Functions
  ****************************************************************************/
 
+static int rptun_bmp_notifier(FAR struct notifier_block *nb,
+                              unsigned long action, FAR void *data)
+{
+  FAR struct rptun_bmp_dev_s *dev;
+
+  dev = container_of(nb, struct rptun_bmp_dev_s, rebootnb);
+  dev->rsc->rsc_tbl_hdr.ver = 0;
+  return 0;
+}
+
 static FAR const char *rptun_bmp_get_cpuname(FAR struct rptun_dev_s *dev)
 {
   FAR struct rptun_bmp_dev_s *priv = (FAR struct rptun_bmp_dev_s *)dev;
+
   return priv->cpuname;
 }
 
@@ -96,6 +113,12 @@ static FAR struct resource_table *
 rptun_bmp_get_resource(FAR struct rptun_dev_s *dev)
 {
   FAR struct rptun_bmp_dev_s *priv = (FAR struct rptun_bmp_dev_s *)dev;
+
+  while (priv->rsc->rsc_tbl_hdr.ver == 0)
+    {
+      nxsig_usleep(100);
+    }
+
   return &priv->rsc->rsc_tbl_hdr;
 }
 
@@ -107,6 +130,7 @@ static bool rptun_bmp_is_autostart(FAR struct rptun_dev_s *dev)
 static bool rptun_bmp_is_master(FAR struct rptun_dev_s *dev)
 {
   FAR struct rptun_bmp_dev_s *priv = (FAR struct rptun_bmp_dev_s *)dev;
+
   return priv->master;
 }
 
@@ -150,7 +174,7 @@ static int rptun_bmp_register_callback(FAR struct rptun_dev_s *dev,
 }
 
 /****************************************************************************
- * Name: rprun_bmp_interrupt
+ * Name: rptun_bmp_interrupt
  *
  * Description:
  *   This is the interrupt handler.
@@ -165,7 +189,7 @@ static int rptun_bmp_register_callback(FAR struct rptun_dev_s *dev,
  *
  ****************************************************************************/
 
-static int rprun_bmp_interrupt(int irq, FAR void *context, FAR void *arg)
+static int rptun_bmp_interrupt(int irq, FAR void *context, FAR void *arg)
 {
   FAR struct rptun_bmp_dev_s *priv = arg;
 
@@ -203,21 +227,28 @@ int rptun_bmp_init(FAR const char *cpuname, bool master,
 
   strlcpy(dev->cpuname, cpuname, sizeof(dev->cpuname));
 
+  dev->rebootnb.notifier_call = rptun_bmp_notifier;
+  register_reboot_notifier(&dev->rebootnb);
+
   ret = irq_attach(dev->irq_event,
-                   rprun_bmp_interrupt, dev);
+                   rptun_bmp_interrupt, dev);
   if (ret < 0)
     {
-      kmm_free(dev);
-      return ret;
+      goto err_irq;
     }
 
   ret = rptun_initialize(&dev->rptun);
   if (ret < 0)
     {
-      irq_detach(dev->irq_event);
-      kmm_free(dev);
-      return ret;
+      goto err_init;
     }
 
+  return ret;
+
+err_init:
+  irq_detach(dev->irq_event);
+err_irq:
+  unregister_reboot_notifier(&dev->rebootnb);
+  kmm_free(dev);
   return ret;
 }

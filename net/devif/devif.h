@@ -303,13 +303,9 @@ struct devif_callback_s
  * Public Data
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -382,6 +378,28 @@ void devif_conn_callback_free(FAR struct net_driver_s *dev,
 
 void devif_dev_callback_free(FAR struct net_driver_s *dev,
                              FAR struct devif_callback_s *cb);
+
+/****************************************************************************
+ * Name: devif_count_callbacks
+ *
+ * Description:
+ *   Count the callbacks in a connection callback list whose flags match any
+ *   of the given flags.
+ *
+ * Input Parameters:
+ *   list  - The head of the connection callback list.
+ *   flags - The callback flags to match.
+ *
+ * Returned Value:
+ *   The number of matching callbacks.
+ *
+ * Assumptions:
+ *   This function must be called with the lock of the device that owns the
+ *   list held.
+ *
+ ****************************************************************************/
+
+int devif_count_callbacks(FAR struct devif_callback_s *list, uint32_t flags);
 
 /****************************************************************************
  * Name: devif_conn_event
@@ -617,7 +635,6 @@ int netdev_input(FAR struct net_driver_s *dev,
 
 uint16_t devif_get_mtu(FAR struct net_driver_s *dev);
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

@@ -45,7 +45,6 @@
 
 #include <arch/chip/irq.h>
 #include <arch/arch.h>
-#include <IfxCpu_Intrinsics.h>
 
 /****************************************************************************
  * Pre-processor Prototypes
@@ -105,6 +104,8 @@
 #define TC_CONTEXT_REGS  (16)
 #define TC_CONTEXT_SIZE  (sizeof(void *) * TC_CONTEXT_REGS)
 
+#define FCD_RESERVE_SIZE (TC_CONTEXT_SIZE * 4)
+
 #define XCPTCONTEXT_REGS (TC_CONTEXT_REGS * 2)
 #define XCPTCONTEXT_SIZE (sizeof(void *) * XCPTCONTEXT_REGS)
 
@@ -115,9 +116,40 @@
 #define PSW_CDE         (1 << 7) /* Bits 7: Call Depth Count Enable */
 #define PSW_IS          (1 << 9) /* Bits 9: Interrupt Stack Control */
 #define PSW_IO          (10)     /* Bits 10-11: Access Privilege Level Control (I/O Privilege) */
+#  define PSW_MODE_MASK     (3 << PSW_IO)
 #  define PSW_IO_USER0      (0 << PSW_IO)
 #  define PSW_IO_USER1      (1 << PSW_IO)
 #  define PSW_IO_SUPERVISOR (2 << PSW_IO)
+
+#define PSW_PRS_KERNEL_SET  (0)
+#define PSW_PRS_USER_SET    (1)
+#ifdef CONFIG_ARCH_HAVE_PPRS
+  #define PSW_PRS_MASK                           (0)
+  #define PSW_PRS_USER                           (0)
+  #define tricore_change_pprs(tcb, val)          (tcb)->xcp.pprs = (val)
+  #define tricore_load_pprs(tcb)                 (tcb)->xcp.pprs
+  #define tricore_restore_pprs(tcb)              tricore_mtcr(TRICORE_CPU_PPRS, (tcb)->xcp.pprs)
+  #define tricore_store_pprs(tcb)                (tcb)->xcp.pprs = tricore_mfcr(TRICORE_CPU_PPRS)
+  #define tricore_syscall_load_pprs(tcb ,index)  (tcb)->xcp.syscall_pprs[index]
+  #define tricore_syscall_store_pprs(tcb ,index) (tcb)->xcp.syscall_pprs[index] = tricore_mfcr(TRICORE_CPU_PPRS)
+  #define tricore_sig_change_pprs(tcb ,val)      (tcb)->xcp.saved_pprs = (val)
+  #define tricore_sig_load_pprs(tcb)             (tcb)->xcp.saved_pprs
+  #define tricore_pprs_to_prs(pprs)              (((pprs & 3) << 12) | ((pprs & 4) << 13))
+  #define tricore_prs_to_pprs(prs)               (((prs >> 12) & 3) | ((prs >> 13) & 4))
+#else
+  #define PSW_PRS_MASK                           (3 << 12) | (1 << 15)
+  #define PSW_PRS_USER                           (((PSW_PRS_USER_SET & 3) << 12) | ((PSW_PRS_USER_SET & 4) << 13))
+  #define tricore_change_pprs(tcb, val)          do { } while (0)
+  #define tricore_load_pprs(tcb)                 (0)
+  #define tricore_restore_pprs(tcb)              do { } while (0)
+  #define tricore_store_pprs(tcb)                do { } while (0)
+  #define tricore_syscall_load_pprs(tcb ,index)  (0)
+  #define tricore_syscall_store_pprs(tcb ,index) do { } while (0)
+  #define tricore_sig_change_pprs(tcb ,val)      do { } while (0)
+  #define tricore_sig_load_pprs(tcb)             (0)
+  #define tricore_pprs_to_prs(pprs)              (0)
+  #define tricore_prs_to_pprs(prs)               (0)
+#endif
 
 /* PCXI: Previous Context Information and Pointer Register */
 
@@ -134,9 +166,16 @@
 
 #define TRICORE_SRCNUM_PER_GPSR  8
 #define TRICORE_SRC2IRQ(src_addr) \
-  (((uintptr_t)(src_addr) - (uintptr_t)&MODULE_SRC) / 4)
+  (((uintptr_t)(src_addr) - TRICORE_SRC_BASE) / 4)
+#define TRICORE_IRQ2SRC(irq) \
+  ((volatile uint32_t *)(TRICORE_SRC_BASE + (irq) * 4))
 #define TRICORE_GPSR_IRQNUM(src_cpu, dest_cpu)  \
-  TRICORE_SRC2IRQ(&SRC_GPSR00 + src_cpu * 8 + dest_cpu)
+  TRICORE_SRC2IRQ(TRICORE_SRC_GPSR_BASE + \
+                  ((src_cpu) * TRICORE_SRCNUM_PER_GPSR + (dest_cpu)) * 4)
+
+#ifdef CONFIG_ARCH_HIPRI_INTERRUPT
+  #define TRICORE_IRQ_DISABLE_PRIORITY CONFIG_ARCH_IRQ_DISABLE_PRIORITY
+#endif
 
 /* For use with EABI and floating point, the stack must be aligned to 8-byte
  * addresses.
@@ -159,11 +198,8 @@
 #ifndef __ASSEMBLY__
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -179,6 +215,23 @@ struct xcptcontext
 
   uintptr_t *saved_regs;
 #endif
+
+#ifdef CONFIG_BUILD_PROTECTED
+  /* This is the saved address to use when returning from a user-space
+   * signal handler.
+   */
+
+  uint32_t sigreturn;
+#endif
+
+#ifdef CONFIG_LIB_SYSCALL
+  uint8_t nsyscalls;
+  uintptr_t *syscall_regs[CONFIG_SYS_NNEST];
+#ifdef CONFIG_ARCH_HAVE_PPRS
+  uint32_t syscall_pprs[CONFIG_SYS_NNEST];
+#endif
+#endif
+
   /* Register save area with XCPTCONTEXT_SIZE, only valid when:
    * 1.The task isn't running or
    * 2.The task is interrupted
@@ -186,15 +239,12 @@ struct xcptcontext
    */
 
   uintptr_t *regs;
+
+#ifdef CONFIG_ARCH_HAVE_PPRS
+  uint32_t pprs;
+  uint32_t saved_pprs;
+#endif
 };
-
-/****************************************************************************
- * Public Data
- ****************************************************************************/
-
-/* g_interrupt_context store irq status */
-
-EXTERN volatile bool g_interrupt_context[CONFIG_SMP_NCPUS];
 
 /****************************************************************************
  * Public Function Prototypes
@@ -226,6 +276,20 @@ void up_irq_enable(void);
  * Inline functions
  ****************************************************************************/
 
+/* Return program counter */
+
+noinstrument_function static inline_function uintptr_t up_getpc(void)
+{
+#ifdef CONFIG_TRICORE_TOOLCHAIN_TASKING
+  return (uintptr_t)__mfcr(TRICORE_CPU_PC);
+#else
+  uintptr_t pc;
+  __asm__ __volatile__ ("mfcr %0,%1": "=d" (pc) :"i"(TRICORE_CPU_PC):
+                        "memory");
+  return pc;
+#endif
+}
+
 noinstrument_function static inline_function uintptr_t up_getsp(void)
 {
 #ifdef CONFIG_TRICORE_TOOLCHAIN_TASKING
@@ -239,50 +303,77 @@ noinstrument_function static inline_function uintptr_t up_getsp(void)
  * Name: up_irq_save
  *
  * Description:
- *   Disable interrupts and return the previous value of the mstatus register
+ *   Disable interrupts and return the previous interrupt state.
+ *
+ *   When CONFIG_ARCH_HIPRI_INTERRUPT is enabled, this raises ICR.CCPN
+ *   to TRICORE_IRQ_DISABLE_PRIORITY so that high-priority interrupts
+ *   (SRPN > TRICORE_IRQ_DISABLE_PRIORITY) remain unmasked. up_irq_save
+ *   only raises CCPN, up_irq_restore only lowers it. This prevents the
+ *   masking level from being accidentally lowered.
+ *
+ *   Otherwise, uses the hardware disable instruction (ICR.IE = 0)
+ *   for minimal overhead.
  *
  ****************************************************************************/
 
 noinstrument_function static inline_function irqstate_t up_irq_save(void)
 {
-  return __disable_and_save();
+#ifdef CONFIG_ARCH_HIPRI_INTERRUPT
+  irqstate_t icr;
+  irqstate_t ccpn;
+
+  icr  = tricore_mfcr(TRICORE_CPU_ICR);
+  ccpn = icr & TRICORE_ICR_CCPN_MASK;
+
+  if (TRICORE_IRQ_DISABLE_PRIORITY > ccpn)
+    {
+      icr = (icr & ~TRICORE_ICR_CCPN_MASK) |
+            TRICORE_IRQ_DISABLE_PRIORITY;
+      tricore_mtcr(TRICORE_CPU_ICR, icr);
+      UP_ISB();
+    }
+
+  return ccpn;
+#else
+  irqstate_t flags;
+
+  __asm__ __volatile__ ("disable %0" : "=d"(flags) : : "memory");
+  return flags;
+#endif
 }
 
 /****************************************************************************
  * Name: up_irq_restore
  *
  * Description:
- *   Restore the value of the mstatus register
+ *   Restore the previous interrupt state saved by up_irq_save().
+ *
+ *   When CONFIG_ARCH_HIPRI_INTERRUPT is enabled, restores ICR.CCPN.
+ *   Otherwise, restores ICR.IE via the hardware restore instruction.
  *
  ****************************************************************************/
 
 noinstrument_function static inline_function
 void up_irq_restore(irqstate_t flags)
 {
-  __restore(flags);
+#ifdef CONFIG_ARCH_HIPRI_INTERRUPT
+  irqstate_t icr;
+
+  icr = tricore_mfcr(TRICORE_CPU_ICR);
+  if (flags < (icr & TRICORE_ICR_CCPN_MASK))
+    {
+      icr = (icr & ~TRICORE_ICR_CCPN_MASK) | flags;
+      tricore_mtcr(TRICORE_CPU_ICR, icr);
+      UP_ISB();
+    }
+#else
+  __asm__ __volatile__ ("restore %0" : : "d"(flags) : "memory");
+#endif
 }
 
 /****************************************************************************
  * Inline Functions
  ****************************************************************************/
-
-/****************************************************************************
- * Name: up_set_interrupt_context
- *
- * Description:
- *   Set the interrupt handler context.
- *
- ****************************************************************************/
-
-noinstrument_function
-static inline_function void up_set_interrupt_context(bool flag)
-{
-#ifdef CONFIG_SMP
-  g_interrupt_context[up_this_cpu()] = flag;
-#else
-  g_interrupt_context[0] = flag;
-#endif
-}
 
 /****************************************************************************
  * Name: up_interrupt_context
@@ -296,16 +387,7 @@ static inline_function void up_set_interrupt_context(bool flag)
 noinstrument_function
 static inline_function bool up_interrupt_context(void)
 {
-#ifdef CONFIG_SMP
-  irqstate_t flags = up_irq_save();
-  bool ret = g_interrupt_context[up_this_cpu()];
-
-  up_irq_restore(flags);
-
-  return ret;
-#else
-  return g_interrupt_context[0];
-#endif
+  return (tricore_mfcr(TRICORE_CPU_PSW) & PSW_IS) != 0;
 }
 
 /****************************************************************************
@@ -350,7 +432,6 @@ static inline_function uintptr_t up_getusrsp(void *regs)
 #define up_getusrpc(regs) \
     (((uint32_t *)((regs) ? (regs) : running_regs()))[REG_UPC])
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

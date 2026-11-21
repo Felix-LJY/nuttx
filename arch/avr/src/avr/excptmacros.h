@@ -84,6 +84,15 @@
  *  PC already on the stack.  It simply saves one register on the  stack
  *  (r24) and passes the IRQ number to common logic (see EXCPT_PROLOGUE).
  *
+ *  To support user-defined (high-priority, board-specific) interrupt
+ *  handlers written in C, the vectors are prefixed with "__vector_"
+ *  as expected by GCC which issues a warning otherwise. Originally though,
+ *  the naming lacked this prefix.
+ *
+ *  Author of this change which introduced user-defined interrupt handlers
+ *  was only able to test it on AVR Dx chips. To not introduce untested
+ *  changes, the other families keep their original naming via #ifdef.
+ *
  * On Entry:
  *  sp - Points to the top of the stack.  The PC is already on the stack.
  *  Only the stack is available for storage
@@ -103,6 +112,15 @@
  *
  ****************************************************************************/
 
+#ifdef CONFIG_ARCH_CHIP_AVRDX
+  .macro HANDLER, label, irqno, common
+  .global __vector_\label
+__vector_\label:
+  push r24
+  ldi r24, \irqno
+  rjmp \common
+  .endm
+#else
   .macro HANDLER, label, irqno, common
   .global \label
 \label:
@@ -110,6 +128,7 @@
   ldi r24, \irqno
   rjmp \common
   .endm
+#endif
 
 /****************************************************************************
  * Name: EXCPT_PROLOGUE
@@ -489,10 +508,29 @@
 
   /* Fetch and set the new stack pointer */
 
+#ifdef CONFIG_ARCH_CHIP_AVRDX
+  /* AVR128DA28/32/48/64 datasheet rev C, section 6.4.4
+   * Write to SPL automatically disables interrupts for up to four
+   * instructions or until next I/O memory write, whichever comes first.
+   *
+   * This should run with interrupts disabled but let's order the write
+   * as intended.
+   */
+
+  ld r25, x+                 /* Fetch stack pointer (post-incrementing) */
+  ld r24, x+
+  out _SFR_IO_ADDR(SPL), r24 /* (SPL first) */
+  out _SFR_IO_ADDR(SPH), r25
+#else
+  /* According to the datasheet of ATmega1284, the older chips do not care
+   * about ordering of writes. Old code kept unchanged.
+   */
+
   ld r25, x+                 /* Fetch stack pointer (post-incrementing) */
   out _SFR_IO_ADDR(SPH), r25 /* (SPH then SPL) */
   ld r24, x+
   out _SFR_IO_ADDR(SPL), r24
+#endif
 
   /* Fetch the return address and save it at the bottom of the new stack so
    * that we can iret to switch contexts.  The new stack is now:

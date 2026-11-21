@@ -37,6 +37,7 @@
 #include <nuttx/fs/fs.h>
 #include <nuttx/fs/ioctl.h>
 #include <nuttx/kmalloc.h>
+#include <nuttx/lib/lib.h>
 #include <nuttx/mtd/mtd.h>
 #include <nuttx/mutex.h>
 
@@ -69,6 +70,7 @@ struct littlefs_file_s
 {
   struct lfs_file       file;
   int                   refs;
+  char                  relpath[1];
 };
 
 /* This structure represents the overall mountpoint state. An instance of
@@ -543,6 +545,7 @@ static int littlefs_open(FAR struct file *filep, FAR const char *relpath,
 #if defined(CONFIG_FS_PERMISSION) && defined(CONFIG_FS_LITTLEFS_ATTR_UPDATE)
   struct lfs_info info;
 #endif
+  size_t len;
   int ret;
 
   /* Get the mountpoint inode reference from the file structure and the
@@ -554,13 +557,15 @@ static int littlefs_open(FAR struct file *filep, FAR const char *relpath,
 
   /* Allocate memory for the open file */
 
-  priv = fs_heap_malloc(sizeof(*priv));
+  len  = strlen(relpath);
+  priv = fs_heap_malloc(sizeof(*priv) + len);
   if (priv == NULL)
     {
       return -ENOMEM;
     }
 
   priv->refs = 1;
+  memcpy(priv->relpath, relpath, len + 1);
 
   /* Lock */
 
@@ -901,19 +906,15 @@ static int littlefs_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
       case FIOC_FILEPATH:
         {
           FAR char *path = (FAR char *)(uintptr_t)arg;
+
           ret = inode_getpath(inode, path, PATH_MAX);
           if (ret >= 0)
             {
-              size_t len = strlen(path);
-              if (path[len - 1] != '/')
-                {
-                  path[len++] = '/';
-                }
+              /* lfs_file_path() cannot walk back from a directory's
+               * continuation block, so report the path given to open().
+               */
 
-              ret = littlefs_convert_result(lfs_file_path(&fs->lfs,
-                                                          &priv->file,
-                                                          path + len,
-                                                          PATH_MAX - len));
+              strlcat(path, priv->relpath, PATH_MAX);
             }
         }
         break;
@@ -1137,8 +1138,11 @@ static int littlefs_fchstat(FAR const struct file *filep,
       attr.at_gid = buf->st_gid;
     }
 
-  attr.at_ctim = 1000000000ull * buf->st_ctim.tv_sec +
-                 buf->st_ctim.tv_nsec;
+  if ((CH_STAT_CTIME & flags) == CH_STAT_CTIME)
+    {
+      attr.at_ctim = 1000000000ull * buf->st_ctim.tv_sec +
+                     buf->st_ctim.tv_nsec;
+    }
 
   if ((CH_STAT_ATIME & flags) == CH_STAT_ATIME)
     {
@@ -2188,8 +2192,11 @@ static int littlefs_chstat(FAR struct inode *mountpt,
       attr.at_gid = buf->st_gid;
     }
 
-  attr.at_ctim = 1000000000ull * buf->st_ctim.tv_sec +
-                 buf->st_ctim.tv_nsec;
+  if ((CH_STAT_CTIME & flags) == CH_STAT_CTIME)
+    {
+      attr.at_ctim = 1000000000ull * buf->st_ctim.tv_sec +
+                     buf->st_ctim.tv_nsec;
+    }
 
   if ((CH_STAT_ATIME & flags) == CH_STAT_ATIME)
     {

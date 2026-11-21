@@ -262,8 +262,23 @@ static const struct virtio_dispatch g_virtio_mmio_dispatch =
 
 static const struct virtio_memory_ops g_virtio_mmio_mmops =
 {
-  virtio_mmio_alloc_buf, /* Alloc */
-  virtio_mmio_free_buf,  /* Free */
+  .alloc        = virtio_mmio_alloc_buf,
+  .free         = virtio_mmio_free_buf,
+
+  /* The host (QEMU) can access arbitrary guest memory, so buffers are used
+   * as is (zero copy), except user buffers of a per-process address
+   * environment, which are not physically contiguous.
+   */
+
+#ifdef CONFIG_ARCH_ADDRENV
+  .free_largest = virtio_addrenv_free_largest,
+  .map          = virtio_addrenv_map,
+  .unmap        = virtio_addrenv_unmap,
+#else
+  .free_largest = NULL,
+  .map          = NULL,
+  .unmap        = NULL,
+#endif
 };
 
 /****************************************************************************
@@ -343,18 +358,15 @@ static int virtio_mmio_config_virtqueue(FAR struct metal_io_region *io,
     {
       metal_io_write32(io, VIRTIO_MMIO_QUEUE_NUM, vq->vq_nentries);
 
-      addr = (uint64_t)((uintptr_t)
-                        kasan_clear_tag((FAR void *)vq->vq_ring.desc));
+      addr = (uint64_t)up_addrenv_va_to_pa((FAR void *)vq->vq_ring.desc);
       metal_io_write32(io, VIRTIO_MMIO_QUEUE_DESC_LOW, addr);
       metal_io_write32(io, VIRTIO_MMIO_QUEUE_DESC_HIGH, addr >> 32);
 
-      addr = (uint64_t)((uintptr_t)
-                        kasan_clear_tag((FAR void *)vq->vq_ring.avail));
+      addr = (uint64_t)up_addrenv_va_to_pa((FAR void *)vq->vq_ring.avail);
       metal_io_write32(io, VIRTIO_MMIO_QUEUE_AVAIL_LOW, addr);
       metal_io_write32(io, VIRTIO_MMIO_QUEUE_AVAIL_HIGH, addr >> 32);
 
-      addr = (uint64_t)((uintptr_t)
-                        kasan_clear_tag((FAR void *)vq->vq_ring.used));
+      addr = (uint64_t)up_addrenv_va_to_pa((FAR void *)vq->vq_ring.used);
       metal_io_write32(io, VIRTIO_MMIO_QUEUE_USED_LOW, addr);
       metal_io_write32(io, VIRTIO_MMIO_QUEUE_USED_HIGH, addr >> 32);
 
@@ -543,6 +555,7 @@ static void virtio_mmio_set_status(FAR struct virtio_device *vdev,
 {
   FAR struct virtio_mmio_device_s *vmdev =
     (FAR struct virtio_mmio_device_s *)vdev;
+
   metal_io_write32(&vmdev->cfg_io, VIRTIO_MMIO_STATUS, status);
 }
 
@@ -554,6 +567,7 @@ static uint8_t virtio_mmio_get_status(FAR struct virtio_device *vdev)
 {
   FAR struct virtio_mmio_device_s *vmdev =
     (FAR struct virtio_mmio_device_s *)vdev;
+
   return metal_io_read32(&vmdev->cfg_io, VIRTIO_MMIO_STATUS);
 }
 
@@ -602,6 +616,7 @@ byte_write:
         {
           FAR char *s = src;
           int i;
+
           for (i = 0; i < length; i++)
             {
               metal_io_write8(&vmdev->cfg_io, write_offset + i, s[i]);
@@ -656,6 +671,7 @@ byte_read:
         {
           FAR char *d = dst;
           int i;
+
           for (i = 0; i < length; i++)
             {
               d[i] = metal_io_read8(&vmdev->cfg_io, read_offset + i);
@@ -850,7 +866,15 @@ static int virtio_mmio_init_device(FAR struct virtio_mmio_device_s *vmdev,
   vrtinfo("VIRTIO version: %"PRIu32" device: %"PRIu32" vendor: %"PRIx32"\n",
           vdev->id.version, vdev->id.device, vdev->id.vendor);
 
-  /* Reset the virtio device and set ACK */
+  /* Reset the virtio device and set ACK.  A device still in its power-on
+   * state (status 0) is already reset; skipping the write then avoids a
+   * QEMU hang in virtio_gpu_reset() under icount + record/replay.
+   */
+
+  if (virtio_mmio_get_status(vdev) != VIRTIO_CONFIG_STATUS_RESET)
+    {
+      virtio_mmio_set_status(vdev, VIRTIO_CONFIG_STATUS_RESET);
+    }
 
   virtio_mmio_set_status(vdev, VIRTIO_CONFIG_STATUS_ACK);
   return OK;

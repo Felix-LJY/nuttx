@@ -46,16 +46,6 @@
 #include "task/task.h"
 
 /****************************************************************************
- * Pre-processor Definitions
- ****************************************************************************/
-
-/* This is an artificial limit to detect error conditions where an argv[]
- * list is not properly terminated.
- */
-
-#define MAX_STACK_ARGS 256
-
-/****************************************************************************
  * Private Data
  ****************************************************************************/
 
@@ -227,6 +217,7 @@ retry:
 static inline void nxtask_inherit_affinity(FAR struct tcb_s *tcb)
 {
   FAR struct tcb_s *rtcb = this_task();
+
   tcb->affinity = rtcb->affinity;
 }
 #else
@@ -271,6 +262,9 @@ static inline void nxtask_save_parent(FAR struct tcb_s *tcb, uint8_t ttype)
       /* Get the TCB of the parent task.  In this case, the calling task. */
 
       FAR struct tcb_s *rtcb = this_task();
+#ifndef CONFIG_SCHED_CHILD_STATUS
+      irqstate_t flags;
+#endif
 
       DEBUGASSERT(rtcb != NULL && rtcb->group != NULL);
 
@@ -313,6 +307,9 @@ static inline void nxtask_save_parent(FAR struct tcb_s *tcb, uint8_t ttype)
               child->ch_flags  = ttype;
               child->ch_pid    = tcb->pid;
               child->ch_status = 0;
+#ifdef CONFIG_SCHED_USER_IDENTITY
+              child->ch_uid    = 0;
+#endif
 
               /* Add the entry into the group's list of children */
 
@@ -326,7 +323,9 @@ static inline void nxtask_save_parent(FAR struct tcb_s *tcb, uint8_t ttype)
        */
 
       DEBUGASSERT(rtcb->group->tg_nchildren < UINT16_MAX);
+      flags = spin_lock_irqsave(&rtcb->group->tg_lock);
       rtcb->group->tg_nchildren++;
+      spin_unlock_irqrestore(&rtcb->group->tg_lock, flags);
 
 #endif /* CONFIG_SCHED_CHILD_STATUS */
     }
@@ -359,6 +358,7 @@ static inline void nxtask_save_parent(FAR struct tcb_s *tcb, uint8_t ttype)
 static inline void nxtask_dup_dspace(FAR struct tcb_s *tcb)
 {
   FAR struct tcb_s *rtcb = this_task();
+
   if (rtcb->dspace != NULL)
     {
       /* Copy the D-Space structure reference and increment the reference
@@ -403,7 +403,6 @@ static int nxthread_setup_scheduler(FAR struct tcb_s *tcb, int priority,
                                     start_t start, CODE void *entry,
                                     uint8_t ttype)
 {
-  irqstate_t flags;
   int ret;
 
   /* Assign a unique task ID to the task. */
@@ -481,12 +480,7 @@ static int nxthread_setup_scheduler(FAR struct tcb_s *tcb, int priority,
 
       up_initial_state(tcb);
 
-      /* Add the task to the inactive task list */
-
-      flags = enter_critical_section();
-      dq_addfirst((FAR dq_entry_t *)tcb, list_inactivetasks());
       tcb->task_state = TSTATE_TASK_INACTIVE;
-      leave_critical_section(flags);
     }
 
   return ret;
@@ -553,30 +547,17 @@ int nxtask_setup_stackargs(FAR struct tcb_s *tcb,
 
       while (argv[argc])
         {
-          /* Add the size of this argument (with NUL terminator).
-           * Check each time if the accumulated size exceeds the
-           * size of the allocated stack.
+          /* Add the size of this argument (with NUL terminator).  The
+           * arguments must fit in the stack, and there may be at most
+           * CONFIG_TASK_MAX_ARGS of them.
            */
 
           strtablen += (strlen(argv[argc]) + 1);
-          DEBUGASSERT(strtablen < tcb->adj_stack_size);
-          if (strtablen >= tcb->adj_stack_size)
+          if (strtablen >= tcb->adj_stack_size ||
+              ++argc > CONFIG_TASK_MAX_ARGS)
             {
-              ret = -ENAMETOOLONG;
-            }
-          else
-            {
-              /* Increment the number of args.  Here is a sanity check to
-               * prevent running away with an unterminated argv[] list.
-               * MAX_STACK_ARGS should be sufficiently large that this never
-               * happens in normal usage.
-               */
-
-              DEBUGASSERT(argc <= MAX_STACK_ARGS);
-              if (++argc > MAX_STACK_ARGS)
-                {
-                  ret = -E2BIG;
-                }
+              ret = -E2BIG;
+              break;
             }
         }
     }
@@ -591,10 +572,11 @@ int nxtask_setup_stackargs(FAR struct tcb_s *tcb,
       argvlen   = (argc + 2) * sizeof(FAR char *);
       stackargv = (FAR char **)up_stack_frame(tcb, argvlen + strtablen);
 
-      DEBUGASSERT(stackargv != NULL);
+      /* It fails when the argv[] array and the strings do not fit */
+
       if (stackargv == NULL)
         {
-          ret = -ENOMEM;
+          ret = -E2BIG;
         }
       else
         {

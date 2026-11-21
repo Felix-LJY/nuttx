@@ -37,8 +37,16 @@ if(CONFIG_DRIVERS_VIRTIO_BLK)
   list(APPEND SRCS virtio-blk.c)
 endif()
 
+if(CONFIG_DRIVERS_VIRTIO_CRYPTO)
+  list(APPEND SRCS virtio-crypto.c)
+endif()
+
 if(CONFIG_DRIVERS_VIRTIO_GPU)
   list(APPEND SRCS virtio-gpu.c)
+endif()
+
+if(CONFIG_DRIVERS_VIRTIO_I2C)
+  list(APPEND SRCS virtio-i2c.c)
 endif()
 
 if(CONFIG_DRIVERS_VIRTIO_INPUT)
@@ -51,6 +59,10 @@ endif()
 
 if(CONFIG_DRIVERS_VIRTIO_RNG)
   list(APPEND SRCS virtio-rng.c)
+endif()
+
+if(CONFIG_DRIVERS_VIRTIO_GPIO)
+  list(APPEND SRCS virtio-gpio.c)
 endif()
 
 if(CONFIG_DRIVERS_VIRTIO_RPMB)
@@ -67,6 +79,10 @@ endif()
 
 if(CONFIG_DRIVERS_VIRTIO_SOUND)
   list(APPEND SRCS virtio-snd.c)
+endif()
+
+if(CONFIG_DRIVERS_VIRTIO_SPI)
+  list(APPEND SRCS virtio-spi.c)
 endif()
 
 target_sources(drivers PRIVATE ${SRCS})

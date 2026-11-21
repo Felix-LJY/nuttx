@@ -291,6 +291,22 @@ RUN mkdir -p riscv-none-elf-gcc && \
   | tar -C riscv-none-elf-gcc --strip-components 1 -xz
 
 ###############################################################################
+# Build image for tool required by RH850 builds
+###############################################################################
+FROM nuttx-toolchain-base AS nuttx-toolchain-rh850
+# Download the RH850 GCC toolchain and qemu-system-rh850 prebuilt by Linumiz
+RUN mkdir -p v850-elf-gcc && \
+  curl -s -L --fail -o v850-elf-gcc.tar.gz "https://github.com/linumiz/rh850-gcc-toolchain/releases/download/v1.2.0/v850-elf-toolchain-linux-x86_64.tar.gz" && \
+  echo "a2194a060295008a2bd67db0e24c1cda8a795eba832b49b3f1d4cbb64cb242bd  v850-elf-gcc.tar.gz" | sha256sum -c - && \
+  tar -C v850-elf-gcc -xzf v850-elf-gcc.tar.gz && \
+  rm -rf v850-elf-gcc.tar.gz v850-elf-gcc/share
+RUN mkdir -p qemu-rh850 && \
+  curl -s -L --fail -o qemu-rh850.tar.gz "https://github.com/linumiz/qemu-rh850/releases/download/rh850-v1.2.0/qemu-rh850-linux-x86_64.tar.gz" && \
+  echo "1e1d3d5d3a365ec24047e9128b11df09fdfddb2b385aa4c77dc45253aa448f6b  qemu-rh850.tar.gz" | sha256sum -c - && \
+  tar -C qemu-rh850 -xzf qemu-rh850.tar.gz && \
+  rm qemu-rh850.tar.gz
+
+###############################################################################
 # Build image for tool required by SPARC builds
 ###############################################################################
 FROM nuttx-toolchain-base AS nuttx-toolchain-sparc
@@ -298,6 +314,101 @@ FROM nuttx-toolchain-base AS nuttx-toolchain-sparc
 RUN mkdir -p sparc-gaisler-elf-gcc && \
   curl -s -L "https://www.gaisler.com/anonftp/bcc2/bin/bcc-2.1.0-gcc-linux64.tar.xz" \
   | tar -C sparc-gaisler-elf-gcc --strip-components 1 -xJ
+
+###############################################################################
+# Build image for tool required by TriCore builds
+###############################################################################
+FROM nuttx-toolchain-base AS nuttx-toolchain-tricore
+# Build TriCore GCC 11.3.1 from the EEESlab sources, using the revisions
+# pinned by https://github.com/EEESlab/tricore-gcc-toolchain-11.3.0
+RUN apt-get update -qq && DEBIAN_FRONTEND="noninteractive" apt-get install -y -qq \
+  bison \
+  flex \
+  g++ \
+  gcc \
+  libgmp-dev \
+  libmpc-dev \
+  libmpfr-dev \
+  make \
+  texinfo \
+  zlib1g-dev
+
+ARG TRICORE_BINUTILS_REV=c068019c17eeeefdbec9210cb46baefe2f78c383
+ARG TRICORE_GCC_REV=df3095ae5b71df917e4fe2ff3be39620bbd4d213
+ARG TRICORE_NEWLIB_REV=240a8f676ea923c703824e996fbe88ac4a302e17
+
+RUN mkdir -p tricore-tools/source/binutils tricore-tools/source/gcc tricore-tools/source/newlib && \
+  curl -fsSL "https://github.com/EEESlab/tricore-binutils-gdb/archive/${TRICORE_BINUTILS_REV}.tar.gz" \
+  | tar -C tricore-tools/source/binutils --strip-components=1 -xz && \
+  curl -fsSL "https://github.com/EEESlab/tricore-gcc/archive/${TRICORE_GCC_REV}.tar.gz" \
+  | tar -C tricore-tools/source/gcc --strip-components=1 -xz && \
+  curl -fsSL "https://github.com/EEESlab/tricore-newlib-cygwin/archive/${TRICORE_NEWLIB_REV}.tar.gz" \
+  | tar -C tricore-tools/source/newlib --strip-components=1 -xz
+
+ENV PATH="/tools/gcc-tricore/bin:$PATH"
+
+# MAKEINFO=true because the info pages are of no use here.
+
+RUN mkdir -p /tools/tricore-tools/build/binutils && cd /tools/tricore-tools/build/binutils && \
+  /tools/tricore-tools/source/binutils/configure \
+  --target=tricore-elf \
+  --enable-targets=mcs-elf \
+  --prefix=/tools/gcc-tricore \
+  --disable-gdb \
+  --disable-gdbserver \
+  --disable-sim \
+  --disable-nls \
+  --disable-werror && \
+  make -j$(nproc) MAKEINFO=true && make install-strip MAKEINFO=true
+
+RUN mkdir -p /tools/tricore-tools/build/gcc-stage1 && cd /tools/tricore-tools/build/gcc-stage1 && \
+  /tools/tricore-tools/source/gcc/configure \
+  CFLAGS_FOR_TARGET='-g -O2 -gdwarf-3' \
+  CXXFLAGS_FOR_TARGET='-g -O2 -gdwarf-3' \
+  --target=tricore-elf \
+  --prefix=/tools/gcc-tricore \
+  --enable-languages=c,c++ \
+  --enable-lib32 \
+  --disable-lib64 \
+  --enable-checking=release \
+  --disable-nls \
+  --disable-shared \
+  --disable-threads \
+  --disable-libssp \
+  --with-newlib \
+  --with-headers=yes && \
+  make -j$(nproc) all-gcc MAKEINFO=true && make install-strip-gcc MAKEINFO=true
+
+RUN mkdir -p /tools/tricore-tools/build/newlib && cd /tools/tricore-tools/build/newlib && \
+  CFLAGS_FOR_TARGET='-g -gdwarf-3 -O2 -ffunction-sections -mfast-div -fno-common' \
+  /tools/tricore-tools/source/newlib/configure \
+  --target=tricore-elf \
+  --prefix=/tools/gcc-tricore && \
+  make -j$(nproc) MAKEINFO=true && make install MAKEINFO=true
+
+RUN mkdir -p /tools/tricore-tools/build/gcc-stage2 && cd /tools/tricore-tools/build/gcc-stage2 && \
+  /tools/tricore-tools/source/gcc/configure \
+  CFLAGS_FOR_TARGET='-g -gdwarf-3 -O2 -ffast-math -ffunction-sections -mfast-div -fno-common -mno-eabi-bitfield-limit' \
+  CXXFLAGS_FOR_TARGET='-g -O2 -gdwarf-3 -ffast-math -ffunction-sections -mfast-div -fno-common -mno-eabi-bitfield-limit' \
+  --target=tricore-elf \
+  --prefix=/tools/gcc-tricore \
+  --enable-languages=c,c++ \
+  --enable-lib32 \
+  --disable-lib64 \
+  --enable-checking=release \
+  --enable-libatomic \
+  --disable-nls \
+  --disable-shared \
+  --disable-threads \
+  --disable-libssp \
+  --disable-libstdcxx-pch \
+  --with-newlib \
+  --with-headers=yes \
+  --with-gnu-as \
+  --with-gnu-ld && \
+  make -j$(nproc) all MAKEINFO=true && make install-strip MAKEINFO=true && \
+  rm -rf /tools/gcc-tricore/share && \
+  cd /tools && rm -rf tricore-tools
 
 ###############################################################################
 # Build image for tool required by ESP32 builds
@@ -443,19 +554,13 @@ RUN pip3 install cmake-format
 # RUN pip3 install CodeChecker
 # Install cvt2utf to check for non-UTF characters.
 RUN pip3 install cvt2utf
-# Install pytest
 RUN pip3 install cxxfilt
 RUN pip3 install construct
-RUN pip3 install esptool==5.2.0
+RUN pip3 install esptool==5.3.1
 RUN pip3 install imgtool
 RUN pip3 install kconfiglib
-RUN pip3 install pexpect==4.8.0
 RUN pip3 install pyelftools
 RUN pip3 install pyserial==3.5
-RUN pip3 install pytest==6.2.5
-RUN pip3 install pytest-json==0.4.0
-RUN pip3 install pytest-ordering==0.6
-RUN pip3 install pytest-repeat==0.9.1
 # Install lark stringcase jinja2 and coloredlogs for matter build
 RUN pip3 install lark
 RUN pip3 install stringcase
@@ -528,9 +633,18 @@ ENV PATH="/tools/renesas-toolchain/rx-elf-gcc/bin:$PATH"
 COPY --from=nuttx-toolchain-riscv /tools/riscv-none-elf-gcc/ riscv-none-elf-gcc/
 ENV PATH="/tools/riscv-none-elf-gcc/bin:$PATH"
 
+# RH850 toolchain and QEMU
+COPY --from=nuttx-toolchain-rh850 /tools/v850-elf-gcc/ v850-elf-gcc/
+COPY --from=nuttx-toolchain-rh850 /tools/qemu-rh850/ qemu-rh850/
+ENV PATH="/tools/v850-elf-gcc/bin:/tools/qemu-rh850/bin:$PATH"
+
 # SPARC toolchain
 COPY --from=nuttx-toolchain-sparc /tools/sparc-gaisler-elf-gcc/ sparc-gaisler-elf-gcc/
 ENV PATH="/tools/sparc-gaisler-elf-gcc/bin:$PATH"
+
+# TriCore toolchain
+COPY --from=nuttx-toolchain-tricore /tools/gcc-tricore/ gcc-tricore/
+ENV PATH="/tools/gcc-tricore/bin:$PATH"
 
 # ESP32, ESP32-S2, ESP32-S3 toolchain
 COPY --from=nuttx-toolchain-esp32 /tools/xtensa-esp-elf-gcc/ xtensa-esp-elf-gcc/
@@ -585,10 +699,13 @@ RUN mkdir -p /ccache && \
   ln -sf `which ccache` /tools/ccache/bin/g++ && \
   ln -sf `which ccache` /tools/ccache/bin/p32-gcc && \
   ln -sf `which ccache` /tools/ccache/bin/rx-elf-gcc && \
+  ln -sf `which ccache` /tools/ccache/bin/v850-elf-gcc && \
   ln -sf `which ccache` /tools/ccache/bin/riscv-none-elf-gcc && \
   ln -sf `which ccache` /tools/ccache/bin/riscv-none-elf-g++ && \
   ln -sf `which ccache` /tools/ccache/bin/sparc-gaisler-elf-gcc && \
   ln -sf `which ccache` /tools/ccache/bin/sparc-gaisler-elf-g++ && \
+  ln -sf `which ccache` /tools/ccache/bin/tricore-elf-gcc && \
+  ln -sf `which ccache` /tools/ccache/bin/tricore-elf-g++ && \
   ln -sf `which ccache` /tools/ccache/bin/xtensa-esp32-elf-gcc && \
   ln -sf `which ccache` /tools/ccache/bin/xtensa-esp32-elf-g++ && \
   ln -sf `which ccache` /tools/ccache/bin/xtensa-esp32s2-elf-gcc && \

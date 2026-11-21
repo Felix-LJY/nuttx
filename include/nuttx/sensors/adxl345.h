@@ -28,6 +28,7 @@
  ****************************************************************************/
 
 #include <nuttx/config.h>
+#include <stdbool.h>
 #include <nuttx/irq.h>
 
 #if defined(CONFIG_SENSORS_ADXL345)
@@ -322,11 +323,8 @@ struct spi_dev_s;
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -374,7 +372,6 @@ ADXL345_HANDLE adxl345_instantiate(FAR struct i2c_master_s *dev,
 
 int adxl345_register(ADXL345_HANDLE handle, int minor);
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

@@ -30,11 +30,10 @@
 #include <nuttx/config.h>
 #include <nuttx/clock.h>
 #include <nuttx/compiler.h>
-#include <nuttx/spinlock.h>
-#include <nuttx/list.h>
+#include <nuttx/list_type.h>
 
 #include <stdint.h>
-#include <sys/tree.h>
+#include <sys/tree_type.h>
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -42,11 +41,11 @@
 
 /* The maximum delay tick should be INT64_MAX. However, if there are expired
  * hrtimer in the queue, HRTIMER_TIME_BEFORE/AFTER might be incorrect, so we
- * limited the delay to INT64_MAX >> 1, assuming all expired hrtimer can be
- * processed within HRTIMER_MAX_DELAY.
+ * limited the delay to (INT64_MAX >> 1) + 1u, assuming all expired hrtimer
+ * can be processed within HRTIMER_MAX_DELAY - 1u.
  */
 
-#define HRTIMER_MAX_DELAY              (INT64_MAX >> 1)
+#define HRTIMER_MAX_DELAY   (((uint64_t)INT64_MAX >> 1) + 1u)
 
 /****************************************************************************
  * Public Types
@@ -102,11 +101,8 @@ typedef struct hrtimer_s
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -244,9 +240,8 @@ int hrtimer_start(FAR hrtimer_t *hrtimer, hrtimer_entry_t func,
  *
  ****************************************************************************/
 
-uint64_t hrtimer_gettime(FAR hrtimer_t *timer);
+uint64_t hrtimer_gettime(FAR const hrtimer_t *timer);
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

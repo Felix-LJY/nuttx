@@ -1,3 +1,24 @@
+############################################################################
+# drivers/syslog/Kconfig
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.  The
+# ASF licenses this file to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance with the
+# License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
+############################################################################
 #
 # For a description of the syntax of this configuration file,
 # see the file kconfig-language.txt in the NuttX tools repository.
@@ -56,6 +77,17 @@ config SYSLOG_DEFAULT_MASK
 	hex "syslog mask default value"
 	default 0xff
 
+config SYSLOG_OPENLOG
+	bool "openlog() ident and options"
+	default !DEFAULT_SMALL
+	depends on SYSLOG
+	---help---
+		Keep the ident and the options that openlog() sets, and put
+		"ident: " ("ident[pid]: " with LOG_PID) before the messages of the
+		process, and copy them to stderr with LOG_PERROR.  If disabled,
+		openlog() and closelog() still exist but do nothing, and the
+		messages have no ident, as when a program never calls openlog().
+
 if SYSLOG
 comment "SYSLOG options"
 
@@ -71,6 +103,15 @@ config SYSLOG_MAX_CHANNELS
 	default 1
 	---help---
 		Maximum number of supported SYSLOG channels.
+
+config SYSLOG_DROPMASK
+	bool "Channels can drop messages by priority"
+	default n
+	---help---
+		Each SYSLOG channel gets a mask of the message priorities that it
+		does not write (sc_dropmask).  For example, the console can write
+		only the urgent messages while the RAMLOG keeps all of them.  See
+		SYSLOG_CONSOLE_LEVEL.
 
 config RAMLOG
 	bool "RAM log device support"
@@ -314,6 +355,22 @@ config SYSLOG_RPMSG
 	---help---
 		Use the RPMSG as a SYSLOG output device, send message to remote proc.
 
+config SYSLOG_RPMSG_BUFSIZE
+	int "RPMSG SYSLOG buffer size"
+	depends on SYSLOG_RPMSG
+	---help---
+		Size of the RPMSG syslog buffer defined by the driver, header
+		included.  With 0, the platform must point g_syslog_rpmsg.header
+		at its own buffer, with the size filled in, before the first
+		message is logged.
+
+config SYSLOG_RPMSG_BUFFER_SECTION
+	string "The section where rpmsg syslog buffer is located"
+	depends on SYSLOG_RPMSG_BUFSIZE != 0
+	---help---
+		The section where rpmsg syslog buffer is located.
+		The section shall not be initialized on system boot.
+
 config SYSLOG_CDCACM
 	bool "Log to CDCACM"
 	depends on CDCACM
@@ -352,6 +409,23 @@ config SYSLOG_DEFAULT
 		syslog() interfaces will be present, but all output will go to the
 		up_putc(ARCH_LOWPUTC == y) or bit-bucket(ARCH_LOWPUTC == n).
 
+config SYSLOG_CONSOLE_LEVEL
+	int "Lowest message priority on the console"
+	default 7
+	range 0 7
+	depends on SYSLOG_DROPMASK
+	depends on SYSLOG_DEFAULT || SYSLOG_CONSOLE
+	---help---
+		The console channels (SYSLOG_DEFAULT and SYSLOG_CONSOLE) write
+		only the messages of this priority and of the more urgent
+		priorities: 0 is LOG_EMERG, 3 is LOG_ERR, 7 is LOG_DEBUG.  The
+		other channels (for example the RAMLOG) get all messages.  With
+		7 (the default), the console gets all messages.
+
+		A message that comes without a priority (for example a write to
+		/dev/log or output that the interrupt buffer saved) goes to all
+		channels.
+
 endif
 
 if RAMLOG_SYSLOG
@@ -386,6 +460,11 @@ config SYSLOG_RPMSG_CHARDEV
 	bool "SYSLOG RPMSG character device"
 	default SYSLOG_RPMSG_WORK_DELAY != 0
 
+config SYSLOG_RPMSG_DEVPATH
+	string "SYSLOG RPMSG character device name"
+	default "/dev/logrpmsg"
+	depends on SYSLOG_RPMSG_CHARDEV
+
 endif # SYSLOG_RPMSG
 
 config SYSLOG_RPMSG_SERVER
@@ -398,6 +477,15 @@ config SYSLOG_RPMSG_SERVER
 config SYSLOG_RPMSG_SERVER_CHARDEV
 	bool "SYSLOG RPMSG server character device"
 	default n
+
+config SYSLOG_RPMSG_SERVER_PRIORITY
+	int "SYSLOG RPMSG server priority"
+	default 126
+	depends on SYSLOG_RPMSG_SERVER
+	---help---
+		The rpmsg priority of the SYSLOG RPMSG server endpoint.
+		The default is one below RPMSG_PRIO_DEFAULT, so that log
+		traffic does not delay the other endpoints.
 
 menuconfig SYSLOG_FILE
 	bool "Syslog file output"

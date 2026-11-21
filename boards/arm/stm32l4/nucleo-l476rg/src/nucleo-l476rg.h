@@ -40,20 +40,10 @@
 
 /* Configuration ************************************************************/
 
-#define HAVE_PROC           1
 #define HAVE_RTC_DRIVER     1
 
 #define HAVE_MMCSD_SPI      1
 #define HAVE_MMCSD_SDIO     1
-
-#if !defined(CONFIG_FS_PROCFS)
-#  undef HAVE_PROC
-#endif
-
-#if defined(HAVE_PROC) && defined(CONFIG_DISABLE_MOUNTPOINT)
-#  warning Mountpoints disabled.  No procfs support
-#  undef HAVE_PROC
-#endif
 
 /* Check if we can support the RTC driver */
 
@@ -326,19 +316,6 @@ int stm32_gpio_initialize(void);
 #endif
 
 /****************************************************************************
- * Name: stm32_can_setup -- DisruptiveNL
- *
- * Description:
- *   Initialize CAN and register the CAN device.
- *   Added by: Ben vd Veen (DisruptiveNL) -- www.nuttx.nl
- *
- ****************************************************************************/
-
-#ifdef CONFIG_CAN
-int stm32_can_setup(void);
-#endif
-
-/****************************************************************************
  * Name: stm32_pwm_setup
  *
  * Description:
@@ -384,18 +361,6 @@ int board_ajoy_initialize(void);
 
 #ifdef CONFIG_MMCSD_SPI
 int stm32_mmcsd_initialize(int minor);
-#endif
-
-/****************************************************************************
- * Name: board_timer_driver_initialize
- *
- * Description:
- *   Initialize and register a timer
- *
- ****************************************************************************/
-
-#ifdef CONFIG_TIMER
-int board_timer_driver_initialize(const char *devpath, int timer);
 #endif
 
 /****************************************************************************

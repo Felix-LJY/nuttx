@@ -1,6 +1,8 @@
 /****************************************************************************
  * boards/arm/rp23xx/raspberrypi-pico-2/src/rp23xx_userleds.c
  *
+ * SPDX-License-Identifier: Apache-2.0
+ *
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.  The
@@ -98,7 +100,7 @@ static void led_pm_notify(struct pm_callback_s *cb, int domain,
         {
           /* Restore normal LEDs operation */
 
-          board_userled(BOARD_LED, true);
+          board_userled(BOARD_LED1, true);
         }
         break;
 
@@ -106,7 +108,7 @@ static void led_pm_notify(struct pm_callback_s *cb, int domain,
         {
           /* Entering IDLE mode - Turn leds off */
 
-          board_userled(BOARD_LED, false);
+          board_userled(BOARD_LED1, false);
         }
         break;
 
@@ -204,6 +206,7 @@ void rp23xx_led_pminitialize(void)
   /* Register to receive power management callbacks */
 
   int ret = pm_register(&g_ledscb);
+
   if (ret != OK)
     {
       board_autoled_on(LED_ASSERTION);

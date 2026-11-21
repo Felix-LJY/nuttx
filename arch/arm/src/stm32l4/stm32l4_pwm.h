@@ -39,8 +39,8 @@
 #include <arch/board/board.h>
 
 #include "chip.h"
-#include "hardware/stm32l4_tim.h"
-#include "hardware/stm32l4_lptim.h"
+#include "hardware/stm32_tim.h"
+#include "hardware/stm32_lptim.h"
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -1016,13 +1016,9 @@ struct stm32_pwm_ops_s
 
 #ifndef __ASSEMBLY__
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -1067,7 +1063,6 @@ struct pwm_lowerhalf_s *stm32_pwminitialize(int timer);
 
 struct pwm_lowerhalf_s *stm32_lp_pwminitialize(int timer);
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

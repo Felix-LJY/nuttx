@@ -64,19 +64,28 @@ int pthread_key_delete(pthread_key_t key)
   int ret = EINVAL;
 
   DEBUGASSERT(info != NULL && tls != NULL);
-  DEBUGASSERT(key >= 0 && key < CONFIG_TLS_NELEM);
+
   if (key >= 0 && key < CONFIG_TLS_NELEM)
     {
       /* This is done while holding a semaphore here to avoid concurrent
        * modification of the group TLS index set.
        */
 
-      ret = nxmutex_lock(&info->ta_lock);
+      ret = nxrmutex_lock(&info->ta_lock);
       if (ret == OK)
         {
-          info->ta_tlsdtor[key] = NULL;
-          tls->tl_elem[key]     = 0;
-          nxmutex_unlock(&info->ta_lock);
+          if (info->ta_tlsdtor[key] != NULL)
+            {
+              info->ta_tlsdtor[key] = NULL;
+              tls->tl_elem[key]     = 0;
+              ret = OK;
+            }
+          else
+            {
+              ret = EINVAL;
+            }
+
+          nxrmutex_unlock(&info->ta_lock);
         }
       else
         {

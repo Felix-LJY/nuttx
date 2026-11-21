@@ -84,8 +84,8 @@ if(CONFIG_RGBLED)
   list(APPEND SRCS stm32_rgbled.c)
 endif()
 
-if(CONFIG_RTC_DS1307)
-  list(APPEND SRCS stm32_ds1307.c)
+if(CONFIG_PTP_PPS)
+  list(APPEND SRCS stm32_ptp_pps.c)
 endif()
 
 if(CONFIG_PWM)

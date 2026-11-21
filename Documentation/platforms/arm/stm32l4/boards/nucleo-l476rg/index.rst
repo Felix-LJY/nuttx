@@ -2,7 +2,7 @@
 ST Nucleo L476RG
 ================
 
-.. tags:: chip:stm32, chip:stm32l4, chip:stm32l476
+.. tags:: arch:arm, chip:stm32l4, part:stm32l476, vendor:st
 
 This page discusses issues unique to NuttX configurations for the ST
 NucleoL476RG board from ST Micro.  See
@@ -566,3 +566,9 @@ nxdemo
 
 This is an NSH configuration that enables the NX graphics demo at
 apps/examples/nxdemo.  It uses the PCD8544 display on SPI1.
+
+ostest
+------
+
+Same as nsh, with the OS test (``apps/testing/ostest``) added as an NSH
+builtin.  Run ``ostest`` from NSH.

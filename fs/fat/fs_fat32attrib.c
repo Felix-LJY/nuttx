@@ -57,21 +57,30 @@ static int fat_attrib(const char *path, fat_attrib_t *retattrib,
   uint8_t newattributes;
   int ret;
 
+#ifdef CONFIG_FS_FAT_READONLY
+  /* In read-only mode, reject any request that changes attributes. */
+
+  if (setbits != 0 || clearbits != 0)
+    {
+      return -EROFS;
+    }
+#endif
+
   /* Find the inode for this file */
 
-  SETUP_SEARCH(&desc, path, false);
+  ret = inode_search_setup(&desc, path, false);
+  if (ret < 0)
+    {
+      return ret;
+    }
 
-  ret = inode_find(&desc);
+  ret = inode_find(&desc, &inode);
   if (ret < 0)
     {
       /* There is no mountpoint that includes in this path */
 
       goto errout;
     }
-
-  /* Get the search results */
-
-  inode = desc.node;
 
   /* Verify that the inode is a valid mountpoint. */
 
@@ -154,7 +163,7 @@ static int fat_attrib(const char *path, fat_attrib_t *retattrib,
 
   nxmutex_unlock(&fs->fs_lock);
   inode_release(inode);
-  RELEASE_SEARCH(&desc);
+  inode_search_release(&desc);
   return OK;
 
 errout_with_lock:
@@ -164,7 +173,7 @@ errout_with_inode:
   inode_release(inode);
 
 errout:
-  RELEASE_SEARCH(&desc);
+  inode_search_release(&desc);
   return ret;
 }
 

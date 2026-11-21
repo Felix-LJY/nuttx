@@ -98,9 +98,15 @@
 
 #ifdef CONFIG_GD32VW55X_SPI_DMA
 
-/* The DMA interrupts that are enabled while an SPI DMA is in progress */
+/* The DMA interrupts that are enabled while an SPI DMA is in progress:
+ * the end of the transfer and the access error.  The callback wakes the
+ * waiter on any interrupt, so the half transfer interrupt must stay off,
+ * or the exchange would end while the second half is still on the wire,
+ * and so must the single data mode exception, which a receive request
+ * raises when it waits for the bus and which does not stop the transfer.
+ */
 
-#  define SPI_DMA_INTEN         (DMA_INT_MASK)
+#  define SPI_DMA_INTEN         (DMA_CHXCTL_FTFIE | DMA_CHXCTL_TAEIE)
 
 /* SPI DMA priority */
 
@@ -176,7 +182,7 @@ static int      spi_hwfeatures(struct spi_dev_s *dev,
                                spi_hwfeatures_t features);
 #endif
 static uint32_t spi_send(struct spi_dev_s *dev, uint32_t wd);
-static void     spi_exchange(struct spi_dev_s *dev, const void *txbuffer,
+static int      spi_exchange(struct spi_dev_s *dev, const void *txbuffer,
                              void *rxbuffer, size_t nwords);
 #ifdef CONFIG_SPI_TRIGGER
 static int      spi_trigger(struct spi_dev_s *dev);
@@ -204,7 +210,7 @@ static void     spi_dmatxsetup(struct gd32_spidev_s *priv,
                                size_t nwords);
 static inline void spi_dmarxstart(struct gd32_spidev_s *priv);
 static inline void spi_dmatxstart(struct gd32_spidev_s *priv);
-static void     spi_exchange_nodma(struct spi_dev_s *dev,
+static int      spi_exchange_nodma(struct spi_dev_s *dev,
                                    const void *txbuffer, void *rxbuffer,
                                    size_t nwords);
 #endif
@@ -627,24 +633,24 @@ static void spi_setmode(struct spi_dev_s *dev, enum spi_mode_e mode)
     {
       switch (mode)
         {
-        case SPIDEV_MODE0: /* CKPL=0, CKPH=0 */
-          setbits = 0;
-          break;
+          case SPIDEV_MODE0: /* CKPL=0, CKPH=0 */
+            setbits = 0;
+            break;
 
-        case SPIDEV_MODE1: /* CKPL=0, CKPH=1 */
-          setbits = SPI_CTL0_CKPH;
-          break;
+          case SPIDEV_MODE1: /* CKPL=0, CKPH=1 */
+            setbits = SPI_CTL0_CKPH;
+            break;
 
-        case SPIDEV_MODE2: /* CKPL=1, CKPH=0 */
-          setbits = SPI_CTL0_CKPL;
-          break;
+          case SPIDEV_MODE2: /* CKPL=1, CKPH=0 */
+            setbits = SPI_CTL0_CKPL;
+            break;
 
-        case SPIDEV_MODE3: /* CKPL=1, CKPH=1 */
-          setbits = SPI_CTL0_CKPH | SPI_CTL0_CKPL;
-          break;
+          case SPIDEV_MODE3: /* CKPL=1, CKPH=1 */
+            setbits = SPI_CTL0_CKPH | SPI_CTL0_CKPL;
+            break;
 
-        default:
-          return;
+          default:
+            return;
         }
 
       /* The clock configuration can only be changed while the SPI is
@@ -818,10 +824,10 @@ static uint32_t spi_send(struct spi_dev_s *dev, uint32_t wd)
  ****************************************************************************/
 
 #ifndef CONFIG_GD32VW55X_SPI_DMA
-static void spi_exchange(struct spi_dev_s *dev, const void *txbuffer,
+static int  spi_exchange(struct spi_dev_s *dev, const void *txbuffer,
                          void *rxbuffer, size_t nwords)
 #else
-static void spi_exchange_nodma(struct spi_dev_s *dev, const void *txbuffer,
+static int  spi_exchange_nodma(struct spi_dev_s *dev, const void *txbuffer,
                                void *rxbuffer, size_t nwords)
 #endif
 {
@@ -898,6 +904,8 @@ static void spi_exchange_nodma(struct spi_dev_s *dev, const void *txbuffer,
             }
         }
     }
+
+  return OK;
 }
 
 /****************************************************************************
@@ -1144,7 +1152,7 @@ static inline void spi_dmatxstart(struct gd32_spidev_s *priv)
  *
  ****************************************************************************/
 
-static void spi_exchange(struct spi_dev_s *dev, const void *txbuffer,
+static int  spi_exchange(struct spi_dev_s *dev, const void *txbuffer,
                          void *rxbuffer, size_t nwords)
 {
   struct gd32_spidev_s *priv = (struct gd32_spidev_s *)dev;
@@ -1171,8 +1179,7 @@ static void spi_exchange(struct spi_dev_s *dev, const void *txbuffer,
        * non-DMA method.
        */
 
-      spi_exchange_nodma(dev, txbuffer, rxbuffer, nwords);
-      return;
+      return spi_exchange_nodma(dev, txbuffer, rxbuffer, nwords);
     }
 
   spiinfo("txbuffer=%p rxbuffer=%p nwords=%zu\n",
@@ -1198,7 +1205,7 @@ static void spi_exchange(struct spi_dev_s *dev, const void *txbuffer,
       /* Yes: indicate that we are ready to be started */
 
       priv->trigarmed = true;
-      return;
+      return OK;
     }
 #else
   /* Start the DMAs */
@@ -1227,6 +1234,8 @@ static void spi_exchange(struct spi_dev_s *dev, const void *txbuffer,
 #ifdef CONFIG_SPI_TRIGGER
   priv->trigarmed = false;
 #endif
+
+  return OK;
 }
 #endif /* CONFIG_GD32VW55X_SPI_DMA */
 

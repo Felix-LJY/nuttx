@@ -1,6 +1,8 @@
-============
-sama5d2-xult
-============
+======================
+Microchip SAMA5D2-XULT
+======================
+
+.. tags:: arch:arm, chip:sama5, vendor:microchip
 
 This is the  port of NuttX to the Atmel SAMA5D3x-EK development boards
 (where x=1,3,4, or 5).  These boards feature the Atmel SAMA5D3

@@ -31,6 +31,10 @@
 #include <nuttx/compiler.h>
 #include <limits.h>
 
+/* Programs use fd_set and select() after <unistd.h> alone */
+
+#include <sys/select.h>
+
 /****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
@@ -42,12 +46,18 @@
 #define W_OK        2  /* Test write permission */
 #define R_OK        4  /* Test read permission */
 
-/* POSIX feature set macros */
+/* POSIX feature set macros.  A value greater than zero means that the
+ * option is supported; -1 means that this configuration does not have it.
+ */
 
 #define POSIX_VERSION
 #undef  _POSIX_SAVED_IDS
 #undef  _POSIX_JOB_CONTROL
-#define _POSIX_MESSAGE_PASSING 1
+#ifdef CONFIG_DISABLE_MQUEUE
+#  define _POSIX_MESSAGE_PASSING -1
+#else
+#  define _POSIX_MESSAGE_PASSING 1
+#endif
 #define _POSIX_PRIORITY_SCHEDULING 1
 #ifndef CONFIG_DISABLE_POSIX_TIMERS
 #  define _POSIX_TIMERS 1
@@ -59,21 +69,101 @@
 #undef  _POSIX_MEMLOCK_RANGE
 #undef  _POSIX_FSYNC
 #define _POSIX_SYNCHRONIZED_IO 1
-#ifdef CONFIG_LIBC_PASSWD_LINESIZE
-#  define _POSIX_GETPW_R_SIZE_MAX CONFIG_LIBC_PASSWD_LINESIZE
-#endif
+#define _POSIX_GETPW_R_SIZE_MAX 1024
 
 #define _POSIX_VERSION 201712L
 #define _POSIX_PRIORITIZED_IO _POSIX_VERSION
-#define _POSIX_CPUTIME _POSIX_VERSION
-#define _POSIX_THREAD_CPUTIME _POSIX_VERSION
+
+/* CPU-time clocks need the run-time accounting of the critical section
+ * monitor.
+ */
+
+#if defined(CONFIG_SCHED_CRITMONITOR_MAXTIME_THREAD) && \
+    CONFIG_SCHED_CRITMONITOR_MAXTIME_THREAD >= 0
+#  define _POSIX_CPUTIME _POSIX_VERSION
+#  define _POSIX_THREAD_CPUTIME _POSIX_VERSION
+#else
+#  define _POSIX_CPUTIME -1
+#  define _POSIX_THREAD_CPUTIME -1
+#endif
+
 #define _POSIX_REALTIME_SIGNALS _POSIX_VERSION
-#define _POSIX_THREAD_PRIORITY_SCHEDULING _POSIX_VERSION
-#define _POSIX_SEMAPHORES _POSIX_VERSION
-#define _POSIX_SHARED_MEMORY_OBJECTS _POSIX_VERSION
-#define _POSIX_THREAD_PROCESS_SHARED _POSIX_VERSION
-#define _POSIX_MAPPED_FILES _POSIX_VERSION
-#define _POSIX_THREADS _POSIX_VERSION
+#define _POSIX_MONOTONIC_CLOCK _POSIX_VERSION
+#define _POSIX_CLOCK_SELECTION _POSIX_VERSION
+
+/* sem_open() needs the named semaphores */
+
+#ifdef CONFIG_FS_NAMED_SEMAPHORES
+#  define _POSIX_SEMAPHORES _POSIX_VERSION
+#else
+#  define _POSIX_SEMAPHORES -1
+#endif
+
+#ifdef CONFIG_FS_SHMFS
+#  define _POSIX_SHARED_MEMORY_OBJECTS _POSIX_VERSION
+#else
+#  define _POSIX_SHARED_MEMORY_OBJECTS -1
+#endif
+
+/* mmap() of a regular file needs the file mapping emulation */
+
+#ifdef CONFIG_FS_RAMMAP
+#  define _POSIX_MAPPED_FILES _POSIX_VERSION
+#else
+#  define _POSIX_MAPPED_FILES -1
+#endif
+
+#ifdef CONFIG_DISABLE_PTHREAD
+#  define _POSIX_THREADS -1
+#  define _POSIX_THREAD_PRIORITY_SCHEDULING -1
+#  define _POSIX_THREAD_ATTR_STACKADDR -1
+#  define _POSIX_THREAD_ATTR_STACKSIZE -1
+#  define _POSIX_THREAD_PROCESS_SHARED -1
+#  define _POSIX_BARRIERS -1
+#  define _POSIX_READER_WRITER_LOCKS -1
+#else
+#  define _POSIX_THREADS _POSIX_VERSION
+#  define _POSIX_THREAD_PRIORITY_SCHEDULING _POSIX_VERSION
+#  define _POSIX_THREAD_ATTR_STACKADDR _POSIX_VERSION
+#  define _POSIX_THREAD_ATTR_STACKSIZE _POSIX_VERSION
+#  define _POSIX_BARRIERS _POSIX_VERSION
+#  define _POSIX_READER_WRITER_LOCKS _POSIX_VERSION
+
+/* Process-shared objects need memory that two processes can share */
+
+#  if !defined(CONFIG_BUILD_KERNEL) || defined(CONFIG_FS_SHMFS) || \
+      defined(CONFIG_MM_SHM)
+#    define _POSIX_THREAD_PROCESS_SHARED _POSIX_VERSION
+#  else
+#    define _POSIX_THREAD_PROCESS_SHARED -1
+#  endif
+#endif
+
+#ifdef CONFIG_PTHREAD_SPINLOCKS
+#  define _POSIX_SPIN_LOCKS _POSIX_VERSION
+#else
+#  define _POSIX_SPIN_LOCKS -1
+#endif
+
+/* For the PSE52 certification, define the following macros.
+ * _POSIX_THREAD_ATTR_STACKADDR and _POSIX_THREAD_ATTR_STACKSIZE are
+ * defined above.  The priority protocols are only supported when they are
+ * built in.
+ */
+
+#if defined(CONFIG_PRIORITY_INHERITANCE) && !defined(CONFIG_DISABLE_PTHREAD)
+#  define _POSIX_THREAD_PRIO_INHERIT 200112L
+#else
+#  define _POSIX_THREAD_PRIO_INHERIT -1
+#endif
+
+#if defined(CONFIG_PRIORITY_PROTECT) && !defined(CONFIG_DISABLE_PTHREAD)
+#  define _POSIX_THREAD_PRIO_PROTECT 200112L
+#else
+#  define _POSIX_THREAD_PRIO_PROTECT -1
+#endif
+
+#define _POSIX_THREAD_SAFE_FUNCTIONS 200112L
 
 #ifdef CONFIG_FS_AIO
 #  define _POSIX_ASYNCHRONOUS_IO _POSIX_VERSION
@@ -93,7 +183,12 @@
 
 #undef  _POSIX_CHOWN_RESTRICTED
 #undef  _POSIX_NO_TRUNC
-#undef  _POSIX_VDISABLE
+
+/* The value of a c_cc entry of struct termios that disables the special
+ * character.
+ */
+
+#define _POSIX_VDISABLE '\0'
 
 #define _POSIX_SYNC_IO 1
 #undef  _POSIX_ASYNC_IO
@@ -126,8 +221,8 @@
 #define _PC_SYNC_IO                      0x0012
 #define _PC_VDISABLE                     0x0013
 
-/* Constants used with POSIX sysconf().  sysconf() will return -1 and set
- * errno to ENOSYS for most of these.
+/* Constants used with POSIX sysconf().  sysconf() returns -1 for the
+ * options and limits that NuttX does not have.
  */
 
 #define _SC_2_C_BIND                     0x0001
@@ -260,6 +355,20 @@
 #define _SC_NPROCESSORS_CONF             0x007d
 #define _SC_NPROCESSORS_ONLN             0x007e
 
+#define _SC_DEVICE_CONTROL               0x007f
+#define _SC_NSIG                         0x0080
+#define _SC_THREAD_ROBUST_PRIO_INHERIT   0x0081
+#define _SC_THREAD_ROBUST_PRIO_PROTECT   0x0082
+#define _SC_V7_ILP32_OFF32               0x0083
+#define _SC_V7_ILP32_OFFBIG              0x0084
+#define _SC_V7_LP64_OFF64                0x0085
+#define _SC_V7_LPBIG_OFFBIG              0x0086
+#define _SC_V8_ILP32_OFF32               0x0087
+#define _SC_V8_ILP32_OFFBIG              0x0088
+#define _SC_V8_LP64_OFF64                0x0089
+#define _SC_V8_LPBIG_OFFBIG              0x008a
+#define _SC_XOPEN_UUCP                   0x008b
+
 /* Constants used with POSIX confstr(). */
 
 #define _CS_PATH                           1
@@ -283,18 +392,20 @@
 #define STDIN_FILENO                     0       /* File number of stdin */
 #define STDOUT_FILENO                    1       /* File number of stdout */
 
-/* Helpers and legacy compatibility definitions */
+/* Accessor functions associated with getopt().  getopt() keeps optarg,
+ * opterr, optind and optopt per task, so the names are macros.  A program
+ * that brings its own getopt() and its own variables of these names can
+ * define NUTTX_NO_GETOPT_MACROS: then the names are declared as the
+ * variables that POSIX specifies (see below), and the program or another
+ * library defines them.
+ */
 
-#define fdatasync(f)                     fsync(f)
-#define getdtablesize(f)                 ((int)sysconf(_SC_OPEN_MAX))
-#define getpagesize(f)                   ((int)sysconf(_SC_PAGESIZE))
-
-/* Accessor functions associated with getopt(). */
-
-#define optarg                           (*(getoptargp()))
-#define opterr                           (*(getopterrp()))
-#define optind                           (*(getoptindp()))
-#define optopt                           (*(getoptoptp()))
+#ifndef NUTTX_NO_GETOPT_MACROS
+#  define optarg                         (*(getoptargp()))
+#  define opterr                         (*(getopterrp()))
+#  define optind                         (*(getoptindp()))
+#  define optopt                         (*(getoptoptp()))
+#endif
 
 #if defined(CONFIG_FS_LARGEFILE)
 #  define lseek64                        lseek
@@ -303,17 +414,6 @@
 #  define truncate64                     truncate
 #  define ftruncate64                    ftruncate
 #  define lockf64                        lockf
-#endif
-
-/* NOTE: NuttX provides only one implementation:  If
- * CONFIG_LIBC_ENVPATH is defined, then only execvp/execlp/execvpe behavior
- * is supported; otherwise, only execv/execl/execve behavior is supported.
- */
-
-#ifdef CONFIG_LIBC_EXECFUNCS
-#  define execvp                         execv
-#  define execlp                         execl
-#  define execvpe                        execve
 #endif
 
 /* Commands for lockf()
@@ -332,13 +432,9 @@
  * Public Data
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -365,6 +461,7 @@ pid_t   gettid(void);
 pid_t   getppid(void);
 pid_t   getsid(pid_t pid);
 int     setpgid(pid_t pid, pid_t pgid);
+pid_t   setpgrp(void);
 pid_t   setsid(void);
 pid_t   tcgetpgrp(int fd);
 int     tcsetpgrp(int fd, pid_t pgrp);
@@ -382,12 +479,15 @@ int     close(int fd);
 int     dup(int fd);
 int     dup2(int fd1, int fd2);
 int     dup3(int fd1, int fd2, int flags);
+int     fdatasync(int fd);
 int     fsync(int fd);
 off_t   lseek(int fd, off_t offset, int whence);
 ssize_t read(int fd, FAR void *buf, size_t nbytes);
 ssize_t write(int fd, FAR const void *buf, size_t nbytes);
 ssize_t pread(int fd, FAR void *buf, size_t nbytes, off_t offset);
 ssize_t pwrite(int fd, FAR const void *buf, size_t nbytes, off_t offset);
+ssize_t copy_file_range(int infd, FAR off_t *inoff, int outfd,
+                        FAR off_t *outoff, size_t len, unsigned int flags);
 int     ftruncate(int fd, off_t length);
 int     fchown(int fd, uid_t owner, gid_t group);
 int     lockf(int fd, int cmd, off_t len);
@@ -398,6 +498,16 @@ int     isatty(int fd);
 
 FAR char *ttyname(int fd);
 int       ttyname_r(int fd, FAR char *buf, size_t buflen);
+
+/* Legacy BSD interfaces */
+
+int       getdtablesize(void);
+int       getpagesize(void);
+
+/* The name of the user */
+
+FAR char *getlogin(void);
+int       getlogin_r(FAR char *buf, size_t bufsize);
 
 /* Memory management */
 
@@ -411,8 +521,8 @@ FAR void *sbrk(intptr_t incr);
 int     pipe(int pipefd[2]);
 int     pipe2(int pipefd[2], int flags);
 
-/* Pipe-based process I/O.  These are not actually implemented in the OS.
- * See apps/system/popen for implementation.
+/* Pipe-based process I/O.  libc has them when pipes, posix_spawn() and
+ * waitpid() are enabled.
  */
 
 #ifndef __KERNEL__
@@ -428,6 +538,9 @@ unsigned int alarm(unsigned int seconds);
 
 int     chdir(FAR const char *path);
 int     fchdir(int fd);
+#ifdef CONFIG_FS_CHROOT
+int     chroot(FAR const char *path);
+#endif
 FAR char *getcwd(FAR char *buf, size_t size);
 FAR char *get_current_dir_name(void);
 
@@ -455,12 +568,23 @@ int     fchownat(int dirfd, FAR const char *path, uid_t owner,
 
 /* Execution of programs from files */
 
+/* NOTE: NuttX provides only one behavior:  If CONFIG_LIBC_ENVPATH is
+ * defined, then execv(), execl() and execve() also search the PATH as
+ * execvp(), execlp() and execvpe() do; otherwise none of them searches it.
+ * Only execvp(), execlp() and execvpe() run a file that is not a program
+ * (ENOEXEC, for example a script without "#!") with the shell (POSIX).
+ */
+
 #ifdef CONFIG_LIBC_EXECFUNCS
 int     execl(FAR const char *path, FAR const char *arg0, ...);
 int     execle(FAR const char *path, FAR const char *arg0, ...);
+int     execlp(FAR const char *file, FAR const char *arg0, ...);
 int     execv(FAR const char *path, FAR char * const argv[]);
 int     execve(FAR const char *path, FAR char *const argv[],
                FAR char *const envp[]);
+int     execvp(FAR const char *file, FAR char * const argv[]);
+int     execvpe(FAR const char *file, FAR char * const argv[],
+                FAR char * const envp[]);
 #endif
 
 /* Byte operations */
@@ -478,8 +602,17 @@ FAR int   *getopterrp(void);  /* Print error message */
 FAR int   *getoptindp(void);  /* Index into argv */
 FAR int   *getoptoptp(void);  /* Unrecognized option character */
 
+#ifdef NUTTX_NO_GETOPT_MACROS
+extern FAR char *optarg;      /* Optional argument following option */
+extern int       opterr;      /* Print error message */
+extern int       optind;      /* Index into argv */
+extern int       optopt;      /* Unrecognized option character */
+#endif
+
 int     gethostname(FAR char *name, size_t namelen);
 int     sethostname(FAR const char *name, size_t namelen);
+int     getdomainname(FAR char *name, size_t namelen);
+int     setdomainname(FAR const char *name, size_t namelen);
 
 /* Get configurable system variables */
 
@@ -510,6 +643,7 @@ int     setresuid(uid_t ruid, uid_t euid, uid_t suid);
 int     setresgid(gid_t rgid, gid_t egid, gid_t sgid);
 
 int     getgroups(int, FAR gid_t[]);
+int     issetugid(void);
 int     setgroups(int, FAR const gid_t *);
 
 int     getentropy(FAR void *buffer, size_t length);
@@ -521,10 +655,24 @@ int     profil(FAR unsigned short *buf, size_t bufsiz,
                size_t offset, unsigned int scale);
 
 FAR char *getpass(FAR const char *prompt);
+#ifdef CONFIG_FILE_STREAM
+FAR char *getusershell(void);
+void    setusershell(void);
+void    endusershell(void);
+#endif
 #ifdef CONFIG_CRYPTO
 FAR char *crypt(FAR const char *key, FAR const char *salt);
+
+/* NuttX's crypt_r() writes to a buffer of the caller.  glibc and
+ * libxcrypt have crypt_r(key, salt, FAR struct crypt_data *) in
+ * <crypt.h>: with NUTTX_NO_EXTENSIONS this declaration is left out, so
+ * that theirs can be used.
+ */
+
+#ifndef NUTTX_NO_EXTENSIONS /* See nuttx/compiler.h */
 FAR char *crypt_r(FAR const char *key, FAR const char *salt,
                   FAR char *output);
+#endif
 #endif
 
 #if CONFIG_FORTIFY_SOURCE > 0
@@ -595,7 +743,6 @@ fortify_function(write) ssize_t write(int fd, FAR const void *buf,
 }
 #endif
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

@@ -134,10 +134,12 @@ void __start(void)
 
   /* Set bss to zero */
 
+#ifndef CONFIG_ARCH_SKIP_ZERO_BSS
   for (dest = (uint32_t *)_sbss; dest < (uint32_t *)_ebss; )
     {
       *dest++ = 0;
     }
+#endif
 
   /* Copy the program from FLASH to RAM. */
 
@@ -186,6 +188,10 @@ void __start(void)
 
   up_enable_icache();
   up_enable_dcache();
+
+#ifdef CONFIG_ARCH_PERF_EVENTS
+  up_perf_init((void *)MPS_SYSTICK_CLOCK);
+#endif
 
   /* Then start NuttX */
 

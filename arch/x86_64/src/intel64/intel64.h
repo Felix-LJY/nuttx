@@ -57,13 +57,9 @@
  * Public Data
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -370,7 +366,13 @@ void vector_irq253(void);
 void vector_irq254(void);
 void vector_irq255(void);
 
-#undef EXTERN
+#ifdef CONFIG_SMP
+/* SMP call and scheduler IPI handlers (intel64_smpcall.c) */
+
+int x86_64_smp_call_handler(int irq, void *c, void *arg);
+int x86_64_smp_sched_handler(int irq, void *c, void *arg);
+#endif
+
 #if defined(__cplusplus)
 }
 #endif

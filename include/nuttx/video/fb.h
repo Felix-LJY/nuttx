@@ -31,6 +31,7 @@
 
 #include <sys/types.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include <errno.h>
 #include <nuttx/debug.h>
 #ifdef CONFIG_VIDEO_FB_SPLASHSCREEN
@@ -1009,11 +1010,8 @@ struct palette_bitmap_s
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -1223,7 +1221,6 @@ static inline_function unused_code int fb_register(int display, int plane)
   return fb_register_device(display, plane, vtable);
 }
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

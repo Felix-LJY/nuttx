@@ -1,3 +1,24 @@
+############################################################################
+# arch/arm/src/stm32u0/Kconfig
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.  The
+# ASF licenses this file to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance with the
+# License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
+############################################################################
 #
 # For a description of the syntax of this configuration file,
 # see the file kconfig-language.txt in the NuttX tools repository.
@@ -134,6 +155,7 @@ config STM32_STM32U0
 	select STM32_HAVE_LPUART2
 	select STM32_HAVE_TIM1
 	select STM32_HAVE_TIM2
+	select STM32_HAVE_TIM2_32BITS
 	select STM32_HAVE_TIM3
 	select STM32_HAVE_TIM6
 	select STM32_HAVE_TIM7
@@ -145,7 +167,8 @@ config STM32_STM32U0
 	select STM32_HAVE_IP_AES_M0_V1 if STM32_HAVE_AES
 	select STM32_HAVE_IP_COMP_M0_V1 if STM32_HAVE_COMP
 	select STM32_HAVE_IP_DAC_M0_V1 if STM32_HAVE_DAC1
-	select STM32_HAVE_IP_DBGMCU_M0_V1
+	select STM32_HAVE_IP_DBGMCU_V3
+	select STM32_HAVE_IP_LPTIM_V2
 	select STM32_HAVE_IP_DMA_V1
 	select STM32_HAVE_IP_DMA_V1_7CH_DMAMUX
 	select STM32_HAVE_IP_EXTI_V2
@@ -159,7 +182,7 @@ config STM32_STM32U0
 	select STM32_HAVE_IP_SPI_V2
 	select STM32_HAVE_IP_TIMERS_M0_V1
 	select STM32_HAVE_IP_USART_V4
-	select STM32_HAVE_IP_WDG_M0_V1
+	select STM32_HAVE_IP_WDG_V3
 
 config STM32_STM32U073
 	bool

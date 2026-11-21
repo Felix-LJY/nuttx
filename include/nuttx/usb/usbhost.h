@@ -558,6 +558,52 @@
 #endif
 
 /****************************************************************************
+ * Name: DRVR_ISOCASYNCH
+ *
+ * Description:
+ *   Queue an isochronous transfer covering several packets and return
+ *   immediately.  When the transfer completes the callback is invoked with
+ *   the provided argument and, as the result, the total number of bytes
+ *   received or a negated errno value.
+ *
+ *   The packet boundaries carry meaning to the class driver and cannot be
+ *   recovered from a single byte count: a packet may be short or empty, and
+ *   the protocols layered on isochronous endpoints put a header at the start
+ *   of every packet.  The transfer therefore reports the length of each
+ *   packet separately in isoc->pktlen[].  Packet i starts at
+ *   isoc->buffer[i * isoc->pktsize] and is isoc->pktlen[i] bytes long.
+ *
+ *   This method is optional.  A host controller driver that does not
+ *   implement it leaves the pointer NULL, and this macro fails cleanly with
+ *   -ENOSYS.
+ *
+ * Input Parameters:
+ *   drvr - The USB host driver instance obtained as a parameter from the
+ *      call to the class create() method.
+ *   ep - The isochronous endpoint on which to perform the transfer.
+ *   isoc - Describes the transfer.  It must remain valid, together with the
+ *      buffer and the packet length array it refers to, until the callback
+ *      runs.
+ *   callback - This function will be called when the transfer completes.
+ *   arg - The arbitrary parameter that will be passed to the callback
+ *      function when the transfer completes.
+ *
+ * Returned Value:
+ *   On success, zero (OK) is returned.  On a failure, a negated errno value
+ *   is returned indicating the nature of the failure.
+ *
+ * Assumptions:
+ *   This function will *not* be called from an interrupt handler.
+ *
+ ****************************************************************************/
+
+#ifndef CONFIG_USBHOST_ISOC_DISABLE
+#  define DRVR_ISOCASYNCH(drvr,ep,isoc,callback,arg) \
+     ((drvr)->isocasynch ? \
+      (drvr)->isocasynch(drvr,ep,isoc,callback,arg) : -ENOSYS)
+#endif
+
+/****************************************************************************
  * Name: DRVR_CANCEL
  *
  * Description:
@@ -721,6 +767,21 @@ struct usbhost_hubport_s
   uint8_t port;                         /* Hub port index */
   uint8_t funcaddr;                     /* Device function address */
   uint8_t speed;                        /* Device speed */
+#ifdef CONFIG_USBHOST_HUB
+  /* Set by the hub class driver when the device attached here is itself a
+   * hub, describing that hub rather than this port.  Both are zero
+   * otherwise, and zero ports is not a hub.
+   *
+   * A host controller that has to be told about the hubs in a topology,
+   * rather than only about the device at the end of it, reads these from
+   * the parent of the port it is working on.  They are set before the hub
+   * activates any downstream port, so they are in place before anything
+   * behind that hub can be enumerated.
+   */
+
+  uint8_t nports;                       /* Downstream ports on the attached hub */
+  uint8_t ttt;                          /* Its transaction translator think time */
+#endif
 };
 
 /* The root hub port differs in that it includes a data set that is used to
@@ -789,6 +850,26 @@ struct usbhost_epdesc_s
   uint8_t interval;                    /* Polling interval */
   uint16_t mxpacketsize;               /* Max packetsize */
 };
+
+/****************************************************************************
+ * Name: struct usbhost_isoc_s
+ *
+ * Description:
+ *   Describes an isochronous transfer covering several packets.  The buffer
+ *   holds isoc->npackets packets of isoc->pktsize bytes each, and the length
+ *   actually received in every one of them is reported in isoc->pktlen[].
+ *
+ ****************************************************************************/
+
+#ifndef CONFIG_USBHOST_ISOC_DISABLE
+struct usbhost_isoc_s
+{
+  FAR uint8_t *buffer;                 /* Transfer buffer, npackets*pktsize */
+  FAR uint16_t *pktlen;                /* Length received in each packet */
+  uint16_t pktsize;                    /* Size of one packet in the buffer */
+  uint16_t npackets;                   /* Number of packets in the transfer */
+};
+#endif
 
 /* struct usbhost_connection_s provides as interface between
  * platform-specific connection monitoring and the USB host driver
@@ -923,6 +1004,20 @@ struct usbhost_driver_s
   CODE int (*asynch)(FAR struct usbhost_driver_s *drvr, usbhost_ep_t ep,
                      FAR uint8_t *buffer, size_t buflen,
                      usbhost_asynch_t callback, FAR void *arg);
+
+  /* Queue an isochronous transfer covering several packets and return
+   * immediately, reporting the length of each packet separately when it
+   * completes.  See DRVR_ISOCASYNCH().
+   *
+   * This method is optional.  Leave it NULL if the controller cannot do
+   * isochronous transfers or cannot expose packet boundaries.
+   */
+
+#ifndef CONFIG_USBHOST_ISOC_DISABLE
+  CODE int (*isocasynch)(FAR struct usbhost_driver_s *drvr, usbhost_ep_t ep,
+                         FAR struct usbhost_isoc_s *isoc,
+                         usbhost_asynch_t callback, FAR void *arg);
+#endif
 #endif
 
   /* Cancel any pending synchronous or asynchronous transfer on an
@@ -956,13 +1051,9 @@ struct usbhost_driver_s
  * Public Data
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -1170,6 +1261,27 @@ int usbhost_cdcacm_initialize(void);
 int usbhost_cdcecm_initialize(void);
 #endif
 
+#ifdef CONFIG_USBHOST_UVC
+/****************************************************************************
+ * Name: usbhost_uvc_initialize
+ *
+ * Description:
+ *   Initialize the USB Video Class host driver.  This function should be
+ *   called by platform-specific code in order to initialize and register
+ *   support for USB video cameras.
+ *
+ * Input Parameters:
+ *   None
+ *
+ * Returned Value:
+ *   On success this function will return zero (OK);  A negated errno value
+ *   will be returned on failure.
+ *
+ ****************************************************************************/
+
+int usbhost_uvc_initialize(void);
+#endif
+
 #ifdef CONFIG_USBHOST_FT232R
 /****************************************************************************
  * Name: usbhost_ft232r_initialize
@@ -1354,7 +1466,6 @@ int usbhost_waiter_initialize(FAR struct usbhost_connection_s *conn);
 void usbhost_drivers_initialize(void);
 #endif
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

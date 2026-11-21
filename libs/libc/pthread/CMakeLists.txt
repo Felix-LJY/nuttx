@@ -117,10 +117,11 @@ if(NOT CONFIG_DISABLE_PTHREAD)
     pthread_getcpuclockid.c
     pthread_self.c
     pthread_gettid_np.c
-    pthread_concurrency.c)
+    pthread_concurrency.c
+    thrd_exit.c)
 
   if(NOT CONFIG_PTHREAD_MUTEX_UNSAFE)
-    list(APPEND SRCS pthread_mutex_consistent.c pthread_mutex_inconsistent.c)
+    list(APPEND SRCS pthread_mutex_consistent.c)
   endif()
 
   if(CONFIG_SMP)

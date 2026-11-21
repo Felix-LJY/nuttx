@@ -31,6 +31,7 @@
 
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <stdint.h>
 
 #include <nuttx/queue.h>
 #include <nuttx/semaphore.h>
@@ -63,9 +64,9 @@
 /* Allocate a new UDP data callback */
 
 #define udp_callback_alloc(dev,conn) \
-  devif_callback_alloc((dev), &(conn)->sconn.list, &(conn)->sconn.list_tail)
+  devif_callback_alloc((dev), &(conn)->sconn.s_list, &(conn)->sconn.s_listtail)
 #define udp_callback_free(dev,conn,cb) \
-  devif_conn_callback_free((dev), (cb), &(conn)->sconn.list, &(conn)->sconn.list_tail)
+  devif_conn_callback_free((dev), (cb), &(conn)->sconn.s_list, &(conn)->sconn.s_listtail)
 
 /* Definitions for the UDP connection struct flag field */
 
@@ -78,6 +79,18 @@
 #define UDPIPv4BUF ((FAR struct udp_hdr_s *)IPBUF(IPv4_HDRLEN))
 #define UDPIPv6BUF ((FAR struct udp_hdr_s *)IPBUF(IPv6_HDRLEN))
 
+/* UDP read-ahead metadata layout:
+ * |datalen|ifindex|src_addr_size|src_addr|[timestamp]|data|
+ */
+
+#ifdef CONFIG_NETDEV_IFINDEX
+#  define UDP_READAHEAD_META_SIZE \
+     (sizeof(uint16_t) + sizeof(uint8_t) + sizeof(uint8_t))
+#else
+#  define UDP_READAHEAD_META_SIZE \
+     (sizeof(uint16_t) + sizeof(uint8_t))
+#endif
+
 /****************************************************************************
  * Public Type Definitions
  ****************************************************************************/
@@ -85,7 +98,7 @@
 struct sockaddr;      /* Forward reference */
 struct socket;        /* Forward reference */
 struct net_driver_s;  /* Forward reference */
-struct pollfd;        /* Forward reference */
+struct pollfd_s;      /* Forward reference */
 
 /* Representation of a UDP connection */
 
@@ -98,7 +111,7 @@ struct udp_poll_s
 {
   FAR struct udp_conn_s *conn;     /* Needed to handle loss of connection */
   FAR struct net_driver_s *dev;    /* Needed to free the callback structure */
-  FAR struct pollfd *fds;          /* Needed to handle poll events */
+  FAR struct pollfd_s *fds;        /* Needed to handle poll events */
   FAR struct devif_callback_s *cb; /* Needed to teardown the poll */
 };
 
@@ -159,9 +172,6 @@ struct udp_conn_s
 
   struct udp_poll_s pollinfo[CONFIG_NET_UDP_NPOLLWAITERS];
 
-#ifdef CONFIG_NET_TIMESTAMP
-  int timestamp; /* Nonzero when SO_TIMESTAMP is enabled */
-#endif
   FAR sem_t *txdrain_sem;
 };
 
@@ -191,11 +201,8 @@ struct udp_callback_s
  ****************************************************************************/
 
 #ifdef __cplusplus
-#  define EXTERN extern "C"
 extern "C"
 {
-#else
-#  define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -497,34 +504,12 @@ int udp_setsockopt(FAR struct socket *psock, int option,
 #endif
 
 /****************************************************************************
- * Name: udp_wrbuffer_alloc
- *
- * Description:
- *   Allocate a UDP write buffer by taking a pre-allocated buffer from
- *   the free list.  This function is called from UDP logic when a buffer
- *   of UDP data is about to sent
- *
- * Input Parameters:
- *   None
- *
- * Assumptions:
- *   Called from user logic with the network locked.
- *
- ****************************************************************************/
-
-#ifdef CONFIG_NET_UDP_WRITE_BUFFERS
-struct udp_wrbuffer_s;
-FAR struct udp_wrbuffer_s *udp_wrbuffer_alloc(void);
-#endif /* CONFIG_NET_UDP_WRITE_BUFFERS */
-
-/****************************************************************************
  * Name: udp_wrbuffer_timedalloc
  *
  * Description:
  *   Allocate a UDP write buffer by taking a pre-allocated buffer from
  *   the free list.  This function is called from udp logic when a buffer
  *   of udp data is about to sent
- *   This function is wrapped version of udp_wrbuffer_alloc(),
  *   this wait will be terminated when the specified timeout expires.
  *
  * Input Parameters:
@@ -536,6 +521,7 @@ FAR struct udp_wrbuffer_s *udp_wrbuffer_alloc(void);
  ****************************************************************************/
 
 #ifdef CONFIG_NET_UDP_WRITE_BUFFERS
+struct udp_wrbuffer_s;
 FAR struct udp_wrbuffer_s *udp_wrbuffer_timedalloc(unsigned int timeout);
 #endif /* CONFIG_NET_UDP_WRITE_BUFFERS */
 
@@ -812,7 +798,7 @@ ssize_t psock_udp_sendto(FAR struct socket *psock,
  *
  ****************************************************************************/
 
-int udp_pollsetup(FAR struct socket *psock, FAR struct pollfd *fds);
+int udp_pollsetup(FAR struct socket *psock, FAR struct pollfd_s *fds);
 
 /****************************************************************************
  * Name: udp_pollteardown
@@ -830,7 +816,7 @@ int udp_pollsetup(FAR struct socket *psock, FAR struct pollfd *fds);
  *
  ****************************************************************************/
 
-int udp_pollteardown(FAR struct socket *psock, FAR struct pollfd *fds);
+int udp_pollteardown(FAR struct socket *psock, FAR struct pollfd_s *fds);
 
 /****************************************************************************
  * Name: udp_readahead_notifier_setup
@@ -981,7 +967,6 @@ void udp_sendbuffer_notify(FAR struct udp_conn_s *conn);
 
 uint16_t udpip_hdrsize(FAR struct udp_conn_s *conn);
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

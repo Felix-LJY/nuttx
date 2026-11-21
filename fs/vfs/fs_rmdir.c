@@ -30,6 +30,7 @@
 #include <unistd.h>
 #include <assert.h>
 #include <errno.h>
+#include <string.h>
 
 #include <nuttx/fs/fs.h>
 
@@ -62,28 +63,43 @@ int rmdir(FAR const char *pathname)
 {
   struct inode_search_s desc;
   FAR struct inode *inode;
-  int errcode;
+  size_t len;
   int ret;
+
+  /* The lookup collapses ".", so reject a last component of "." first */
+
+  len = pathname != NULL ? strlen(pathname) : 0;
+  while (len > 1 && pathname[len - 1] == '/')
+    {
+      len--;
+    }
+
+  if ((len == 1 && pathname[0] == '.') ||
+      (len >= 2 && pathname[len - 1] == '.' && pathname[len - 2] == '/'))
+    {
+      ret = -EINVAL;
+      goto errout;
+    }
 
   /* Get an inode for the directory (or for the mountpoint containing the
    * directory).  inode_find() automatically increments the reference count
    * on the inode if one is found.
    */
 
-  SETUP_SEARCH(&desc, pathname, true);
+  ret = inode_search_setup(&desc, pathname, true);
+  if (ret < 0)
+    {
+      goto errout;
+    }
 
-  ret = inode_find(&desc);
+  ret = inode_find(&desc, &inode);
   if (ret < 0)
     {
       /* There is no inode that includes in this path */
 
-      errcode = -ret;
       goto errout_with_search;
     }
 
-  /* Get the search results */
-
-  inode = desc.node;
   DEBUGASSERT(inode != NULL);
 
 #ifndef CONFIG_DISABLE_MOUNTPOINT
@@ -91,10 +107,9 @@ int rmdir(FAR const char *pathname)
 
   if (INODE_IS_MOUNTPT(inode) && inode->u.i_mops)
     {
-      ret = inode_checkpathperm(inode, 0, 0);
+      ret = inode_checkpathperm(inode, INODE_PATH_AMODE(&desc), 0);
       if (ret < 0)
         {
-          errcode = -ret;
           goto errout_with_inode;
         }
 
@@ -107,13 +122,12 @@ int rmdir(FAR const char *pathname)
           ret = inode->u.i_mops->rmdir(inode, desc.relpath);
           if (ret < 0)
             {
-              errcode = -ret;
               goto errout_with_inode;
             }
         }
       else
         {
-          errcode = ENOSYS;
+          ret = -ENOSYS;
           goto errout_with_inode;
         }
     }
@@ -133,7 +147,7 @@ int rmdir(FAR const char *pathname)
 
       if (inode->i_child)
         {
-          errcode = ENOTEMPTY;
+          ret = -ENOTEMPTY;
           goto errout_with_inode;
         }
 
@@ -149,26 +163,25 @@ int rmdir(FAR const char *pathname)
 
       if (ret < 0 && ret != -EBUSY)
         {
-          errcode = -ret;
           goto errout_with_inode;
         }
     }
   else
     {
-      errcode = ENOTDIR;
+      ret = -ENOTDIR;
       goto errout_with_inode;
     }
 #else
-    {
-      errcode = ENXIO;
-      goto errout_with_inode;
-    }
+  {
+    ret = -ENXIO;
+    goto errout_with_inode;
+  }
 #endif
 
   /* Successfully removed the directory */
 
   inode_release(inode);
-  RELEASE_SEARCH(&desc);
+  inode_search_release(&desc);
 #ifdef CONFIG_FS_NOTIFY
   notify_unlink(pathname);
 #endif
@@ -177,8 +190,9 @@ int rmdir(FAR const char *pathname)
 errout_with_inode:
   inode_release(inode);
 errout_with_search:
-  RELEASE_SEARCH(&desc);
-  set_errno(errcode);
+  inode_search_release(&desc);
+errout:
+  set_errno(-ret);
   return ERROR;
 }
 

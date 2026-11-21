@@ -37,16 +37,26 @@
  ****************************************************************************/
 
 #ifdef __cplusplus
-#  define EXTERN extern "C"
 extern "C"
 {
-#else
-#  define EXTERN extern
 #endif
 
-EXTERN const struct sock_intf_s g_rpmsg_sockif;
+extern const struct sock_intf_s g_rpmsg_sockif;
 
-#undef EXTERN
+/****************************************************************************
+ * Public Function Prototypes
+ ****************************************************************************/
+
+/****************************************************************************
+ * Name: rpmsg_socket_initialize
+ *
+ * Description:
+ *   Initialize the rpmsg socket support.  Called once by net_initialize().
+ *
+ ****************************************************************************/
+
+void rpmsg_socket_initialize(void);
+
 #ifdef __cplusplus
 }
 #endif

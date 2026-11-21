@@ -2,7 +2,7 @@
 LCKFB SZPI ESP32-S3
 ===================
 
-.. tags:: chip:esp32, chip:esp32s3
+.. tags:: arch:xtensa, chip:esp32s3, vendor:espressif
 
 The `LCKFB SZPI ESP32-S3 <https://wiki.lckfb.com/zh-hans/szpi-esp32s3/>`_ is a development board for the ESP32-S3 SoC from Jialichuang, based on a ESP32-S3-WROOM-1 module.
 
@@ -168,14 +168,14 @@ Then check the partition::
 
   nsh> ls -l /dev/
   /dev:
-   dr--r--r--           0 adb0/
+   dr-xr-xr-x           0 adb0/
    crw-rw-rw-           0 console
    frw-rw-rw-     1044480 data
    frw-rw-rw-     1048576 esp32s3flash
    c-w--w--w-           0 log
    crw-rw-rw-           0 null
    crw-rw-rw-           0 ptmx
-   dr--r--r--           0 pts/
+   dr-xr-xr-x           0 pts/
    brw-rw-rw-        1024 ram0
    crw-rw-rw-           0 ttyS0
    frw-rw-rw-        4096 txtable

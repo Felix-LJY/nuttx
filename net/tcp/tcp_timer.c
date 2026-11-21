@@ -138,13 +138,13 @@ static int tcp_get_timeout(FAR struct tcp_conn_s *conn)
  *
  * Assumptions:
  *   arg is not NULL.
- *   The connection (arg) is bound to the polling device (dev).
  *
  ****************************************************************************/
 
 static void tcp_timer_expiry(FAR void *arg)
 {
   FAR struct tcp_conn_s *conn = NULL;
+  FAR struct net_driver_s *dev;
 
   tcp_conn_list_lock();
 
@@ -152,11 +152,17 @@ static void tcp_timer_expiry(FAR void *arg)
     {
       if (conn == arg)
         {
-          tcp_conn_list_unlock();
+          dev = conn->dev;
           conn->timeout = true;
-          netdev_lock(conn->dev);
-          netdev_txnotify_dev(conn->dev, TCP_POLL);
-          netdev_unlock(conn->dev);
+          tcp_conn_list_unlock();
+
+          if (dev != NULL)
+            {
+              netdev_lock(dev);
+              netdev_txnotify_dev(dev, TCP_POLL);
+              netdev_unlock(dev);
+            }
+
           return;
         }
     }
@@ -201,6 +207,7 @@ static void tcp_xmit_probe(FAR struct net_driver_s *dev,
 
   uint16_t hdrlen = tcpip_hdrsize(conn);
   uint32_t saveseq = tcp_getsequence(conn->sndseq);
+
   tcp_setsequence(conn->sndseq, saveseq - 1);
 
   tcp_send(dev, conn, TCP_ACK, hdrlen);
@@ -336,12 +343,19 @@ void tcp_update_keeptimer(FAR struct tcp_conn_s *conn, int timeout)
  *   None
  *
  * Assumptions:
- *   conn is not NULL.
+ *   conn is not NULL and is not in the active connection list.
  *
  ****************************************************************************/
 
 void tcp_stop_timer(FAR struct tcp_conn_s *conn)
 {
+  /* Do not wait for a tcp_timer_expiry() that runs already.  It takes the
+   * connection list lock and then the device lock, and the callers of
+   * tcp_free() can hold either of them.  It uses the connection only when
+   * it finds it in the active list, under the list lock, and tcp_free()
+   * removes the connection from that list before it stops the timer.
+   */
+
   work_cancel(LPWORK, &conn->work);
 }
 
@@ -577,13 +591,15 @@ void tcp_timer(FAR struct net_driver_s *dev, FAR struct tcp_conn_s *conn)
                   goto done;
                 }
 
-              /* Exponential backoff. */
+              /* Exponential backoff: this timeout doubles the wait for
+               * the next one (RFC 6298, section 5.5).
+               */
 
+              conn->nrtx++;
 #ifndef CONFIG_NET_TCP_FIXED_RTO
-              conn->rto = TCP_RTO << (conn->nrtx > 4 ? 4: conn->nrtx);
+              conn->rto = TCP_RTO << (conn->nrtx > 4 ? 4 : conn->nrtx);
 #endif
               tcp_update_retrantimer(conn, conn->rto);
-              conn->nrtx++;
 
               /* Ok, so we need to retransmit. We do this differently
                * depending on which state we are in. In ESTABLISHED, we
@@ -688,17 +704,23 @@ void tcp_timer(FAR struct net_driver_s *dev, FAR struct tcp_conn_s *conn)
 
                   if (conn->keepretries >= conn->keepcnt)
                     {
-                      /* Yes... stop the network monitor, closing the
-                       * connection and all sockets associated with the
-                       * connection.
+                      /* Yes... the peer is dead.  Close the connection
+                       * as on a retransmission timeout.
                        */
 
-                      devif_conn_event(conn->dev, TCP_ABORT,
-                                       conn->sconn.list);
+                      conn->tcpstateflags = TCP_CLOSED;
+                      ninfo("TCP state: TCP_CLOSED\n");
 
-                      /* We also send a reset packet to the remote host. */
+                      /* We send a reset packet to the remote host. */
 
                       tcp_send(dev, conn, TCP_RST | TCP_ACK, hdrlen);
+
+                      /* We also call tcp_callback() with TCP_TIMEDOUT to
+                       * inform all sockets and the connection monitor
+                       * that the connection has timed out.
+                       */
+
+                      tcp_callback(dev, conn, TCP_TIMEDOUT);
 
                       /* Stop the timer work */
 

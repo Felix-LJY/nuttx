@@ -28,6 +28,7 @@
  ****************************************************************************/
 
 #include <nuttx/config.h>
+#include <stdbool.h>
 #include <nuttx/timers/rtc.h>
 
 /****************************************************************************
@@ -35,11 +36,8 @@
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 #ifdef CONFIG_RTC_ARCH
@@ -52,7 +50,6 @@ void up_rtc_set_lowerhalf(FAR struct rtc_lowerhalf_s *lower, bool sync);
 
 #endif /* CONFIG_RTC_ARCH */
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

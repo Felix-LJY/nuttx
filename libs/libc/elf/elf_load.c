@@ -44,6 +44,7 @@
 #include <nuttx/lib/elf.h>
 #include <nuttx/fs/fs.h>
 #include <nuttx/fs/ioctl.h>
+#include <nuttx/nuttx.h>
 
 #include "libc.h"
 #include "elf/elf.h"
@@ -52,13 +53,9 @@
  * Pre-processor Definitions
  ****************************************************************************/
 
-#define ELF_ALIGN_MASK   ((1 << CONFIG_LIBC_ELF_ALIGN_LOG2) - 1)
-#define ELF_ALIGNUP(a)   (((unsigned long)(a) + ELF_ALIGN_MASK) & ~ELF_ALIGN_MASK)
-#define ELF_ALIGNDOWN(a) ((unsigned long)(a) & ~ELF_ALIGN_MASK)
-
-/* _ALIGN_UP: 'a' is assumed to be a power of two */
-
-#define _ALIGN_UP(v, a)  (((v) + ((a) - 1)) & ~((a) - 1))
+#define ELF_ALIGN        (1 << CONFIG_LIBC_ELF_ALIGN_LOG2)
+#define ELF_ALIGNUP(a)   ALIGN_UP((unsigned long)(a), ELF_ALIGN)
+#define ELF_ALIGNDOWN(a) ALIGN_DOWN((unsigned long)(a), ELF_ALIGN)
 
 #ifdef CONFIG_ARCH_USE_TEXT_HEAP
 #  define buffer_data_address(p) \
@@ -144,14 +141,160 @@ static int libelf_section_alloc(FAR struct mod_loadinfo_s *loadinfo,
 #endif
 
 /****************************************************************************
+ * Name: libelf_addsize
+ *
+ * Description:
+ *   Add a section of the given size and alignment to a running size.
+ *   The ELF specification allows only powers of two as alignment (0 is 1
+ *   here).  Fail for any other alignment, and when a size is more than half
+ *   of the address space: no image can be that large, and the later
+ *   round-ups (to the alignment, to pages) then cannot wrap.
+ *
+ * Returned Value:
+ *   true on success, false when the size or the alignment is invalid.
+ *
+ ****************************************************************************/
+
+static bool libelf_addsize(FAR size_t *total, uintmax_t size,
+                           uintmax_t align)
+{
+  size_t start;
+  size_t end;
+
+  if (align == 0 || (align & (align - 1)) != 0 || align > SIZE_MAX / 2 ||
+      size > SIZE_MAX / 2)
+    {
+      return false;
+    }
+
+  start = ALIGN_UP(*total, align);
+  end   = start + ELF_ALIGNUP(size);
+  if (start < *total || end < start || end > SIZE_MAX / 2)
+    {
+      return false;
+    }
+
+  *total = end;
+  return true;
+}
+
+/****************************************************************************
+ * Name: libelf_gotcount
+ *
+ * Description:
+ *   The linker makes no GOT for a relocatable object, but its code can still
+ *   use GOT relocations, for example to test the address of an undefined
+ *   weak symbol.  Give each symbol that they name a slot of a GOT that the
+ *   loader makes behind the data.
+ *
+ ****************************************************************************/
+
+#ifdef LIBELF_MAKE_GOT
+static int libelf_gotcount(FAR struct mod_loadinfo_s *loadinfo)
+{
+  FAR Elf_Rela *relas;
+  size_t nrelas;
+  size_t symidx;
+  size_t n;
+  size_t j;
+  size_t k;
+  int ret = OK;
+  int i;
+
+  if (loadinfo->ehdr.e_type != ET_REL || loadinfo->fdpic)
+    {
+      return OK;
+    }
+
+  relas = lib_malloc(CONFIG_LIBC_ELF_RELOCATION_BUFFERCOUNT *
+                     sizeof(Elf_Rela));
+  if (relas == NULL)
+    {
+      return -ENOMEM;
+    }
+
+  for (i = 0; i < loadinfo->ehdr.e_shnum && ret == OK; i++)
+    {
+      FAR Elf_Shdr *shdr = &loadinfo->shdr[i];
+
+      if (shdr->sh_type != SHT_RELA || shdr->sh_entsize == 0 ||
+          shdr->sh_info >= loadinfo->ehdr.e_shnum ||
+          shdr->sh_link >= loadinfo->ehdr.e_shnum ||
+          (loadinfo->shdr[shdr->sh_info].sh_flags & SHF_ALLOC) == 0)
+        {
+          continue;
+        }
+
+      /* A relocatable object has one symbol table */
+
+      if (loadinfo->gotslot == NULL)
+        {
+          loadinfo->gotnsyms = loadinfo->shdr[shdr->sh_link].sh_size /
+                               sizeof(Elf_Sym);
+          loadinfo->gotslot  = lib_zalloc(loadinfo->gotnsyms *
+                                          sizeof(uint32_t));
+          if (loadinfo->gotslot == NULL)
+            {
+              ret = -ENOMEM;
+              break;
+            }
+        }
+
+      nrelas = shdr->sh_size / sizeof(Elf_Rela);
+      for (j = 0; j < nrelas && ret == OK; j += n)
+        {
+          n = MIN(nrelas - j, CONFIG_LIBC_ELF_RELOCATION_BUFFERCOUNT);
+          ret = libelf_read(loadinfo, (FAR uint8_t *)relas,
+                            n * sizeof(Elf_Rela),
+                            shdr->sh_offset + j * sizeof(Elf_Rela));
+          if (ret < 0)
+            {
+              break;
+            }
+
+          for (k = 0; k < n; k++)
+            {
+              if (!ARCH_ELF_RELOC_GOT(ELF_R_TYPE(relas[k].r_info)))
+                {
+                  continue;
+                }
+
+              symidx = ELF_R_SYM(relas[k].r_info);
+              if (symidx >= loadinfo->gotnsyms)
+                {
+                  ret = -EINVAL;
+                  break;
+                }
+
+              if (loadinfo->gotslot[symidx] == 0)
+                {
+                  loadinfo->gotslot[symidx] = ++loadinfo->gotslots;
+                }
+            }
+        }
+    }
+
+  lib_free(relas);
+  binfo("GOT: %zu slots behind the data\n", loadinfo->gotslots);
+  return ret;
+}
+#else
+#  define libelf_gotcount(l) OK
+#endif
+
+/****************************************************************************
  * Name: libelf_elfsize
  *
  * Description:
  *   Calculate total memory allocation for the ELF file.
  *
+ * Returned Value:
+ *   true on success; false when a section has an invalid alignment or the
+ *   sizes are more than half of the address space.
+ *
  ****************************************************************************/
 
-static void libelf_elfsize(FAR struct mod_loadinfo_s *loadinfo, bool alloc)
+static bool libelf_elfsize(FAR struct mod_loadinfo_s *loadinfo, bool alloc)
 {
   size_t textsize = 0;
   size_t datasize = 0;
@@ -171,6 +314,12 @@ static void libelf_elfsize(FAR struct mod_loadinfo_s *loadinfo, bool alloc)
 
           if (phdr->p_type == PT_LOAD)
             {
+              if (phdr->p_memsz > SIZE_MAX / 2 - textsize - datasize)
+                {
+                  berr("ERROR: Segment %d is too large\n", i);
+                  return false;
+                }
+
               if (phdr->p_flags & PF_X)
                 {
                   textsize += phdr->p_memsz;
@@ -215,8 +364,14 @@ static void libelf_elfsize(FAR struct mod_loadinfo_s *loadinfo, bool alloc)
                     }
 #endif
 
-                  datasize = _ALIGN_UP(datasize, shdr->sh_addralign);
-                  datasize += ELF_ALIGNUP(shdr->sh_size);
+                  if (!libelf_addsize(&datasize, shdr->sh_size,
+                                      shdr->sh_addralign))
+                    {
+                      berr("ERROR: Bad size or alignment of section %d\n",
+                           i);
+                      return false;
+                    }
+
                   if (loadinfo->dataalign < shdr->sh_addralign)
                     {
                       loadinfo->dataalign = shdr->sh_addralign;
@@ -231,8 +386,14 @@ static void libelf_elfsize(FAR struct mod_loadinfo_s *loadinfo, bool alloc)
                     }
 #endif
 
-                  textsize = _ALIGN_UP(textsize, shdr->sh_addralign);
-                  textsize += ELF_ALIGNUP(shdr->sh_size);
+                  if (!libelf_addsize(&textsize, shdr->sh_size,
+                                      shdr->sh_addralign))
+                    {
+                      berr("ERROR: Bad size or alignment of section %d\n",
+                           i);
+                      return false;
+                    }
+
                   if (loadinfo->textalign < shdr->sh_addralign)
                     {
                       loadinfo->textalign = shdr->sh_addralign;
@@ -241,6 +402,26 @@ static void libelf_elfsize(FAR struct mod_loadinfo_s *loadinfo, bool alloc)
             }
         }
     }
+
+#ifdef LIBELF_MAKE_GOT
+  /* Reserve the GOT that the loader makes, behind the data */
+
+  if (loadinfo->gotslots > 0)
+    {
+      loadinfo->gotoffset = ALIGN_UP(datasize, sizeof(uintptr_t));
+      if (!libelf_addsize(&datasize, loadinfo->gotslots * sizeof(uintptr_t),
+                          sizeof(uintptr_t)))
+        {
+          berr("ERROR: Too many GOT slots: %zu\n", loadinfo->gotslots);
+          return false;
+        }
+
+      if (loadinfo->dataalign < sizeof(uintptr_t))
+        {
+          loadinfo->dataalign = sizeof(uintptr_t);
+        }
+    }
+#endif
 
   /* Reserve the descriptor pool.  R_ARM_FUNCDESC asks the loader to
    * manufacture a descriptor after the segment is placed, and a library
@@ -259,8 +440,21 @@ static void libelf_elfsize(FAR struct mod_loadinfo_s *loadinfo, bool alloc)
           if ((shdr->sh_type == SHT_REL || shdr->sh_type == SHT_DYNSYM) &&
               shdr->sh_entsize != 0)
             {
-              nrels += shdr->sh_size / shdr->sh_entsize;
+              size_t n = shdr->sh_size / shdr->sh_entsize;
+
+              if (n > SIZE_MAX - nrels)
+                {
+                  return false;
+                }
+
+              nrels += n;
             }
+        }
+
+      if (nrels > (SIZE_MAX / 2 - datasize) / sizeof(struct fdpic_desc_s))
+        {
+          berr("ERROR: Too many descriptors: %zu\n", nrels);
+          return false;
         }
 
       loadinfo->ndesc = nrels;
@@ -270,15 +464,15 @@ static void libelf_elfsize(FAR struct mod_loadinfo_s *loadinfo, bool alloc)
     }
 
   /* An ET_DYN object is sized from its program headers, which give no
-   * section alignment.  A word is enough.
+   * section alignment, and sections can ask for none.  A word is enough.
    */
 
-  if (loadinfo->textalign == 0)
+  if (loadinfo->textalign <= 1)
     {
       loadinfo->textalign = sizeof(uintptr_t);
     }
 
-  if (loadinfo->dataalign == 0)
+  if (loadinfo->dataalign <= 1)
     {
       loadinfo->dataalign = sizeof(uintptr_t);
     }
@@ -287,6 +481,7 @@ static void libelf_elfsize(FAR struct mod_loadinfo_s *loadinfo, bool alloc)
 
   loadinfo->textsize = textsize;
   loadinfo->datasize = datasize;
+  return true;
 }
 
 #ifdef CONFIG_LIBC_ELF_LOADTO_LMA
@@ -480,8 +675,8 @@ static inline int libelf_loadfile(FAR struct mod_loadinfo_s *loadinfo,
                    * xipbase is set, the address can't be aligned
                    */
 
-                  *pptr = (FAR uint8_t *)_ALIGN_UP((uintptr_t)*pptr,
-                                                   shdr->sh_addralign);
+                  *pptr = (FAR uint8_t *)ALIGN_UP((uintptr_t)*pptr,
+                                                  shdr->sh_addralign);
                 }
             }
 
@@ -749,9 +944,23 @@ int libelf_load(FAR struct mod_loadinfo_s *loadinfo)
       libelf_xipacquire(loadinfo);
     }
 
+  /* Count the slots of the GOT that the loader makes */
+
+  ret = libelf_gotcount(loadinfo);
+  if (ret < 0)
+    {
+      berr("ERROR: libelf_gotcount failed: %d\n", ret);
+      goto errout_with_buffers;
+    }
+
   /* Determine total size to allocate */
 
-  libelf_elfsize(loadinfo, true);
+  if (!libelf_elfsize(loadinfo, true))
+    {
+      ret = -ENOEXEC;
+      berr("ERROR: Invalid section size or alignment\n");
+      goto errout_with_buffers;
+    }
 
   /* Allocate (and zero) memory for the ELF file. */
 
@@ -869,9 +1078,21 @@ int libelf_load(FAR struct mod_loadinfo_s *loadinfo)
 
           if (loadinfo->datasize > 0)
             {
+#  if defined(CONFIG_ARCH_USE_DATA_HEAP) && \
+      defined(CONFIG_ARCH_USE_SEPARATED_SECTION)
+              loadinfo->datastart =
+                (uintptr_t)up_dataheap_memalign(".data",
+                                                loadinfo->dataalign,
+                                                loadinfo->datasize);
+#  elif defined(CONFIG_ARCH_USE_DATA_HEAP)
+              loadinfo->datastart =
+                (uintptr_t)up_dataheap_memalign(loadinfo->dataalign,
+                                                loadinfo->datasize);
+#  else
               loadinfo->datastart =
                 (uintptr_t)lib_memalign(loadinfo->dataalign,
                                         loadinfo->datasize);
+#  endif
               if (!loadinfo->datastart)
                 {
                   berr("ERROR: Failed to allocate the module's data\n");
@@ -990,9 +1211,23 @@ int libelf_load_with_addrenv(FAR struct mod_loadinfo_s *loadinfo)
       libelf_xipacquire(loadinfo);
     }
 
+  /* Count the slots of the GOT that the loader makes */
+
+  ret = libelf_gotcount(loadinfo);
+  if (ret < 0)
+    {
+      berr("ERROR: libelf_gotcount failed: %d\n", ret);
+      goto errout_with_buffers;
+    }
+
   /* Determine total size to allocate */
 
-  libelf_elfsize(loadinfo, false);
+  if (!libelf_elfsize(loadinfo, false))
+    {
+      ret = -ENOEXEC;
+      berr("ERROR: Invalid section size or alignment\n");
+      goto errout_with_buffers;
+    }
 
   ret = libelf_addrenv_alloc(loadinfo, loadinfo->textsize,
                              loadinfo->datasize);

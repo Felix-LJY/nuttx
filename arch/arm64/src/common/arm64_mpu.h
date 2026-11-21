@@ -263,6 +263,14 @@
     .mair_idx = MPU_MAIR_INDEX_SRAM,       \
   }
 
+#ifdef CONFIG_ARCH_STACK_PROTECT
+#  define MPU_HEAP_REGION_AREAS_NUM 5
+#  define MPU_BR_REGION_AREAS_NUM   3
+#else
+#  define MPU_HEAP_REGION_AREAS_NUM 3
+#  define MPU_BR_REGION_AREAS_NUM   2
+#endif
+
 #ifndef __ASSEMBLY__
 
 struct arm64_mpu_region_attr
@@ -312,20 +320,15 @@ struct arm64_mpu_config
 
 #define MPU_REGION_ENTRY(_name, _base, _size, _attr)  \
   {                                                   \
-    .name   = _name,                                  \
-    .base   = _base,                                  \
-    .size   = _size,                                  \
+    .name   = (_name),                                \
+    .base   = (_base),                                \
+    .size   = (_size),                                \
     .attr   = _attr,                                  \
   }
 
-/* Reference to the MPU configuration.
- *
- * This struct is defined and populated for each SoC (in the SoC definition),
- * and holds the build-time configuration information for the fixed MPU
- * regions enabled during kernel initialization.
- */
-
-extern const struct arm64_mpu_config g_mpu_config;
+#ifdef CONFIG_ARCH_ADDRENV
+extern int g_addrenv_heap_region[MPU_HEAP_REGION_AREAS_NUM];
+#endif
 
 /****************************************************************************
  * Public Function Prototypes
@@ -479,11 +482,11 @@ unsigned int mpu_configure_region(uintptr_t base, size_t size,
 void arm64_mpu_init(bool is_primary_core);
 
 /****************************************************************************
- * Name: arm64_mpu_init_regiions
+ * Name: arm64_mpu_init_regions
  *
  ****************************************************************************/
 
-void arm64_mpu_init_regiions(void);
+void arm64_mpu_init_regions(void);
 
 #endif  /* __ASSEMBLY__ */
 

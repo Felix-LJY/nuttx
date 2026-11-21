@@ -49,6 +49,8 @@
 #define STM32_FLASH_BANK1    0x08000000     /* 0x08000000-0x080fffff: Bank 1 (562/563/573xx devices) */
 #define STM32_FLASH_BANK2    0x08100000     /* 0x08100000-0x081fffff: Bank 2 (562/563/573xx devices) */
 #define STM32_FLASH_BASE     STM32_FLASH_BANK1
+#define STM32_EDATA_BASE     0x09000000     /* 0x09000000-0x09017fff: Flash high-cycle data (562/563/573xx devices) */
+
 /* SRAM1, SRAM2 and SRAM3 are contiguous on all STM32H5 parts, but their
  * sizes are family-dependent (STM32_SRAMx_SIZE comes from chip.h).
  */
@@ -61,6 +63,7 @@
 
 #define STM32_SYSMEM_MEM     0x0bf80000
 #define STM32_OTP_BASE       0x08FFF000     /* One-Time Programmable (OTP) memory base address */
+#define STM32_OTP_SIZE       2048
 #define STM32_SYSMEM_UID     0x08FFF800     /* The 96-bit unique device identifier */
 #define STM32_SYSMEM_FSIZE   0x08FFF80C     /* Size of Flash memory in Kbytes. */
 #define STM32_SYSMEM_PACKAGE 0x08FFF80E     /* Indicates the device's package type. */
@@ -81,7 +84,7 @@
 #define STM32_FDCAN_SRAM_BASE 0x4000ac00
 #define STM32_FDCAN2_BASE     0x4000a800
 #define STM32_FDCAN1_BASE     0x4000a400
-#define STM32_LPTIM2          0x40009400
+#define STM32_LPTIM2_BASE     0x40009400
 #define STM32_DTS_BASE        0x40008c00
 #define STM32_UART12_BASE     0x40008400
 #define STM32_UART9_BASE      0x40008000
@@ -184,6 +187,7 @@
 /* AHB3 Base Addresses ******************************************************/
 
 #define STM32_DEBUG_BASE      0x44024000
+#define STM32_DBGMCU_BASE     0x44024000
 #define STM32_EXTI_BASE       0x44022000
 #define STM32_RCC_BASE        0x44020C00
 #define STM32_PWR_BASE        0x44020800

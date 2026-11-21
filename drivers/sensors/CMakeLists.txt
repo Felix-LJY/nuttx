@@ -172,6 +172,14 @@ if(CONFIG_SENSORS)
       list(APPEND SRCS lps25h.c)
     endif()
 
+    if(CONFIG_SENSORS_LPS22HB)
+      list(APPEND SRCS lps22hb_uorb.c)
+    endif()
+
+    if(CONFIG_SENSORS_CCS811)
+      list(APPEND SRCS ccs811_uorb.c)
+    endif()
+
     if(CONFIG_ADXL345_I2C)
       list(APPEND SRCS adxl345_i2c.c)
     endif()
@@ -183,6 +191,10 @@ if(CONFIG_SENSORS)
       else()
         list(APPEND SRCS bh1749nuc.c)
       endif()
+    endif()
+
+    if(CONFIG_SENSORS_BH1745NUC)
+      list(APPEND SRCS bh1745nuc_uorb.c)
     endif()
 
     if(CONFIG_SENSORS_BH1750FVI)
@@ -237,7 +249,7 @@ if(CONFIG_SENSORS)
     endif()
 
     if(CONFIG_SENSORS_HTS221)
-      list(APPEND SRCS hts221.c)
+      list(APPEND SRCS hts221_uorb.c)
     endif()
 
     if(CONFIG_SENSORS_LIS2MDL)
@@ -293,7 +305,11 @@ if(CONFIG_SENSORS)
     endif()
 
     if(CONFIG_SENSORS_INA226)
-      list(APPEND SRCS ina226.c)
+      if(CONFIG_SENSORS_INA226_UORB)
+        list(APPEND SRCS ina226_uorb.c)
+      else()
+        list(APPEND SRCS ina226.c)
+      endif()
     endif()
 
     if(CONFIG_SENSORS_INA3221)
@@ -360,6 +376,10 @@ if(CONFIG_SENSORS)
       endif()
     endif()
 
+    if(CONFIG_SENSORS_TC74)
+      list(APPEND SRCS tc74.c)
+    endif()
+
     # QMI8658 6-axis IMU
 
     if(CONFIG_SENSORS_QMI8658)
@@ -378,6 +398,10 @@ if(CONFIG_SENSORS)
 
     if(CONFIG_SENSORS_ADXL362)
       list(APPEND SRCS adxl362_uorb.c)
+    endif()
+
+    if(CONFIG_SENSORS_ADXL367)
+      list(APPEND SRCS adxl367.c)
     endif()
 
     if(CONFIG_SENSORS_ADXL372)
@@ -430,6 +454,10 @@ if(CONFIG_SENSORS)
 
     if(CONFIG_SENSORS_AS5048A)
       list(APPEND SRCS as5048a.c)
+    endif()
+
+    if(CONFIG_SENSORS_SCL3300)
+      list(APPEND SRCS scl3300_uorb.c)
     endif()
 
   endif() # CONFIG_SPI
@@ -508,6 +536,11 @@ if(CONFIG_SENSORS)
 
   if(CONFIG_SENSORS_CXD5602PWBIMU)
     list(APPEND SRCS cxd5602pwbimu.c)
+  endif()
+
+  # SENSIRON SHTC3
+  if(CONFIG_SENSORS_SHTC3)
+    list(APPEND SRCS shtc3_uorb.c)
   endif()
 
   target_sources(drivers PRIVATE ${SRCS})

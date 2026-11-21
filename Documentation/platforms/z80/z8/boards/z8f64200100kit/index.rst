@@ -1,6 +1,8 @@
-==============
-z8f64200100kit
-==============
+====================
+Zilog Z8F64200100KIT
+====================
+
+.. tags:: arch:z80, chip:z8, vendor:zilog
 
 z8Encore! Microcontroller.  This port use the Zilog z8f64200100kit
 development kit, Z8F6423 part, and the Zilog ZDS-II Windows command line

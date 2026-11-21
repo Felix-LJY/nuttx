@@ -49,7 +49,7 @@
 #include "stm32_fsmc_m3m4_v1.h"
 #include "stm32_gpio.h"
 #include "stm32_i2c.h"
-#include "stm32_ltdc_m3m4_v1.h"
+#include "stm32_ltdc_v1v2.h"
 #include "stm32_opamp_m3m4_v1.h"
 #include "stm32_pwr.h"
 #include "stm32_rcc.h"
@@ -57,7 +57,6 @@
 #include "stm32_sdio_m3m4_v1.h"
 #include "stm32_spi.h"
 #include "stm32_i2s.h"
-#include "stm32_tim.h"
 #include "stm32_uart.h"
 #if defined(CONFIG_USBDEV) && defined(CONFIG_STM32_USB)
 #  include "stm32_usbdev.h"

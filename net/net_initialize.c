@@ -34,7 +34,7 @@
 #include "socket/socket.h"
 #include "devif/devif.h"
 #include "netdev/netdev.h"
-#include "ipforward/ipforward.h"
+#include "netforward/netforward.h"
 #include "sixlowpan/sixlowpan.h"
 #include "icmp/icmp.h"
 #include "icmpv6/icmpv6.h"
@@ -47,6 +47,8 @@
 #include "netlink/netlink.h"
 #include "route/route.h"
 #include "usrsock/usrsock.h"
+#include "vsock/vsock.h"
+#include "rpmsg/rpmsg.h"
 
 /****************************************************************************
  * Public Functions
@@ -107,6 +109,14 @@ void net_initialize(void)
   /* Initialize the user-space socket API */
 
   usrsock_initialize();
+#endif
+
+#ifdef CONFIG_NET_VSOCK
+  vsock_initialize();
+#endif
+
+#ifdef CONFIG_NET_RPMSG
+  rpmsg_socket_initialize();
 #endif
 }
 

@@ -1,8 +1,6 @@
 /****************************************************************************
  * arch/arm64/src/bcm2711/bcm2711_sdio.h
  *
- * Author: Matteo Golin <matteo.golin@gmail.com>
- *
  * SPDX-License-Identifier: Apache-2.0
  *
  * Licensed to the Apache Software Foundation (ASF) under one or more
@@ -42,13 +40,9 @@
 
 #ifndef __ASSEMBLY__
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -68,7 +62,6 @@ extern "C"
 
 struct sdio_dev_s *bcm2711_sdio_initialize(int slotno);
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

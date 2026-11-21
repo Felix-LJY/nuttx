@@ -20,8 +20,6 @@
 #
 ############################################################################
 
-include $(TOPDIR)/Make.defs
-
 CSRCS = stm32_boot.c stm32_bringup.c stm32_spi.c
 
 ifeq ($(CONFIG_ARCH_LEDS),y)
@@ -54,10 +52,10 @@ ifeq ($(CONFIG_STM32F429I_DISCO_ILI9341),y)
 CSRCS += stm32_ili93414ws.c
 endif
 
-ifeq ($(and \
-      $(CONFIG_STM32F429I_DISCO_ILI9341_LCDIFACE), \
-      $(CONFIG_STM32F429I_DISCO_ILI9341_FBIFACE), \
-      $(CONFIG_STM32_LTDC)),)
+ifneq ($(or \
+       $(CONFIG_STM32F429I_DISCO_ILI9341_LCDIFACE), \
+       $(CONFIG_STM32F429I_DISCO_ILI9341_FBIFACE), \
+       $(CONFIG_STM32_LTDC)),)
 CSRCS += stm32_lcd.c
 endif
 

@@ -1,3 +1,24 @@
+############################################################################
+# arch/avr/src/avrdx/Kconfig
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.  The
+# ASF licenses this file to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance with the
+# License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
+############################################################################
 #
 # For a description of the syntax of this configuration file,
 # see the file kconfig-language.txt in the NuttX tools repository.
@@ -59,15 +80,15 @@ config AVR_HAVE_USART5_ALT1
 		Chip has alternate pin position for USART 5
 
 # Available I/O ports (only those not common for all devices)
-config AVR_HAS_PORTB
+config AVR_HAVE_PORTB
 	bool
 	default n
 
-config AVR_HAS_PORTE
+config AVR_HAVE_PORTE
 	bool
 	default n
 
-config AVR_HAS_PORTG
+config AVR_HAVE_PORTG
 	bool
 	default n
 
@@ -110,9 +131,9 @@ config ARCH_CHIP_AVR128DA64
 	select AVR_HAVE_USART4_ALT1
 	select AVR_HAVE_USART_5
 	select AVR_HAVE_USART5_ALT1
-	select AVR_HAS_PORTB
-	select AVR_HAS_PORTE
-	select AVR_HAS_PORTG
+	select AVR_HAVE_PORTB
+	select AVR_HAVE_PORTE
+	select AVR_HAVE_PORTG
 	select AVR_HAVE_TWI0_ALT1
 	select AVR_HAVE_TWI1
 	select AVR_HAVE_TWI1_ALT1
@@ -130,9 +151,9 @@ config ARCH_CHIP_AVR128DB64
 	select AVR_HAVE_USART4_ALT1
 	select AVR_HAVE_USART_5
 	select AVR_HAVE_USART5_ALT1
-	select AVR_HAS_PORTB
-	select AVR_HAS_PORTE
-	select AVR_HAS_PORTG
+	select AVR_HAVE_PORTB
+	select AVR_HAVE_PORTE
+	select AVR_HAVE_PORTG
 	select AVR_HAVE_TWI0_ALT1
 	select AVR_HAVE_TWI1
 	select AVR_HAVE_TWI1_ALT1
@@ -165,7 +186,7 @@ config AVR_USART0
 
 choice AVR_USART0_MUX
 	prompt "USART0 pin selection"
-	depends on AVR_USART0
+	depends on AVR_USART0 || AVR_AVRDX_WS2812_USART0
 	default AVR_USART0_DEFAULT
 	---help---
 		Select which I/O pins will be driven by USART0 interface.
@@ -174,9 +195,11 @@ choice AVR_USART0_MUX
 
 config AVR_USART0_DEFAULT
 	bool "Default USART0 pinout"
+	depends on (!AVR_AVRDX_SWINT) || !((AVRDX_SWINT_PORT_IDX = 0) && ((AVRDX_SWINT_PIN_NUM = 0) || (AVRDX_SWINT_PIN_NUM = 1)))
 
 config AVR_USART0_ALT
 	bool "Alternate USART0 pinout"
+	depends on (!AVR_AVRDX_SWINT) || !((AVRDX_SWINT_PORT_IDX = 0) && ((AVRDX_SWINT_PIN_NUM = 4) || (AVRDX_SWINT_PIN_NUM = 5)))
 	---help---
 		Board is wired to use alternative I/O pins,
 		4-5 instead of 0-1 for TxD/RxD
@@ -197,7 +220,7 @@ config AVR_USART1
 
 choice AVR_USART1_MUX
 	prompt "USART1 pin selection"
-	depends on AVR_USART1
+	depends on AVR_USART1 || AVR_AVRDX_WS2812_USART1
 	default AVR_USART1_DEFAULT
 	---help---
 		Select which I/O pins will be driven by USART1 interface.
@@ -206,10 +229,12 @@ choice AVR_USART1_MUX
 
 config AVR_USART1_DEFAULT
 	bool "Default USART1 pinout"
+	depends on (!AVR_AVRDX_SWINT) || !((AVRDX_SWINT_PORT_IDX = 2) && ((AVRDX_SWINT_PIN_NUM = 0) || (AVRDX_SWINT_PIN_NUM = 1)))
 
 config AVR_USART1_ALT
-	depends on AVR_HAVE_USART1_ALT1
 	bool "Alternate USART1 pinout"
+	depends on AVR_HAVE_USART1_ALT1
+	depends on (!AVR_AVRDX_SWINT) || !((AVRDX_SWINT_PORT_IDX = 2) && ((AVRDX_SWINT_PIN_NUM = 4) || (AVRDX_SWINT_PIN_NUM = 5)))
 	---help---
 		Board is wired to use alternative I/O pins,
 		4-5 instead of 0-1 for TxD/RxD
@@ -230,7 +255,7 @@ config AVR_USART2
 
 choice AVR_USART2_MUX
 	prompt "USART2 pin selection"
-	depends on AVR_USART2
+	depends on AVR_USART2 || AVR_AVRDX_WS2812_USART2
 	default AVR_USART2_DEFAULT
 	---help---
 		Select which I/O pins will be driven by USART2 interface.
@@ -239,10 +264,12 @@ choice AVR_USART2_MUX
 
 config AVR_USART2_DEFAULT
 	bool "Default USART2 pinout"
+	depends on (!AVR_AVRDX_SWINT) || !((AVRDX_SWINT_PORT_IDX = 5) && ((AVRDX_SWINT_PIN_NUM = 0) || (AVRDX_SWINT_PIN_NUM = 1)))
 
 config AVR_USART2_ALT
-	depends on AVR_HAVE_USART2_ALT1
 	bool "Alternate USART2 pinout"
+	depends on AVR_HAVE_USART2_ALT1
+	depends on (!AVR_AVRDX_SWINT) || !((AVRDX_SWINT_PORT_IDX = 5) && ((AVRDX_SWINT_PIN_NUM = 4) || (AVRDX_SWINT_PIN_NUM = 5)))
 	---help---
 		Board is wired to use alternative I/O pins,
 		4-5 instead of 0-1 for TxD/RxD
@@ -263,7 +290,7 @@ config AVR_USART3
 
 choice AVR_USART3_MUX
 	prompt "USART3 pin selection"
-	depends on AVR_USART3
+	depends on AVR_USART3 || AVR_AVRDX_WS2812_USART3
 	default AVR_USART3_DEFAULT
 	---help---
 		Select which I/O pins will be driven by USART3 interface.
@@ -272,9 +299,11 @@ choice AVR_USART3_MUX
 
 config AVR_USART3_DEFAULT
 	bool "Default USART3 pinout"
+	depends on (!AVR_AVRDX_SWINT) || !((AVRDX_SWINT_PORT_IDX = 1) && ((AVRDX_SWINT_PIN_NUM = 0) || (AVRDX_SWINT_PIN_NUM = 1)))
 
 config AVR_USART3_ALT
 	depends on AVR_HAVE_USART3_ALT1
+	depends on (!AVR_AVRDX_SWINT) || !((AVRDX_SWINT_PORT_IDX = 1) && ((AVRDX_SWINT_PIN_NUM = 4) || (AVRDX_SWINT_PIN_NUM = 5)))
 	bool "Alternate USART3 pinout"
 	---help---
 		Board is wired to use alternative I/O pins,
@@ -296,7 +325,7 @@ config AVR_USART4
 
 choice AVR_USART4_MUX
 	prompt "USART4 pin selection"
-	depends on AVR_USART4
+	depends on AVR_USART4 || AVR_AVRDX_WS2812_USART4
 	default AVR_USART4_DEFAULT
 	---help---
 		Select which I/O pins will be driven by USART4 interface.
@@ -305,10 +334,12 @@ choice AVR_USART4_MUX
 
 config AVR_USART4_DEFAULT
 	bool "Default USART4 pinout"
+	depends on (!AVR_AVRDX_SWINT) || !((AVRDX_SWINT_PORT_IDX = 4) && ((AVRDX_SWINT_PIN_NUM = 0) || (AVRDX_SWINT_PIN_NUM = 1)))
 
 config AVR_USART4_ALT
-	depends on AVR_HAVE_USART4_ALT1
 	bool "Alternate USART4 pinout"
+	depends on AVR_HAVE_USART4_ALT1
+	depends on (!AVR_AVRDX_SWINT) || !((AVRDX_SWINT_PORT_IDX = 4) && ((AVRDX_SWINT_PIN_NUM = 4) || (AVRDX_SWINT_PIN_NUM = 5)))
 	---help---
 		Board is wired to use alternative I/O pins,
 		4-5 instead of 0-1 for TxD/RxD
@@ -329,7 +360,7 @@ config AVR_USART5
 
 choice AVR_USART5_MUX
 	prompt "USART5 pin selection"
-	depends on AVR_USART5
+	depends on AVR_USART5 || AVR_AVRDX_WS2812_USART5
 	default AVR_USART5_DEFAULT
 	---help---
 		Select which I/O pins will be driven by USART5 interface.
@@ -338,10 +369,12 @@ choice AVR_USART5_MUX
 
 config AVR_USART5_DEFAULT
 	bool "Default USART5 pinout"
+	depends on (!AVR_AVRDX_SWINT) || !((AVRDX_SWINT_PORT_IDX = 6) && ((AVRDX_SWINT_PIN_NUM = 0) || (AVRDX_SWINT_PIN_NUM = 1)))
 
 config AVR_USART5_ALT
-	depends on AVR_HAVE_USART5_ALT1
 	bool "Alternate USART5 pinout"
+	depends on AVR_HAVE_USART5_ALT1
+	depends on (!AVR_AVRDX_SWINT) || !((AVRDX_SWINT_PORT_IDX = 6) && ((AVRDX_SWINT_PIN_NUM = 4) || (AVRDX_SWINT_PIN_NUM = 5)))
 	---help---
 		Board is wired to use alternative I/O pins,
 		4-5 instead of 0-1 for TxD/RxD
@@ -368,13 +401,18 @@ choice AVR_TWI0_ALT
 
 config AVR_TWI0_ALT0
 	bool "Default TWI0 pinout"
+	depends on (!AVR_AVRDX_SWINT) || !((AVRDX_SWINT_PORT_IDX = 0) && ((AVRDX_SWINT_PIN_NUM = 2) || (AVRDX_SWINT_PIN_NUM = 3)))
+	# Note - not excluding dual mode pins since dual mode is
+	# currently unsupported.
 
 config AVR_TWI0_ALT1
 	bool "Alternate TWI0 pinout 1"
 	depends on AVR_HAVE_TWI0_ALT1
+	depends on (!AVR_AVRDX_SWINT) || !((AVRDX_SWINT_PORT_IDX = 0) && ((AVRDX_SWINT_PIN_NUM = 2) || (AVRDX_SWINT_PIN_NUM = 3)))
 
 config AVR_TWI0_ALT2
 	bool "Alternate TWI0 pinout 2"
+	depends on (!AVR_AVRDX_SWINT) || !((AVRDX_SWINT_PORT_IDX = 2) && ((AVRDX_SWINT_PIN_NUM = 2) || (AVRDX_SWINT_PIN_NUM = 3)))
 
 endchoice
 
@@ -436,13 +474,18 @@ choice AVR_TWI1_ALT
 
 config AVR_TWI1_ALT0
 	bool "Default TWI1 pinout"
+	depends on (!AVR_AVRDX_SWINT) || !((AVRDX_SWINT_PORT_IDX = 5) && ((AVRDX_SWINT_PIN_NUM = 2) || (AVRDX_SWINT_PIN_NUM = 3)))
+	# Note - not excluding dual mode pins since dual mode is
+	# currently unsupported.
 
 config AVR_TWI1_ALT1
 	bool "Alternate TWI1 pinout 1"
 	depends on AVR_HAVE_TWI1_ALT1
+	depends on (!AVR_AVRDX_SWINT) || !((AVRDX_SWINT_PORT_IDX = 5) && ((AVRDX_SWINT_PIN_NUM = 2) || (AVRDX_SWINT_PIN_NUM = 3)))
 
 config AVR_TWI1_ALT2
 	bool "Alternate TWI1 pinout 2"
+	depends on (!AVR_AVRDX_SWINT) || !((AVRDX_SWINT_PORT_IDX = 1) && ((AVRDX_SWINT_PIN_NUM = 2) || (AVRDX_SWINT_PIN_NUM = 3)))
 
 endchoice
 
@@ -519,6 +562,75 @@ config AVR_TWI_FORBID_NOSTART
 endif
 
 endmenu # AVR DA/DB Peripheral Selections
+
+menu "AVR DA/DB Drivers"
+
+source "arch/avr/src/avrdx/Kconfig-drivers"
+
+endmenu # AVR DA/DB Drivers
+
+config AVR_AVRDX_SWINT
+	bool "Enable software interrupt emulation"
+	default false
+	---help---
+		AVR DA/DB chips do not have software interrupt functionality.
+		It can, however, be emulated using interrupt on I/O pin
+		(triggered by changing output logical level on that pin
+		from software.)
+
+		Do note that the pin will be actually configured as output,
+		nothing must be connected to it.
+
+		Some drivers depend on this.
+
+config AVRDX_SWINT_GPIO_MUX
+	bool "Use GPIO multiplexer"
+	default false
+	depends on AVR_AVRDX_SWINT
+	depends on AVR_AVRDX_GPIO_ISR_MUX
+	---help---
+		This chip only has single interrupt vector for all pins
+		on the port. If you are not using dedicated port for software
+		interrupt emulation and need different interrupt handlers
+		for different pin events, you need to use GPIO multiplexer
+
+		Say Y in that case.
+
+config AVRDX_SWINT_PORT_IDX
+	int "Software interrupt emulation I/O port"
+	default -1
+	range -1 6
+	depends on AVR_AVRDX_SWINT
+	---help---
+		Enter index of I/O port that will be used for software
+		interrupt emulation. Port A corresponds to index 0, port B
+		to 1 etc.
+
+config AVRDX_SWINT_PIN_NUM
+	int "Software interrupt emulation I/O pin"
+	default -1
+	range -1 7
+	depends on AVR_AVRDX_SWINT
+	---help---
+		Enter index of I/O pin on the port selected above that will
+		be used for software interrupt emulation. Pins are indexed
+		from 0.
+
+config AVRDX_SWINT_MAX_VECTORS
+	int "Software interrupt vector limit"
+	default 2
+	range 1 32
+	depends on AVR_AVRDX_SWINT
+	---help---
+		Enter maximum number of software interrupt emulation users.
+		Each user receives its own software interrupt vector and
+		can provide its own handler.
+
+		Memory for handler pointers is preallocated to this number
+		of slots. Variables holding vector number are configured
+		to size that fits all vectors.
+
+		At most 32 vectors may be provided.
 
 choice
 	prompt "Internal High-Frequency Oscillator clock speed"
@@ -641,5 +753,34 @@ config AVRDX_ARCH_UDELAY_NO_OSC32K
 		will fail and wait for maximum amount of time.
 
 		Say Y if your board does not use 32.768kHz clock.
+
+menuconfig AVRDX_HIGH_PRIO_INTERRUPTS
+	bool "Enable high priority interrupts"
+	default n
+	---help---
+		Enabling this option unlocks fine grained selection of interrupt handlers
+		to be excluded from generic interrupt handling. Instead, your application/board
+		code will provide handler suited to your specific needs.
+
+		Generic interrupt handling always saves context of the process that was interrupted
+		and then calls into the operating system common code which takes care of driver
+		code invocation, scheduling etc. This takes time which may not be desirable
+		for interrupts that execute often or need to have strict response times.
+
+		However, since (if) your implementation does not do that, your interrupt handler
+		must not communicate with the operating system. It is also not possible to disable
+		generic interrupt handling for interrupt vectors used by enabled drivers.
+
+		More comprehensive information can be found in Documentation, in the guide article
+		named High Performance: Zero Latency Interrupts, Maskable Nested Interrupts.
+
+		Interrupt handlers to be excluded from generic interrupt handling are specified
+		by "Peripheral source" codes from the datasheet.
+
+if AVRDX_HIGH_PRIO_INTERRUPTS
+
+source "arch/avr/src/avrdx/Kconfig-hpintr"
+
+endif # AVRDX_HIGH_PRIO_INTERRUPTS
 
 endif # if ARCH_CHIP_AVRDX

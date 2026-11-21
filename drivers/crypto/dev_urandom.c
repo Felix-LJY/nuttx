@@ -86,7 +86,7 @@ static ssize_t devurand_read(FAR struct file *filep, FAR char *buffer,
                              size_t buflen);
 static ssize_t devurand_write(FAR struct file *filep, FAR const char *buffer,
                               size_t buflen);
-static int devurand_poll(FAR struct file *filep, FAR struct pollfd *fds,
+static int devurand_poll(FAR struct file *filep, FAR struct pollfd_s *fds,
                          bool setup);
 
 /****************************************************************************
@@ -286,7 +286,7 @@ static ssize_t devurand_write(FAR struct file *filep, FAR const char *buffer,
  * Name: devurand_poll
  ****************************************************************************/
 
-static int devurand_poll(FAR struct file *filep, FAR struct pollfd *fds,
+static int devurand_poll(FAR struct file *filep, FAR struct pollfd_s *fds,
                          bool setup)
 {
   if (setup)
@@ -324,7 +324,7 @@ void devurandom_register(void)
   g_prng.state.z = g_prng.state.x << 25;
 #endif
 
-  register_driver("/dev/urandom", &g_urand_fops, 0600, NULL);
+  register_driver("/dev/urandom", &g_urand_fops, 0644, NULL);
 }
 
 #endif /* CONFIG_DEV_URANDOM && CONFIG_DEV_URANDOM_ARCH */

@@ -26,10 +26,15 @@
 #include <assert.h>
 #include <nuttx/debug.h>
 #include <errno.h>
+#include <gcov.h>
 
 #include <nuttx/arch.h>
+#include <nuttx/fdpic.h>
 #include <nuttx/lib/lib.h>
 #include <nuttx/lib/elf.h>
+
+#include "libc.h"
+#include "elf/elf.h"
 
 /****************************************************************************
  * Public Functions
@@ -39,7 +44,9 @@
  * Name: libelf_uninit
  *
  * Description:
- *   Uninitialize module resources.
+ *   Uninitialize module resources.  Gives up everything the module holds,
+ *   the DT_NEEDED libraries included, so the caller must hold the last
+ *   reference.
  *
  ****************************************************************************/
 
@@ -59,12 +66,15 @@ int libelf_uninit(FAR struct module_s *modp)
     }
 #endif
 
-  /* Is there an uninitializer? */
+  /* Is there an uninitializer?  Like the constructors, an FDPIC object's
+   * destructors reach its globals through its own data base, which the
+   * unloading thread does not carry.
+   */
 
   array = (FAR void (**)(void))modp->finiarr;
   for (i = 0; i < modp->nfini; i++)
     {
-      array[i]();
+      fdpic_call(0, array[i], modp->gotbase);
     }
 
   if (modp->modinfo.uninitializer != NULL)
@@ -81,22 +91,46 @@ int libelf_uninit(FAR struct module_s *modp)
           return ret;
         }
 
-      libelf_freesymtab(modp);
-
       /* Nullify so that the uninitializer cannot be called again */
 
       modp->modinfo.uninitializer = NULL;
-#if defined(CONFIG_FS_PROCFS) && !defined(CONFIG_FS_PROCFS_EXCLUDE_MODULE)
       modp->modinfo.arg           = NULL;
-      modp->modinfo.exports       = NULL;
-      modp->modinfo.nexports      = 0;
-#endif
     }
+
+  /* Free the symbol table that the module exports.  It is built for
+   * every loaded module, whether or not it has an uninitializer.
+   */
+
+  libelf_freesymtab(modp);
+  modp->modinfo.exports  = NULL;
+  modp->modinfo.nexports = 0;
+
+#ifdef HAVE_LIBC_ELF_PIN
+  /* Give the pin back before the text goes out of use.  This does nothing if
+   * the loader took no pin.
+   */
+
+  libelf_pinrelease(&modp->pinfile);
+#endif
+
+#if defined(CONFIG_TLS_EMUTLS) && !defined(__KERNEL__)
+  /* Free the copies of the __thread variables of the module */
+
+  if (g_tls_emutls_release != NULL)
+    {
+      g_tls_emutls_release(modp->dataalloc, modp->datasize);
+    }
+#endif
 
   /* Release resources held by the module */
 
   if (modp->textalloc != NULL || modp->dataalloc != NULL)
     {
+      /* The coverage data of the module must not outlive it */
+
+      __gcov_unload(modp->textalloc, modp->textsize);
+      __gcov_unload(modp->dataalloc, modp->datasize);
+
       /* Free the module memory and nullify so that the memory cannot
        * be freed again
        *
@@ -125,6 +159,8 @@ int libelf_uninit(FAR struct module_s *modp)
                 }
 #  endif
 
+              __gcov_unload(modp->sectalloc[i],
+                            lib_malloc_size(modp->sectalloc[i]));
               lib_free(modp->sectalloc[i]);
             }
 
@@ -148,6 +184,28 @@ int libelf_uninit(FAR struct module_s *modp)
 #  endif
 #endif
         }
+      else if (modp->gotbase != 0)
+        {
+          /* An FDPIC object, which placed its two segments separately.  Free
+           * each one.  If the text stayed on the media, it was never
+           * allocated, thus leave it.
+           */
+
+          if (modp->xipbase == 0)
+            {
+#ifdef CONFIG_ARCH_USE_TEXT_HEAP
+              up_textheap_free((FAR void *)modp->textalloc);
+#else
+              lib_free((FAR void *)modp->textalloc);
+#endif
+            }
+
+#ifdef CONFIG_ARCH_USE_DATA_HEAP
+          up_dataheap_free((FAR void *)modp->dataalloc);
+#else
+          lib_free((FAR void *)modp->dataalloc);
+#endif
+        }
       else
         {
           lib_free((FAR void *)modp->textalloc);
@@ -155,10 +213,8 @@ int libelf_uninit(FAR struct module_s *modp)
 
       modp->textalloc = NULL;
       modp->dataalloc = NULL;
-#if defined(CONFIG_FS_PROCFS) && !defined(CONFIG_FS_PROCFS_EXCLUDE_MODULE)
       modp->textsize  = 0;
       modp->datasize  = 0;
-#endif
     }
 
 #if CONFIG_LIBC_ELF_MAXDEPEND > 0
@@ -177,45 +233,57 @@ int libelf_uninit(FAR struct module_s *modp)
  *   Remove a previously installed module from memory.
  *
  * Input Parameters:
- *   handle - The module handler previously returned by libelf_insert().
+ *   registry - The registry the module is on.
+ *   handle   - The module handler previously returned by libelf_insert().
  *
  * Returned Value:
  *   Zero (OK) on success.  On any failure, -1 (ERROR) is returned the
  *   errno value is set appropriately.
  *
+ * Assumptions:
+ *   The caller holds the lock of the registry.
+ *
  ****************************************************************************/
 
-int libelf_remove(FAR void *handle)
+int libelf_remove(FAR struct list_node *registry, FAR void *handle)
 {
   FAR struct module_s *modp = (FAR struct module_s *)handle;
   int ret;
 
   DEBUGASSERT(modp != NULL);
 
-  /* Get exclusive access to the module registry */
-
-  libelf_registry_lock();
-
   /* Verify that the module is in the registry */
 
-  ret = libelf_registry_verify(modp);
+  ret = libelf_registry_verify(registry, modp);
   if (ret < 0)
     {
       berr("ERROR: Failed to verify module: %d\n", ret);
-      goto errout_with_lock;
+      goto errout;
     }
 
   /* Give back a reference.  The module goes only when the last one does,
-   * so an rmmod() cannot pull a module out from under a dlopen() that is
-   * still holding it.
+   * so an rmmod() cannot pull a module out from under a dlopen(), or from
+   * under a module that names it in DT_NEEDED.
    */
 
   if (modp->nopen > 1)
     {
       modp->nopen--;
-      libelf_registry_unlock();
       return OK;
     }
+
+#if CONFIG_LIBC_ELF_MAXDEPEND > 0
+  /* The last reference stays while other modules depend on this one: a
+   * failed close must not let the module go later, under the caller.
+   */
+
+  if (modp->dependents > 0)
+    {
+      berr("ERROR: Module has dependents: %d\n", modp->dependents);
+      ret = -EBUSY;
+      goto errout;
+    }
+#endif
 
   modp->nopen = 0;
 
@@ -223,27 +291,58 @@ int libelf_remove(FAR void *handle)
   if (ret < 0)
     {
       berr("ERROR: Failed to uninitialize module %d\n", ret);
-      goto errout_with_lock;
+      modp->nopen = 1;
+      goto errout;
     }
 
-  /* Remove the module from the registry */
+  /* Remove the module from the registry and free the registry entry */
 
-  ret = libelf_registry_del(modp);
-  if (ret < 0)
-    {
-      berr("ERROR: Failed to remove the module from the registry: %d\n",
-           ret);
-      goto errout_with_lock;
-    }
+  libelf_registry_del(modp);
+  lib_free(modp);
+  return OK;
 
-  libelf_registry_unlock();
-
-  /* And free the registry entry */
-
-  return ret;
-
-errout_with_lock:
-  libelf_registry_unlock();
+errout:
   set_errno(-ret);
   return ERROR;
+}
+
+/****************************************************************************
+ * Name: libelf_removeall
+ *
+ * Description:
+ *   Give back every reference that dlopen() took in a registry, as at
+ *   process exit.  A module that another module still depends on stays,
+ *   and goes with its last dependent.
+ *
+ * Input Parameters:
+ *   registry - The registry.
+ *
+ * Assumptions:
+ *   The caller holds the lock of the registry.
+ *
+ ****************************************************************************/
+
+void libelf_removeall(FAR struct list_node *registry)
+{
+  FAR struct module_s *modp;
+  FAR struct module_s *next;
+
+  /* A removal can unload other modules of the list, so start again after
+   * each one.
+   */
+
+  list_for_every_entry_safe(registry, modp, next, struct module_s, node)
+    {
+      if (modp->nopen > 0)
+        {
+          modp->nopen = 0;
+#if CONFIG_LIBC_ELF_MAXDEPEND > 0
+          if (modp->dependents == 0)
+#endif
+            {
+              libelf_remove(registry, modp);
+              next = list_first_entry(registry, struct module_s, node);
+            }
+        }
+    }
 }

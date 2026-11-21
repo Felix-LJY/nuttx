@@ -28,6 +28,7 @@
  ****************************************************************************/
 
 #include <nuttx/config.h>
+#include <stdbool.h>
 #include <nuttx/irq.h>
 
 #ifdef CONFIG_USBHOST_MAX3421E
@@ -465,11 +466,8 @@ struct max3421e_lowerhalf_s
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -504,7 +502,6 @@ struct usbhost_connection_s; /* Forward reference */
 FAR struct usbhost_connection_s *
 max3421e_usbhost_initialize(FAR const struct max3421e_lowerhalf_s *lower);
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

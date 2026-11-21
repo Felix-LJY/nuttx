@@ -1,6 +1,8 @@
 /****************************************************************************
  * arch/arm64/src/bcm2711/bcm2711_cpustart.h
  *
+ * SPDX-License-Identifier: Apache-2.0
+ *
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.  The
@@ -33,18 +35,13 @@
 
 #ifndef __ASSEMBLY__
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 void bcm2711_cpustart(void);
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

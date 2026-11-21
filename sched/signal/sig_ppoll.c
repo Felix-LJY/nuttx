@@ -83,29 +83,18 @@ int ppoll(FAR struct pollfd *fds, nfds_t nfds,
 
   flags = enter_critical_section();
 
-  /* Save a copy of the old sigprocmask and install
-   * the new (temporary) sigprocmask
+  /* Save a copy of the old sigprocmask and install the new (temporary)
+   * sigprocmask.  Check if there is a pending signal corresponding to one
+   * of the signals that will be unblocked by the new sigprocmask.
    */
 
-  saved_sigprocmask = rtcb->sigprocmask;
-  if (sigmask)
-    {
-      rtcb->sigprocmask = *sigmask;
-    }
-
-  sigemptyset(&rtcb->sigwaitmask);
-
-  /* Check if there is a pending signal corresponding to one of the
-   * signals that will be unblocked by the new sigprocmask.
-   */
-
-  if (nxsig_unmask_pendingsignal())
+  if (nxsig_waitmask_set(sigmask, &saved_sigprocmask))
     {
       /* Dispatching one or more of the signals is sufficient to cause
        * us to not wait. Restore the original sigprocmask.
        */
 
-      rtcb->sigprocmask = saved_sigprocmask;
+      nxsig_restoremask(rtcb, &saved_sigprocmask);
       leave_critical_section(flags);
       set_errno(EINTR);
     }
@@ -117,15 +106,15 @@ int ppoll(FAR struct pollfd *fds, nfds_t nfds,
 
       if (timeout_ts)
         {
-          timeout = timeout_ts->tv_sec * MSEC_PER_SEC +
-                    NSEC2MSEC(timeout_ts->tv_nsec);
+          timeout = (int)(timeout_ts->tv_sec * MSEC_PER_SEC +
+                          timeout_ts->tv_nsec / NSEC_PER_MSEC);
         }
 
       ret = poll(fds, nfds, timeout);
 
       /* We are running again, restore the original sigprocmask */
 
-      rtcb->sigprocmask = saved_sigprocmask;
+      nxsig_restoremask(rtcb, &saved_sigprocmask);
       leave_critical_section(flags);
 
       /* Now, handle the (rare?) case where (a) a blocked signal was received

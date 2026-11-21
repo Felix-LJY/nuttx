@@ -25,11 +25,13 @@
  ****************************************************************************/
 
 #include <nuttx/config.h>
+#include <nuttx/sched_note.h>
 
 #include <sys/types.h>
 #include <sched.h>
 #include <assert.h>
 #include <nuttx/debug.h>
+#include <nuttx/seqlock.h>
 #include <time.h>
 
 #include "sched/sched.h"
@@ -45,8 +47,8 @@
          if (pid > 0 && \
              elapsed > CONFIG_SCHED_CRITMONITOR_MAXTIME_PREEMPTION) \
            { \
-             CRITMONITOR_PANIC("PID %d hold sched lock too long %"PRIu32"\n", \
-                               pid, elapsed); \
+             CRITMONITOR_PANIC("PID %d hold sched lock too long %ju\n", \
+                               pid, (uintmax_t)elapsed); \
            } \
        } \
      while (0)
@@ -61,8 +63,8 @@
          if (pid > 0 && \
              elapsed > CONFIG_SCHED_CRITMONITOR_MAXTIME_CSECTION) \
            { \
-             CRITMONITOR_PANIC("PID %d hold critical section too long %" \
-                               PRIu32 "\n", pid, elapsed); \
+             CRITMONITOR_PANIC("PID %d hold critical section too long " \
+                               "%ju\n", pid, (uintmax_t)elapsed); \
            } \
        } \
      while (0)
@@ -70,7 +72,7 @@
 #  define CHECK_CSECTION(pid, elapsed)
 #endif
 
-#if CONFIG_SCHED_CRITMONITOR_MAXTIME_BUSYWAIT >= 0
+#if CONFIG_SCHED_CRITMONITOR_MAXTIME_BUSYWAIT > 0
 #  define CHECK_BUSYWAIT(pid, elapsed) \
      do \
        { \
@@ -78,7 +80,8 @@
              elapsed > CONFIG_SCHED_CRITMONITOR_MAXTIME_BUSYWAIT) \
            { \
              CRITMONITOR_PANIC("PID %d wait for critical section or spin" \
-                               "lock too long %" PRIu32 "\n", pid, elapsed); \
+                               "lock too long %ju\n", \
+                               pid, (uintmax_t)elapsed); \
            } \
        } \
      while (0)
@@ -93,8 +96,8 @@
          if (pid > 0 && \
              elapsed > CONFIG_SCHED_CRITMONITOR_MAXTIME_THREAD) \
            { \
-             CRITMONITOR_PANIC("PID %d execute too long %"PRIu32"\n", \
-                               pid, elapsed); \
+             CRITMONITOR_PANIC("PID %d execute too long %ju\n", \
+                               pid, (uintmax_t)elapsed); \
            } \
        } \
      while (0)
@@ -108,6 +111,21 @@
 
 #if CONFIG_SCHED_CRITMONITOR_MAXTIME_PREEMPTION >= 0
 static spinlock_t g_crimonitor_lock = SP_UNLOCKED;
+#endif
+
+/* g_thread_tcb[cpu] is the thread that runs on the CPU (NULL during a
+ * context switch), and g_thread_start[cpu] is the time since which the
+ * run time of the CPU is not counted.  A context switch changes the values
+ * of its own CPU, and clock_cpuload() changes the values of all CPUs.
+ * They read the time and change the values under g_thread_lock[cpu].
+ * nxsched_critmon_runtime() reads them without a lock and reads again if
+ * they changed.
+ */
+
+#if CONFIG_SCHED_CRITMONITOR_MAXTIME_THREAD >= 0
+static seqcount_t g_thread_lock[CONFIG_SMP_NCPUS];
+static FAR struct tcb_s *g_thread_tcb[CONFIG_SMP_NCPUS];
+static clock_t g_thread_start[CONFIG_SMP_NCPUS];
 #endif
 
 /****************************************************************************
@@ -134,52 +152,37 @@ clock_t g_busywait_total[CONFIG_SMP_NCPUS];
  ****************************************************************************/
 
 /****************************************************************************
- * Name: nxsched_critmon_cpuload
+ * Name: nxsched_critmon_account
  *
  * Description:
- *   Update the running time of all running threads when switching threads
+ *   Add the time since the last update of a CPU to the run time and to the
+ *   CPU load of the thread that runs on the CPU.
  *
  * Input Parameters:
- *   tcb   - The task that we are performing the load operations on.
- *   current - The current time
- *   tick - The ticks that we process in this cpuload.
+ *   tcb     - The thread that runs on the CPU.
+ *   cpu     - The CPU.
+ *   current - The current time.
  *
  * Returned Value:
- *   None
+ *   The time added.
+ *
+ * Assumptions:
+ *   The caller holds g_thread_lock[cpu].
  *
  ****************************************************************************/
 
-#ifdef CONFIG_SCHED_CPULOAD_CRITMONITOR
-static void nxsched_critmon_cpuload(FAR struct tcb_s *tcb, clock_t current,
-                                    clock_t tick)
+#if CONFIG_SCHED_CRITMONITOR_MAXTIME_THREAD >= 0
+static clock_t nxsched_critmon_account(FAR struct tcb_s *tcb, int cpu,
+                                       clock_t current)
 {
-  int i;
+  clock_t elapsed = current - g_thread_start[cpu];
 
-  UNUSED(i);
-
-  /* Update the cpuload of the thread ready to be suspended */
-
-  nxsched_process_taskload_ticks(tcb, tick);
-
-  /* Update the cpuload of threads running on other CPUs */
-
-#  ifdef CONFIG_SMP
-  for (i = 0; i < CONFIG_SMP_NCPUS; i++)
-    {
-      FAR struct tcb_s *rtcb = current_task(i);
-
-      if (tcb->cpu == rtcb->cpu)
-        {
-          continue;
-        }
-
-      nxsched_process_taskload_ticks(rtcb, tick);
-
-      /* Update start time, avoid repeated statistics when the next call */
-
-      rtcb->run_start = current;
-    }
+  g_thread_start[cpu] = current;
+  tcb->run_time += elapsed;
+#  ifdef CONFIG_SCHED_CPULOAD_CRITMONITOR
+  nxsched_process_taskload_ticks(tcb, elapsed);
 #  endif
+  return elapsed;
 }
 #endif
 
@@ -354,38 +357,62 @@ void nxsched_critmon_busywait(bool state, FAR void *caller)
 #endif /* CONFIG_SCHED_CRITMONITOR_MAXTIME_BUSYWAIT >= 0 */
 
 /****************************************************************************
- * Name: nxsched_switch_critmon
+ * Name: nxsched_suspend_critmon
  *
  * Description:
- *   Called when a thread is switched, update the critical monitor data.
+ *   Called when a thread suspends execution, perhaps terminating a
+ *   critical section or a non-preemptible state.
  *
- * Input Parameters:
- *   from - The thread that is being switched out.
- *   to   - The thread that is being switched in.
- *
- * Returned Value:
- *   None
+ * Assumptions:
+ *   - Called within a critical section.
+ *   - Might be called from an interrupt handler
  *
  ****************************************************************************/
 
-void nxsched_switch_critmon(FAR struct tcb_s *from, FAR struct tcb_s *to)
+void nxsched_suspend_critmon(FAR struct tcb_s *tcb)
 {
+#ifdef CONFIG_SCHED_INSTRUMENTATION_THREADTIME
+  static clock_t threshold = CLOCK_MAX;
+#endif
+#if CONFIG_SCHED_CRITMONITOR_MAXTIME_THREAD >= 0
+  irqstate_t flags = write_seqlock_irqsave(&g_thread_lock[this_cpu()]);
+#endif
   clock_t current = perf_gettime();
-  clock_t elapsed = current - from->run_start;
+#if CONFIG_SCHED_CRITMONITOR_MAXTIME_THREAD >= 0
+  clock_t elapsed = nxsched_critmon_account(tcb, this_cpu(), current);
 
-#ifdef CONFIG_SCHED_CPULOAD_CRITMONITOR
-  clock_t tick = elapsed * CLOCKS_PER_SEC / perf_getfreq();
+  g_thread_tcb[this_cpu()] = NULL;
+  write_sequnlock_irqrestore(&g_thread_lock[this_cpu()], flags);
+#else
+  clock_t elapsed = 0;
 
-  nxsched_critmon_cpuload(from, current, tick);
+  UNUSED(current);
+  UNUSED(elapsed);
+#endif
+
+#ifdef CONFIG_SCHED_INSTRUMENTATION_THREADTIME
+  if (threshold == CLOCK_MAX)
+    {
+      threshold =
+        CONFIG_SCHED_INSTRUMENTATION_THREAD_RUNTIME_DURATION *
+        (clock_t)perf_getfreq() / USEC_PER_SEC;
+    }
+
+  if (!is_idle_task(tcb) && elapsed > threshold)
+    {
+      clock_t us = elapsed * USEC_PER_SEC / perf_getfreq();
+
+      sched_note_threadtime(us);
+    }
 #endif
 
 #if CONFIG_SCHED_CRITMONITOR_MAXTIME_THREAD >= 0
-  from->run_time += elapsed;
-  to->run_start = current;
-  if (elapsed > from->run_max)
+  /* Check run_max after the unlock: a panic reads the CPU load */
+
+  if (elapsed > tcb->run_max)
     {
-      from->run_max = elapsed;
-      CHECK_THREAD(from->pid, elapsed);
+      tcb->run_max = elapsed;
+      CHECK_THREAD(tcb->pid, elapsed);
     }
 #endif
 
@@ -393,18 +420,18 @@ void nxsched_switch_critmon(FAR struct tcb_s *from, FAR struct tcb_s *to)
 
   /* Did this task disable preemption? */
 
-  if (nxsched_islocked_tcb(from))
+  if (nxsched_islocked_tcb(tcb))
     {
       int cpu = this_cpu();
 
       /* Possibly re-enabling.. Check for the max elapsed time */
 
-      elapsed = current - from->preemp_start;
-      if (elapsed > from->preemp_max)
+      elapsed = current - tcb->preemp_start;
+      if (elapsed > tcb->preemp_max)
         {
-          from->preemp_max        = elapsed;
-          from->preemp_max_caller = from->preemp_caller;
-          CHECK_PREEMPTION(from->pid, elapsed);
+          tcb->preemp_max        = elapsed;
+          tcb->preemp_max_caller = tcb->preemp_caller;
+          CHECK_PREEMPTION(tcb->pid, elapsed);
         }
 
       /* Suspend percore preemptible statistic and if necessary will
@@ -417,28 +444,24 @@ void nxsched_switch_critmon(FAR struct tcb_s *from, FAR struct tcb_s *to)
         }
     }
 
-  if (to->lockcount > 0)
-    {
-      to->preemp_start = current;
-    }
 #endif /* CONFIG_SCHED_CRITMONITOR_MAXTIME_PREEMPTION */
 
 #if CONFIG_SCHED_CRITMONITOR_MAXTIME_CSECTION >= 0
 
   /* Is this task in a critical section? */
 
-  if (from->irqcount > 0)
+  if (tcb->irqcount > 0)
     {
       int cpu = this_cpu();
 
       /* Possibly leaving .. Check for the max elapsed time */
 
-      elapsed = current - from->crit_start;
-      if (elapsed > from->crit_max)
+      elapsed = current - tcb->crit_start;
+      if (elapsed > tcb->crit_max)
         {
-          from->crit_max        = elapsed;
-          from->crit_max_caller = from->crit_caller;
-          CHECK_CSECTION(from->pid, elapsed);
+          tcb->crit_max        = elapsed;
+          tcb->crit_max_caller = tcb->crit_caller;
+          CHECK_CSECTION(tcb->pid, elapsed);
         }
 
       /* Check for the global max elapsed time */
@@ -449,29 +472,95 @@ void nxsched_switch_critmon(FAR struct tcb_s *from, FAR struct tcb_s *to)
         }
     }
 
-  if (to->irqcount > 0)
-    {
-      to->crit_start = current;
-    }
-
 #endif /* CONFIG_SCHED_CRITMONITOR_MAXTIME_CSECTION */
 }
 
-void nxsched_update_critmon(FAR struct tcb_s *tcb)
+/****************************************************************************
+ * Name: nxsched_resume_critmon
+ *
+ * Description:
+ *   Called when a thread resumes execution, perhaps re-establishing a
+ *   critical section or a non-pre-emptible state.
+ *
+ * Assumptions:
+ *   - Called within a critical section.
+ *   - Might be called from an interrupt handler
+ *
+ ****************************************************************************/
+
+void nxsched_resume_critmon(FAR struct tcb_s *tcb)
 {
+#if CONFIG_SCHED_CRITMONITOR_MAXTIME_THREAD >= 0
+  irqstate_t flags;
+#endif
   clock_t current = perf_gettime();
-  clock_t elapsed = current - tcb->run_start;
 
-  if (tcb->task_state == TSTATE_TASK_RUNNING)
-    {
-#ifdef CONFIG_SCHED_CPULOAD_CRITMONITOR
-      clock_t tick = elapsed * CLOCKS_PER_SEC / perf_getfreq();
+  UNUSED(current);
 
-      nxsched_process_taskload_ticks(tcb, tick);
+#if CONFIG_SCHED_CRITMONITOR_MAXTIME_THREAD >= 0
+  /* Its run time counts from g_thread_start[], the suspend of the previous
+   * thread.
+   */
+
+  flags = write_seqlock_irqsave(&g_thread_lock[this_cpu()]);
+  g_thread_tcb[this_cpu()] = tcb;
+  write_sequnlock_irqrestore(&g_thread_lock[this_cpu()], flags);
 #endif
 
-      tcb->run_start = current;
-      tcb->run_time += elapsed;
+#if CONFIG_SCHED_CRITMONITOR_MAXTIME_PREEMPTION >= 0
+
+  /* Did this task disable pre-emption? */
+
+  if (tcb->lockcount > 0)
+    {
+      /* Yes.. Save the start time */
+
+      tcb->preemp_start = current;
+    }
+#endif /* CONFIG_SCHED_CRITMONITOR_MAXTIME_PREEMPTION */
+
+#if CONFIG_SCHED_CRITMONITOR_MAXTIME_CSECTION >= 0
+  if (tcb->irqcount > 0)
+    {
+      tcb->crit_start = current;
+    }
+#endif /* CONFIG_SCHED_CRITMONITOR_MAXTIME_CSECTION */
+}
+
+/****************************************************************************
+ * Name: nxsched_update_critmon
+ *
+ * Description:
+ *   Add the time since the last update to the run time and to the CPU load
+ *   of the running thread of each CPU, also of a thread in a busy loop.
+ *   All CPUs, so that g_cpuload_total has the time of all CPUs.
+ *
+ ****************************************************************************/
+
+#if CONFIG_SCHED_CRITMONITOR_MAXTIME_THREAD >= 0
+void nxsched_update_critmon(void)
+{
+  FAR struct tcb_s *tcb;
+  irqstate_t flags;
+  clock_t elapsed;
+  int cpu;
+
+  for (cpu = 0; cpu < CONFIG_SMP_NCPUS; cpu++)
+    {
+      flags = write_seqlock_irqsave(&g_thread_lock[cpu]);
+      tcb   = g_thread_tcb[cpu];
+
+      /* Skip a CPU in a context switch or before its first one */
+
+      if (tcb == NULL)
+        {
+          write_sequnlock_irqrestore(&g_thread_lock[cpu], flags);
+          continue;
+        }
+
+      elapsed = nxsched_critmon_account(tcb, cpu, perf_gettime());
+      write_sequnlock_irqrestore(&g_thread_lock[cpu], flags);
+
       if (elapsed > tcb->run_max)
         {
           tcb->run_max = elapsed;
@@ -479,3 +568,56 @@ void nxsched_update_critmon(FAR struct tcb_s *tcb)
         }
     }
 }
+#endif
+
+/****************************************************************************
+ * Name: nxsched_critmon_runtime
+ *
+ * Description:
+ *   Return the run time of a thread.  If the thread runs now, add the time
+ *   since the last update of its CPU.
+ *
+ ****************************************************************************/
+
+#if CONFIG_SCHED_CRITMONITOR_MAXTIME_THREAD >= 0
+clock_t nxsched_critmon_runtime(FAR struct tcb_s *tcb)
+{
+  uint32_t seq[CONFIG_SMP_NCPUS];
+  clock_t runtime;
+  bool retry;
+  int cpu;
+
+  /* Read again if a CPU changed the values, so that the run time does not
+   * go back.  The scheduler changes tcb->cpu before the context switch, and
+   * the thread can move to another CPU: look for the thread on all CPUs,
+   * and check the sequence of all CPUs.
+   */
+
+  do
+    {
+      for (cpu = 0; cpu < CONFIG_SMP_NCPUS; cpu++)
+        {
+          seq[cpu] = read_seqbegin(&g_thread_lock[cpu]);
+        }
+
+      runtime = tcb->run_time;
+      for (cpu = 0; cpu < CONFIG_SMP_NCPUS; cpu++)
+        {
+          if (g_thread_tcb[cpu] == tcb)
+            {
+              runtime += perf_gettime() - g_thread_start[cpu];
+              break;
+            }
+        }
+
+      retry = false;
+      for (cpu = 0; cpu < CONFIG_SMP_NCPUS; cpu++)
+        {
+          retry |= read_seqretry(&g_thread_lock[cpu], seq[cpu]);
+        }
+    }
+  while (retry);
+
+  return runtime;
+}
+#endif

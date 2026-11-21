@@ -43,8 +43,10 @@
 #include <net/ethernet.h>
 #include <netinet/in.h>
 
+#include <nuttx/ethtool.h>
 #include <nuttx/net/netdev.h>
 #include <nuttx/net/radiodev.h>
+#include <nuttx/net/bridge.h>
 #include <nuttx/net/vlan.h>
 
 #ifdef CONFIG_NET_6LOWPAN
@@ -282,24 +284,28 @@ static void ioctl_get_ipv4addr(FAR struct sockaddr *outaddr,
  * Name: ioctl_get_ipv4broadcast
  *
  * Description:
- *   Return the sub-net broadcast address to user memory.
+ *   Return the sub-net broadcast address to user memory.  A device without
+ *   IFF_BROADCAST has no broadcast address: return 0.0.0.0.
  *
  * Input Parameters:
  *   outaddr - Pointer to the user-provided memory to receive the address.
  *   inaddr  - The source IP address in the device structure.
  *   netmask  - The netmask address mask in the device structure.
+ *   flags   - The interface flags in the device structure.
  *
  ****************************************************************************/
 
 #ifdef CONFIG_NET_IPv4
 static void ioctl_get_ipv4broadcast(FAR struct sockaddr *outaddr,
-                                    in_addr_t inaddr, in_addr_t netmask)
+                                    in_addr_t inaddr, in_addr_t netmask,
+                                    uint32_t flags)
 {
   FAR struct sockaddr_in *dest  = (FAR struct sockaddr_in *)outaddr;
 
   dest->sin_family              = AF_INET;
   dest->sin_port                = 0;
-  dest->sin_addr.s_addr         = net_ipv4addr_broadcast(inaddr, netmask);
+  dest->sin_addr.s_addr         = IFF_IS_BROADCAST(flags) ?
+                                  inaddr | ~netmask : 0;
   memset(dest->sin_zero, 0, sizeof(dest->sin_zero));
 }
 #endif
@@ -767,6 +773,7 @@ static ssize_t net_ioctl_ifreq_arglen(uint8_t domain, int cmd)
       case SIOCGIFCOUNT:
       case SIOCSIFFLAGS:
       case SIOCGIFFLAGS:
+      case SIOCETHTOOL:
       case SIOCMIINOTIFY:
       case SIOCGMIIPHY:
       case SIOCGMIIREG:
@@ -781,6 +788,9 @@ static ssize_t net_ioctl_ifreq_arglen(uint8_t domain, int cmd)
       case SIOCGCANSTATE:
       case SIOCSCANSTATE:
       case SIOCGCANERRORS:
+      case SIOCGCANTRSVSTATE:
+      case SIOCSCANTRSVSTATE:
+      case SIOCCANOFLUSH:
       case SIOCSIFNAME:
       case SIOCGIFNAME:
       case SIOCGIFINDEX:
@@ -807,6 +817,85 @@ static ssize_t net_ioctl_ifreq_arglen(uint8_t domain, int cmd)
     }
 
   return -ENOTTY;
+}
+
+/****************************************************************************
+ * Name: netdev_ethtool_ioctl
+ *
+ * Description:
+ *   Handle the SIOCETHTOOL command.  req->ifr_data points to an ethtool
+ *   command structure whose first field is the ETHTOOL_* command.
+ *   ETHTOOL_GET_TS_INFO is answered from the device features; any other
+ *   command is passed to the driver.
+ *
+ * Input Parameters:
+ *   dev      The network device
+ *   req      The argument of the ioctl cmd
+ *
+ * Returned Value:
+ *   >=0 on success (positive non-zero values are cmd-specific)
+ *   Negated errno returned on failure.
+ *
+ ****************************************************************************/
+
+static int netdev_ethtool_ioctl(FAR struct net_driver_s *dev,
+                                FAR struct ifreq *req)
+{
+  FAR uint32_t *ethcmd = req->ifr_data;
+
+  if (ethcmd == NULL)
+    {
+      return -EINVAL;
+    }
+
+  switch (*ethcmd)
+    {
+      case ETHTOOL_GET_TS_INFO:  /* Get time stamping and PHC info */
+        {
+          FAR struct ethtool_ts_info *info = req->ifr_data;
+
+          memset(info, 0, sizeof(*info));
+          info->cmd       = ETHTOOL_GET_TS_INFO;
+          info->phc_index = -1;
+
+#ifdef CONFIG_NET_TIMESTAMP
+          /* Received packets carry the hardware timestamp when the driver
+           * provides one, and are stamped by the stack with CLOCK_REALTIME
+           * otherwise.
+           */
+
+          if ((dev->d_features & NETDEV_RX_STAMP) != 0)
+            {
+              info->so_timestamping |= SOF_TIMESTAMPING_RX_HARDWARE |
+                                       SOF_TIMESTAMPING_RAW_HARDWARE;
+            }
+          else
+            {
+              info->so_timestamping |= SOF_TIMESTAMPING_RX_SOFTWARE |
+                                       SOF_TIMESTAMPING_SOFTWARE;
+            }
+
+          if ((dev->d_features & NETDEV_TX_STAMP) != 0)
+            {
+              info->so_timestamping |= SOF_TIMESTAMPING_TX_HARDWARE |
+                                       SOF_TIMESTAMPING_RAW_HARDWARE;
+            }
+#endif
+
+          return OK;
+        }
+
+      default:
+#ifdef CONFIG_NETDEV_IOCTL
+        if (dev->d_ioctl != NULL)
+          {
+            return dev->d_ioctl(dev, SIOCETHTOOL,
+                                (unsigned long)(uintptr_t)req->ifr_data);
+          }
+#endif
+
+        return -ENOTTY;
+    }
 }
 
 /****************************************************************************
@@ -942,7 +1031,7 @@ static int netdev_ifr_ioctl(FAR struct socket *psock, int cmd,
 
       case SIOCGIFBRDADDR:  /* Get broadcast IP address */
         ioctl_get_ipv4broadcast(&req->ifr_broadaddr, dev->d_ipaddr,
-                                dev->d_netmask);
+                                dev->d_netmask, dev->d_flags);
         break;
 
       case SIOCSIFBRDADDR:  /* Set broadcast IP address */
@@ -1086,6 +1175,10 @@ static int netdev_ifr_ioctl(FAR struct socket *psock, int cmd,
 
       case SIOCGIFFLAGS:  /* Gets the interface flags */
         req->ifr_flags = dev->d_flags;
+        break;
+
+      case SIOCETHTOOL:   /* Ethtool interface */
+        ret = netdev_ethtool_ioctl(dev, req);
         break;
 
       /* MAC address operations only make sense if Ethernet or 6LoWPAN are
@@ -1284,6 +1377,9 @@ static int netdev_ifr_ioctl(FAR struct socket *psock, int cmd,
       case SIOCGCANSTATE:      /* Get state from a CAN/LIN controller */
       case SIOCSCANSTATE:      /* Set the LIN/CAN controller state */
       case SIOCGCANERRORS:     /* Get CAN error counters and state */
+      case SIOCGCANTRSVSTATE:  /* Get state from CAN transceiver */
+      case SIOCSCANTRSVSTATE:  /* Set the CAN transceiver state */
+      case SIOCCANOFLUSH:      /* Flush data written but not transmitted */
         if (dev->d_ioctl)
           {
             /* Every CAN ioctl argument struct is a member of the
@@ -1937,6 +2033,15 @@ int psock_vioctl(FAR struct socket *psock, int cmd, va_list ap)
     }
 #endif
 
+#ifdef CONFIG_NET_BRIDGE
+  /* Check for a bridge command */
+
+  if (ret == -ENOTTY)
+    {
+      ret = bridge_ioctl(cmd, arg);
+    }
+#endif
+
 #ifdef HAVE_IEEE802154_IOCTL
   /* Check for a IEEE802.15.4 network device IOCTL command */
 
@@ -2085,6 +2190,14 @@ int netdev_ifdown(FAR struct net_driver_s *dev)
               /* Notify clients that the network has been taken down */
 
               devif_dev_event(dev, NETDEV_DOWN);
+
+              /* Administrative down: flush the entire ARP table for this
+               * device, including permanent (static) entries.  This differs
+               * from the carrier-loss path (netdev_carrier_off), which keeps
+               * static entries.
+               */
+
+              arp_cleanup(dev, false);
 
 #ifdef CONFIG_NETDOWN_NOTIFIER
               /* Provide signal notifications to threads that want to be

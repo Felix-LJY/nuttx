@@ -26,6 +26,7 @@
 
 #include <nuttx/config.h>
 
+#include <sys/param.h>
 #include <string.h>
 #include <assert.h>
 #include <errno.h>
@@ -37,6 +38,7 @@
 #include <nuttx/queue.h>
 
 #include "local/local.h"
+#include "utils/utils.h"
 
 /****************************************************************************
  * Public Data
@@ -76,7 +78,24 @@ FAR struct local_conn_s *local_nextconn(FAR struct local_conn_s *conn)
       return (FAR struct local_conn_s *)g_local_connections.head;
     }
 
-  return (FAR struct local_conn_s *)conn->lc_conn.node.flink;
+  return (FAR struct local_conn_s *)conn->lc_conn.s_node.flink;
+}
+
+/****************************************************************************
+ * Name: local_copyaddr
+ *
+ * Description:
+ *   Copy an address from a program.  It has addrlen bytes and no NUL has to
+ *   follow its name, so what follows it in the memory of the program is not
+ *   part of it.  The copy always ends with a NUL.
+ *
+ ****************************************************************************/
+
+void local_copyaddr(FAR struct sockaddr_un *unaddr,
+                    FAR const struct sockaddr *addr, socklen_t addrlen)
+{
+  memset(unaddr, 0, sizeof(*unaddr));
+  memcpy(unaddr, addr, MIN(addrlen, sizeof(*unaddr) - 1));
 }
 
 /****************************************************************************
@@ -158,7 +177,7 @@ FAR struct local_conn_s *local_alloc(void)
 
   if (conn != NULL)
     {
-      /* Initialize non-zero elements the new connection structure.  Since
+      /* Initialize non-zero elements the new connection structure.
        * Since the memory was allocated with kmm_zalloc(), it is not
        * necessary to zerio-ize any structure elements.
        */
@@ -175,9 +194,12 @@ FAR struct local_conn_s *local_alloc(void)
        */
 
       nxmutex_init(&conn->lc_sendlock);
+      nxmutex_init(&conn->lc_recvlock);
       nxmutex_init(&conn->lc_polllock);
-      nxrmutex_init(&conn->lc_conn.s_lock);
 
+      /* Use conn_init to initialize the connection structure */
+
+      conn_init(&conn->lc_conn);
 #ifdef CONFIG_NET_LOCAL_SCM
       conn->lc_cred.pid = nxsched_getpid();
       conn->lc_cred.uid = getuid();
@@ -186,7 +208,7 @@ FAR struct local_conn_s *local_alloc(void)
 
       /* Add the connection structure to the list of listeners */
 
-      dq_addlast(&conn->lc_conn.node, &g_local_connections);
+      dq_addlast(&conn->lc_conn.s_node, &g_local_connections);
     }
 
   return conn;
@@ -231,6 +253,14 @@ int local_alloc_accept(FAR struct local_conn_s *server,
 
   strlcpy(conn->lc_path, server->lc_path, sizeof(conn->lc_path));
   conn->lc_instance_id = client->lc_instance_id;
+
+#ifdef CONFIG_NET_LOCAL_SCM
+  /* connect() makes this end with the client's credentials.  Take the
+   * listener's, so that SO_PEERCRED of the client names the server.
+   */
+
+  conn->lc_cred = server->lc_cred;
+#endif
 
   /* Create the FIFOs needed for the connection */
 
@@ -307,10 +337,19 @@ void local_free(FAR struct local_conn_s *conn)
 
   /* Remove the server from the list of listeners. */
 
-  dq_rem(&conn->lc_conn.node, &g_local_connections);
+  dq_rem(&conn->lc_conn.s_node, &g_local_connections);
 
   if (conn->lc_peer)
     {
+      /* A stream peer gets no more data and cannot send.  Set this before
+       * the FIFOs close: their events wake up the polls of the peer.
+       */
+
+      if (conn->lc_proto == SOCK_STREAM)
+        {
+          conn->lc_peer->lc_shutdown = SHUT_RDWR;
+        }
+
       conn->lc_peer->lc_peer = NULL;
       conn->lc_peer = NULL;
     }
@@ -354,8 +393,12 @@ void local_free(FAR struct local_conn_s *conn)
   /* Destroy sem associated with the connection */
 
   nxmutex_destroy(&conn->lc_sendlock);
+  nxmutex_destroy(&conn->lc_recvlock);
   nxmutex_destroy(&conn->lc_polllock);
-  nxrmutex_destroy(&conn->lc_conn.s_lock);
+
+  /* Use conn_uninit to release all connection resources */
+
+  conn_uninit(&conn->lc_conn);
 
   /* And free the connection structure */
 
@@ -374,6 +417,9 @@ void local_free(FAR struct local_conn_s *conn)
  *
  * Returned Value:
  *   None
+ *
+ * Assumptions:
+ *   Called with local lock held
  *
  ****************************************************************************/
 
@@ -395,6 +441,9 @@ void local_addref(FAR struct local_conn_s *conn)
  *
  * Returned Value:
  *   None
+ *
+ * Assumptions:
+ *   Called with local lock held
  *
  ****************************************************************************/
 

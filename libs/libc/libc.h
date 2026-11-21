@@ -38,6 +38,7 @@
 #  include <semaphore.h>
 
 #  include <nuttx/lib/lib.h>
+#  include <nuttx/tls.h>
 #  include <nuttx/streams.h>
 #endif
 
@@ -239,13 +240,9 @@ typedef unsigned long long libc_data_t;
  * Public Data
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -331,11 +328,26 @@ ssize_t lib_parse_hostfile(FAR FILE *stream, FAR struct hostent *host,
 int lib_restoredir(void);
 #endif
 
+/* Defined in tls/tls_getinfo.c.  tls/tls_emutls.c sets them, and exit(),
+ * pthread_exit() and the loader call them.
+ */
+
+#ifdef CONFIG_TLS_EMUTLS
+extern CODE void (*g_tls_emutls_destruct)(void);
+extern CODE void (*g_tls_emutls_release)(FAR const void *start,
+                                         size_t size);
+#endif
+
 /* Defined in lib_cxx_initialize.c */
 
+#ifdef CONFIG_HAVE_CXXINITIALIZE
 void lib_cxx_initialize(void);
+#else
+static inline void lib_cxx_initialize(void)
+{
+}
+#endif
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

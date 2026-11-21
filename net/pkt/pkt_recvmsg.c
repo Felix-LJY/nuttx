@@ -34,20 +34,24 @@
 #include <stdint.h>
 #include <string.h>
 #include <errno.h>
+#include <limits.h>
 #include <nuttx/debug.h>
 #include <assert.h>
 
 #include <arch/irq.h>
 
 #include <nuttx/semaphore.h>
+#include <nuttx/mm/iob.h>
 #include <nuttx/net/net.h>
 #include <nuttx/net/netdev.h>
+#include <nuttx/net/ethernet.h>
 
 #include "netdev/netdev.h"
 #include "devif/devif.h"
 #include "pkt/pkt.h"
 #include "socket/socket.h"
 #include "utils/utils.h"
+#include <netinet/if_ether.h>
 #include <netpacket/packet.h>
 
 /****************************************************************************
@@ -64,46 +68,6 @@ struct pkt_recvfrom_s
   int                          pr_result;  /* Success:OK, failure:negated errno */
   uint8_t                      pr_type;    /* Protocol type */
 };
-
-/****************************************************************************
- * Private Functions
- ****************************************************************************/
-
-/****************************************************************************
- * Name: pkt_store_cmsg_timestamp
- *
- * Description:
- *   Store the timestamp in the cmsg
- *
- * Input Parameters:
- *   pstate     Recicve state information
- *   timestamp  Timestamp  information
- *
- * Returned Value:
- *   None
- *
- ****************************************************************************/
-
-#ifdef CONFIG_NET_TIMESTAMP
-static void pkt_store_cmsg_timestamp(FAR struct pkt_recvfrom_s *pstate,
-                                     FAR struct timespec *timestamp)
-{
-  FAR struct msghdr *msg = pstate->pr_msg;
-  struct timeval tv;
-
-  if (_SO_GETOPT(pstate->pr_conn->sconn.s_options, SO_TIMESTAMPNS))
-    {
-      cmsg_append(msg, SOL_SOCKET, SO_TIMESTAMPNS, timestamp,
-                  sizeof(struct timespec));
-    }
-  else
-    {
-      TIMESPEC_TO_TIMEVAL(&tv, timestamp);
-      cmsg_append(msg, SOL_SOCKET, SO_TIMESTAMP, &tv,
-                  sizeof(struct timeval));
-    }
-}
-#endif
 
 /****************************************************************************
  * Name: pkt_add_recvlen
@@ -154,20 +118,14 @@ static inline void pkt_add_recvlen(FAR struct pkt_recvfrom_s *pstate,
 static void pkt_recvfrom_newdata(FAR struct net_driver_s *dev,
                                  FAR struct pkt_recvfrom_s *pstate)
 {
-  int offset = 0;
+  size_t pktlen = dev->d_len;
   size_t recvlen;
+  int offset = 0;
 
 #ifdef CONFIG_NET_TIMESTAMP
-  /* Unpack stored timestamp if SO_TIMESTAMP socket option is enabled */
-
-  if (_SO_GETOPT(pstate->pr_conn->sconn.s_options, SO_TIMESTAMP) ||
-      _SO_GETOPT(pstate->pr_conn->sconn.s_options, SO_TIMESTAMPNS))
-    {
-      pkt_store_cmsg_timestamp(pstate, &dev->d_rxtime);
-    }
+  cmsg_store_timestamp(pstate->pr_msg, &dev->d_iob->io_time,
+                       pstate->pr_conn->sconn.s_options);
 #endif
-
-  recvlen = MIN(pstate->pr_msg->msg_iov->iov_len, dev->d_len);
 
   /* Copy the new packet data into the user buffer */
 
@@ -175,11 +133,31 @@ static void pkt_recvfrom_newdata(FAR struct net_driver_s *dev,
     {
       offset = -NET_LL_HDRLEN(dev);
     }
+  else
+    {
+      /* For SOCK_DGRAM, exclude the link-layer header */
+
+      if (pktlen > NET_LL_HDRLEN(dev))
+        {
+          pktlen -= NET_LL_HDRLEN(dev);
+        }
+      else
+        {
+          pktlen = 0;
+        }
+    }
+
+  if (pstate->pr_msg->msg_iov->iov_len < pktlen)
+    {
+      pstate->pr_msg->msg_flags |= MSG_TRUNC;
+    }
+
+  recvlen = MIN(pstate->pr_msg->msg_iov->iov_len, pktlen);
 
   recvlen = iob_copyout(pstate->pr_msg->msg_iov->iov_base,
                         dev->d_iob, recvlen, offset);
 
-  ninfo("Received %d bytes (of %d)\n", (int)recvlen, (int)dev->d_len);
+  ninfo("Received %d bytes (of %d)\n", (int)recvlen, (int)pktlen);
 
   /* Update the accumulated size of the data read */
 
@@ -199,9 +177,35 @@ static void pkt_recvfrom_newdata(FAR struct net_driver_s *dev,
  *
  ****************************************************************************/
 
-static inline void pkt_recvfrom_sender(FAR struct net_driver_s *dev,
+static inline void pkt_recvfrom_sender(int ifindex, FAR void *llhdr,
+                                       unsigned int llhdrlen,
                                        FAR struct pkt_recvfrom_s *pstate)
 {
+  struct sockaddr_ll from;
+  socklen_t copylen;
+
+  if (pstate->pr_msg->msg_name != NULL)
+    {
+      memset(&from, 0, sizeof(from));
+      from.sll_family   = AF_PACKET;
+      from.sll_ifindex  = ifindex;
+      from.sll_protocol = pstate->pr_type;
+      from.sll_halen    = ETH_ALEN;
+
+      if (llhdr != NULL && llhdrlen >= sizeof(struct eth_hdr_s))
+        {
+          FAR struct eth_hdr_s *ethhdr = (FAR struct eth_hdr_s *)llhdr;
+          memcpy(from.sll_addr, ethhdr->src, ETH_ALEN);
+        }
+
+      /* POSIX allows a too-small address buffer: copy at most the number
+       * of bytes the caller provided (truncation), never more.
+       */
+
+      copylen = MIN(pstate->pr_msg->msg_namelen, sizeof(struct sockaddr_ll));
+      memcpy(pstate->pr_msg->msg_name, &from, copylen);
+      pstate->pr_msg->msg_namelen = sizeof(struct sockaddr_ll);
+    }
 }
 
 /****************************************************************************
@@ -230,6 +234,18 @@ static uint32_t pkt_recvfrom_eventhandler(FAR struct net_driver_s *dev,
     {
       /* If a new packet is available, then complete the read action. */
 
+#ifdef CONFIG_NET_TIMESTAMP
+      if ((flags & PKT_NEWDATA) != 0 && dev->d_iob->io_conn != NULL)
+        {
+          pstate->pr_cb->flags = 0;
+          pstate->pr_cb->priv  = NULL;
+          pstate->pr_cb->event = NULL;
+          pstate->pr_result    = -EAGAIN;
+          nxsem_post(&pstate->pr_sem);
+        }
+      else
+#endif
+
       if ((flags & PKT_NEWDATA) != 0)
         {
           /* Copy the packet */
@@ -242,13 +258,14 @@ static uint32_t pkt_recvfrom_eventhandler(FAR struct net_driver_s *dev,
 
           /* Don't allow any further call backs. */
 
-          pstate->pr_cb->flags   = 0;
-          pstate->pr_cb->priv    = NULL;
-          pstate->pr_cb->event   = NULL;
+          pstate->pr_cb->flags = 0;
+          pstate->pr_cb->priv  = NULL;
+          pstate->pr_cb->event = NULL;
 
           /* Save the sender's address in the caller's 'from' location */
 
-          pkt_recvfrom_sender(dev, pstate);
+          pkt_recvfrom_sender(dev->d_ifindex, dev->d_buf, dev->d_len,
+                              pstate);
 
           /* indicate that the data has been consumed */
 
@@ -353,25 +370,58 @@ static ssize_t pkt_recvfrom_result(int result,
 }
 
 /****************************************************************************
- * Name: pkt_readahead
+ * Name: pkt_readdata
  *
  * Description:
- *   Copy the buffered read-ahead data to the user buffer.
+ *   Copy the buffered data to the user buffer based on the flag errmsg.
  *
  * Input Parameters:
  *   pstate       The state structure of the recv operation
  *
  * Returned Value:
- *   None
+ *   copy length or -ENODATA
  *
  * Assumptions:
  *   The network is locked.
  *
  ****************************************************************************/
 
-static inline void pkt_readahead(FAR struct pkt_recvfrom_s *pstate)
+static void append_timestamp(FAR struct pkt_recvfrom_s *pstate,
+                             FAR struct iob_s *iob)
+{
+#ifdef CONFIG_NET_TIMESTAMP
+  FAR struct pkt_conn_s *conn = pstate->pr_conn;
+  cmsg_store_timestamp(pstate->pr_msg, &iob->io_time,
+                       conn->sconn.s_options);
+#endif
+}
+
+#ifdef CONFIG_NET_TIMESTAMP
+static void append_timestamping(FAR struct pkt_recvfrom_s *pstate,
+                                FAR struct iob_s *iob)
+{
+  struct timespec ts[3];
+
+  memset(&ts, 0, sizeof(ts));
+
+  ts[0].tv_sec = iob->io_time.tv_sec;
+  ts[0].tv_nsec = iob->io_time.tv_nsec;
+  ts[2].tv_sec = iob->io_time.tv_sec;
+  ts[2].tv_nsec = iob->io_time.tv_nsec;
+
+  cmsg_append(pstate->pr_msg, SOL_SOCKET, SO_TIMESTAMPING, &ts,
+              sizeof(ts));
+  pstate->pr_msg->msg_flags |= MSG_ERRQUEUE;
+}
+#endif
+
+static inline int pkt_readdata(FAR struct pkt_recvfrom_s *pstate,
+                            FAR struct iob_queue_s *iobq,
+                            CODE void (*tsfunc)(FAR struct pkt_recvfrom_s *,
+                                                FAR struct iob_s *))
 {
   FAR struct pkt_conn_s *conn = pstate->pr_conn;
+  FAR struct net_driver_s *dev;
   FAR struct iob_s *iob;
   int recvlen;
   int offset = 0;
@@ -380,33 +430,16 @@ static inline void pkt_readahead(FAR struct pkt_recvfrom_s *pstate)
 
   pstate->pr_recvlen = -ENODATA;
 
-  if ((iob = iob_peek_queue(&conn->readahead)) != NULL)
+  if ((iob = iob_remove_queue(iobq)) != NULL)
     {
       DEBUGASSERT(iob->io_pktlen > 0);
 
-#ifdef CONFIG_NET_TIMESTAMP
-      /* Unpack stored timestamp if SO_TIMESTAMP/SO_TIMESTAMPNS socket option
-       * is enabled
-       */
-
-      if (_SO_GETOPT(conn->sconn.s_options, SO_TIMESTAMP) ||
-          _SO_GETOPT(conn->sconn.s_options, SO_TIMESTAMPNS))
-        {
-          struct timespec ts;
-          recvlen = iob_copyout((FAR uint8_t *)&ts, iob,
-                                sizeof(struct timespec),
-                                -sizeof(struct timespec));
-          DEBUGASSERT(recvlen == sizeof(struct timespec));
-
-          pkt_store_cmsg_timestamp(pstate, &ts);
-        }
-#endif
-
       /* Copy to user */
+
+      dev = pkt_find_device(conn);
 
       if (pstate->pr_type == SOCK_DGRAM)
         {
-          FAR struct net_driver_s *dev = pkt_find_device(conn);
           if (dev != NULL)
             {
               /* For SOCK_DGRAM, we need skip the l2 header */
@@ -419,6 +452,12 @@ static inline void pkt_readahead(FAR struct pkt_recvfrom_s *pstate)
             }
         }
 
+      if (iob->io_pktlen > offset &&
+          pstate->pr_msg->msg_iov->iov_len < iob->io_pktlen - offset)
+        {
+          pstate->pr_msg->msg_flags |= MSG_TRUNC;
+        }
+
       recvlen = iob_copyout(pstate->pr_msg->msg_iov->iov_base, iob,
                             pstate->pr_msg->msg_iov->iov_len, offset);
 
@@ -428,16 +467,22 @@ static inline void pkt_readahead(FAR struct pkt_recvfrom_s *pstate)
 
       ninfo("Received %d bytes (of %u)\n", recvlen, iob->io_pktlen);
 
-      /* Remove the I/O buffer chain from the head of the read-ahead
-       * buffer queue.
-       */
+      tsfunc(pstate, iob);
 
-      iob_remove_queue(&conn->readahead);
+      /* Fill in the sender's address information if requested */
+
+      if (dev != NULL && pstate->pr_msg->msg_name != NULL)
+        {
+          pkt_recvfrom_sender(dev->d_ifindex, IOB_DATA(iob),
+                              iob->io_pktlen, pstate);
+        }
 
       /* And free the I/O buffer chain */
 
       iob_free_chain(iob);
     }
+
+    return pstate->pr_recvlen;
 }
 
 /****************************************************************************
@@ -475,7 +520,7 @@ static inline void pkt_readahead(FAR struct pkt_recvfrom_s *pstate)
 ssize_t pkt_recvmsg(FAR struct socket *psock, FAR struct msghdr *msg,
                     int flags)
 {
-  FAR struct sockaddr *from = msg->msg_name;
+  FAR struct sockaddr_ll *from = msg->msg_name;
   FAR socklen_t *fromlen = &msg->msg_namelen;
   FAR struct pkt_conn_s *conn = psock->s_conn;
   FAR struct net_driver_s *dev;
@@ -491,9 +536,26 @@ ssize_t pkt_recvmsg(FAR struct socket *psock, FAR struct msghdr *msg,
       return -EINVAL;
     }
 
+  /* POSIX: fail with EMSGSIZE if msg_iovlen <= 0 or > IOV_MAX */
+
+  if (msg->msg_iovlen == 0 || msg->msg_iovlen > IOV_MAX)
+    {
+      return -EMSGSIZE;
+    }
+
   if (msg->msg_iovlen != 1)
     {
       return -ENOTSUP;
+    }
+
+  if (msg->msg_iov == NULL)
+    {
+      return -EINVAL;
+    }
+
+  if (msg->msg_iov[0].iov_len > 0 && msg->msg_iov[0].iov_base == NULL)
+    {
+      return -EINVAL;
     }
 
   if (psock->s_type != SOCK_DGRAM && psock->s_type != SOCK_RAW)
@@ -501,6 +563,10 @@ ssize_t pkt_recvmsg(FAR struct socket *psock, FAR struct msghdr *msg,
       nerr("ERROR: Unsupported socket type: %d\n", psock->s_type);
       return -ENOSYS;
     }
+
+  /* Clear flags that may be returned */
+
+  msg->msg_flags = 0;
 
   /* Get the device driver that will service this transfer */
 
@@ -520,14 +586,28 @@ ssize_t pkt_recvmsg(FAR struct socket *psock, FAR struct msghdr *msg,
 
   conn_dev_lock(&conn->sconn, dev);
 
+#ifdef CONFIG_NET_TIMESTAMP
+  if (flags & MSG_ERRQUEUE)
+    {
+      if (!IOB_QEMPTY(&conn->errahead))
+        {
+          ret = pkt_readdata(&state, &conn->errahead, append_timestamping);
+        }
+      else
+        {
+          ret = -EAGAIN;
+        }
+    }
+  else
+#endif
+
   /* Check if there is buffered read-ahead data for this socket.  We may have
    * already received the response to previous command.
    */
 
   if (!IOB_QEMPTY(&conn->readahead))
     {
-      pkt_readahead(&state);
-      ret = pkt_recvfrom_result(ret, &state);
+      ret = pkt_readdata(&state, &conn->readahead, append_timestamp);
     }
   else if (_SS_ISNONBLOCK(conn->sconn.s_flags) ||
            (flags & MSG_DONTWAIT) != 0)

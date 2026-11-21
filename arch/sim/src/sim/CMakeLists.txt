@@ -34,6 +34,7 @@ if(CONFIG_COVERAGE_TOOLCHAIN)
 endif()
 
 list(APPEND HOST_DEFINITIONS -D__SIM__)
+list(APPEND HOST_DEFINITIONS -D_FILE_OFFSET_BITS=64 -D_TIME_BITS=64)
 
 # common guest sources
 
@@ -121,10 +122,6 @@ if(CONFIG_LIBM_TOOLCHAIN)
   list(APPEND STDLIBS m)
 endif()
 
-if(CONFIG_RPMSG_VIRTIO_LITE)
-  list(APPEND SRCS sim_rpmsg_virtio.c)
-endif()
-
 if(CONFIG_RPMSG_PORT_UART)
   list(APPEND SRCS sim_rpmsg_port_uart.c)
 endif()
@@ -176,6 +173,12 @@ endif()
 if(CONFIG_SIM_VIDEO_DECODER)
   list(APPEND SRCS sim_decoder.c)
   list(APPEND SRCS sim_openh264dec.c)
+endif()
+
+if(CONFIG_SIM_JPEG_DECODER)
+  list(APPEND SRCS sim_jpeg_decoder.c)
+  list(APPEND SRCS sim_jpegdec.c)
+  list(APPEND STDLIBS jpeg)
 endif()
 
 if(CONFIG_SIM_VIDEO_ENCODER)

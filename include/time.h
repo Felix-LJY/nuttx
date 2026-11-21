@@ -37,23 +37,20 @@
  * Pre-processor Definitions
  ****************************************************************************/
 
-/* Clock tick of the system (frequency Hz).
- *
- * NOTE: This symbolic name CLK_TCK has been removed from the standard.
- *       It is replaced with CLOCKS_PER_SEC.  Both are defined here.
- *
- * The default value is 100Hz, but this default setting can be overridden by
- * defining the clock interval in microseconds as CONFIG_USEC_PER_TICK in the
- * board configuration file.
+/* Clock tick of the system (frequency Hz): the unit of times() and
+ * sysconf(_SC_CLK_TCK).  The default value is 100Hz; CONFIG_USEC_PER_TICK
+ * sets the clock interval in microseconds.
  */
 
 #ifdef CONFIG_USEC_PER_TICK
 #  define CLK_TCK                 (1000000/CONFIG_USEC_PER_TICK)
-#  define CLOCKS_PER_SEC          (1000000/CONFIG_USEC_PER_TICK)
 #else
 #  define CLK_TCK                 (100)
-#  define CLOCKS_PER_SEC          (100)
 #endif
+
+/* The unit of clock(): XSI requires one microsecond */
+
+#define CLOCKS_PER_SEC            (1000000)
 
 /* CLOCK_REALTIME refers to the standard time source.  For most
  * implementations, the standard time source is the system timer interrupt.
@@ -66,28 +63,50 @@
  * forward and backward as the system time-of-day clock is changed.
  */
 
-#define CLOCK_REALTIME            0
+#define CLOCK_REALTIME            1
 
 /* Clock that cannot be set and represents monotonic time since some
  * unspecified starting point. It is not affected by changes in the
  * system time-of-day clock.
  */
 
-#define CLOCK_MONOTONIC           1
+#define CLOCK_MONOTONIC           2
 
 /* Clock that measures CPU time consumed by this process (i.e., CPU
  * time consumed by all threads in the process).
  */
 
-#define CLOCK_PROCESS_CPUTIME_ID  2
+#define CLOCK_PROCESS_CPUTIME_ID  3
 
 /* Clock that measures CPU time consumed by this thread */
 
-#define CLOCK_THREAD_CPUTIME_ID   3
+#define CLOCK_THREAD_CPUTIME_ID   4
 
 /* Monotonic system-wide clock that includes time spent in suspension. */
 
-#define CLOCK_BOOTTIME            4
+#define CLOCK_BOOTTIME            5
+
+/* Clock sources that are managed via file descriptors(e.g. PTP driver) */
+
+#define CLOCK_FD                  6
+
+/* The following are the bit fields of the clockid_t
+ * bit 0~2: the clock type
+ * CLOCK_REALTIME           - 1
+ * CLOCK_MONOTONIC          - 2
+ * CLOCK_PROCESS_CPUTIME_ID - 3
+ * CLOCK_THREAD_CPUTIME_ID  - 4
+ * CLOCK_BOOTTIME           - 5
+ * CLOCK_FD                 - 6
+ *
+ * if the clockid value exceeds CLOCK_MASK, it indicates a dynamic clockid.
+ * bit 3~31: the fd, pid or tid value
+ *
+ * CLOCK_MASK extracts the clock type from the clockid_t
+ */
+
+#define CLOCK_MASK                7
+#define CLOCK_SHIFT               3
 
 /* This is a flag that may be passed to the timer_settime() and
  * clock_nanosleep() functions.
@@ -158,30 +177,26 @@ struct sigevent;
  * Public Data
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
+/* daylight - Nonzero if the time zone has daylight saving time.
+ * timezone - Seconds west of UTC of the local standard time.
+ * Set up by tzset(); 0 without CONFIG_LIBC_LOCALTIME (local time is UTC).
+ */
+
+extern int daylight;
+extern long int timezone;
+
 #ifdef CONFIG_LIBC_LOCALTIME
-
-/* daylight - Daylight savings time flag */
-
-/* EXTERN int daylight; not supported */
-
-/* timezone - Difference from UTC and local standard time */
-
-/* EXTERN long int timezone; not supported */
 
 /* tzname[] - Timezone strings
  * Setup by tzset()
  */
 
-EXTERN FAR char *tzname[2];
+extern FAR char *tzname[2];
 #endif
 
 /****************************************************************************
@@ -237,11 +252,8 @@ int clock_nanosleep(clockid_t clockid, int flags,
                     FAR struct timespec *rmtp);
 int nanosleep(FAR const struct timespec *rqtp, FAR struct timespec *rmtp);
 
-#ifdef CONFIG_LIBC_LOCALTIME
 void tzset(void);
-#endif
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

@@ -73,6 +73,8 @@
  * For now, NuttX simply leaves the clocking at 792MHz.
  */
 
+#define BOARD_CPU_FREQUENCY 792000000
+
 /* LED definitions **********************************************************/
 
 /* LEDs
@@ -139,20 +141,15 @@
 
 #ifndef __ASSEMBLY__
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
  * Public Functions Definitions
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

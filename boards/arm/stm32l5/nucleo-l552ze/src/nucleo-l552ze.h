@@ -31,7 +31,7 @@
 #include <nuttx/compiler.h>
 #include <stdint.h>
 
-#include "stm32l5_gpio.h"
+#include "stm32_gpio.h"
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -39,17 +39,7 @@
 
 /* Configuration ************************************************************/
 
-#define HAVE_PROC             1
 #define HAVE_RTC_DRIVER       1
-
-#if !defined(CONFIG_FS_PROCFS)
-#  undef HAVE_PROC
-#endif
-
-#if defined(HAVE_PROC) && defined(CONFIG_DISABLE_MOUNTPOINT)
-#  warning Mountpoints disabled.  No procfs support
-#  undef HAVE_PROC
-#endif
 
 /* Check if we can support the RTC driver */
 

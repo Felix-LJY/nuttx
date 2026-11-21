@@ -25,12 +25,44 @@ if(CONFIG_DRIVERS_VHOST)
   list(APPEND SRCS vhost.c)
 endif()
 
+if(CONFIG_DRIVERS_VHOST_BLK)
+  list(APPEND SRCS vhost-blk.c)
+endif()
+
+if(CONFIG_DRIVERS_VHOST_CAN)
+  list(APPEND SRCS vhost-can.c)
+endif()
+
+if(CONFIG_DRIVERS_VHOST_I2C)
+  list(APPEND SRCS vhost-i2c.c)
+endif()
+
+if(CONFIG_DRIVERS_VHOST_SPI)
+  list(APPEND SRCS vhost-spi.c)
+endif()
+
+if(CONFIG_DRIVERS_VHOST_GPIO)
+  list(APPEND SRCS vhost-gpio.c)
+endif()
+
+if(CONFIG_DRIVERS_VHOST_RPMB)
+  list(APPEND SRCS vhost-rpmb.c)
+endif()
+
 if(CONFIG_DRIVERS_VHOST_RNG)
   list(APPEND SRCS vhost-rng.c)
 endif()
 
+if(CONFIG_DRIVERS_VHOST_NET)
+  list(APPEND SRCS vhost-net.c)
+endif()
+
 if(CONFIG_DRIVERS_VHOST_RPMSG)
   list(APPEND SRCS vhost-rpmsg.c)
+endif()
+
+if(CONFIG_DRIVERS_VHOST_SERIAL)
+  list(APPEND SRCS vhost-serial.c)
 endif()
 
 target_sources(drivers PRIVATE ${SRCS})

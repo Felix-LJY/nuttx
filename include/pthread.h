@@ -33,43 +33,23 @@
 
 #include <sys/types.h>       /* Needed for general types */
 #include <stdint.h>          /* C99 fixed width integer types */
-#include <stdbool.h>         /* C99 boolean types */
 #include <unistd.h>          /* For getpid */
 #include <signal.h>          /* Needed for sigset_t, includes this file */
+#include <sched.h>           /* POSIX: pthread.h makes sched.h visible */
 #include <time.h>            /* Needed for struct timespec */
 
 #ifdef CONFIG_PTHREAD_SPINLOCKS
-/* The architecture specific spinlock.h header file must provide the
- * following:
- *
- *   SP_LOCKED   - A definition of the locked state value (usually 1)
- *   SP_UNLOCKED - A definition of the unlocked state value (usually 0)
- *   spinlock_t  - The type of a spinlock memory object.
- *
- * SP_LOCKED and SP_UNLOCKED must constants of type spinlock_t.
- */
-
-#  include <nuttx/spinlock_type.h>
+#  include <nuttx/atomic.h>  /* atomic_t, the lock word of a spin lock */
 #endif
 
 /****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
 
-/* Standard POSIX switches */
-
-#ifndef _POSIX_THREADS
-#  define _POSIX_THREADS
-#endif
-
-#ifndef _POSIX_THREAD_ATTR_STACKSIZE
-#  define _POSIX_THREAD_ATTR_STACKSIZE
-#endif
-
 /* Values for the process shared (pshared) attribute */
 
-#define PTHREAD_PROCESS_PRIVATE       0
-#define PTHREAD_PROCESS_SHARED        1
+#define PTHREAD_PROCESS_PRIVATE       1
+#define PTHREAD_PROCESS_SHARED        2
 
 /* Values for the mutext type attribute:
  *
@@ -135,11 +115,11 @@
 
 /* Thread return value when a pthread is canceled */
 
-#define PTHREAD_CANCELED              ((FAR void*)ERROR)
+#define PTHREAD_CANCELED              ((FAR void *)-1)
 
 /* Used to initialize a pthread_once_t */
 
-#define PTHREAD_ONCE_INIT             {false, PTHREAD_MUTEX_INITIALIZER}
+#define PTHREAD_ONCE_INIT             {0, PTHREAD_MUTEX_INITIALIZER}
 
 /* This is returned by pthread_barrier_wait.  It must not match any errno
  * in errno.h
@@ -283,9 +263,9 @@ typedef struct pthread_cond_s pthread_cond_t;
 
 struct pthread_mutexattr_s
 {
-  uint8_t pshared : 1;  /* PTHREAD_PROCESS_PRIVATE or PTHREAD_PROCESS_SHARED */
+  uint8_t pshared : 2;  /* PTHREAD_PROCESS_PRIVATE or PTHREAD_PROCESS_SHARED */
 #if defined(CONFIG_PRIORITY_INHERITANCE) || defined(CONFIG_PRIORITY_PROTECT)
-  uint8_t proto   : 2;  /* See PTHREAD_PRIO_* definitions */
+  uint8_t prio    : 2;  /* See PTHREAD_PRIO_* definitions */
 #endif
 #ifdef CONFIG_PRIORITY_PROTECT
   uint8_t ceiling;      /* Priority ceiling */
@@ -338,13 +318,13 @@ typedef struct pthread_mutex_s pthread_mutex_t;
 #ifdef CONFIG_PTHREAD_MUTEX_DEFAULT_PRIO_INHERIT
 #  define PTHREAD_MUTEX_DEFAULT_PRIO_INHERIT SEM_PRIO_INHERIT
 #else
-#  define PTHREAD_MUTEX_DEFAULT_PRIO_INHERIT 0
+#  define PTHREAD_MUTEX_DEFAULT_PRIO_INHERIT SEM_PRIO_NONE
 #endif
 
 #ifdef CONFIG_PTHREAD_MUTEX_DEFAULT_PRIO_PROTECT
 #  define PTHREAD_MUTEX_DEFAULT_PRIO_PROTECT SEM_PRIO_PROTECT
 #else
-#  define PTHREAD_MUTEX_DEFAULT_PRIO_PROTECT 0
+#  define PTHREAD_MUTEX_DEFAULT_PRIO_PROTECT SEM_PRIO_NONE
 #endif
 
 #define PTHREAD_MUTEX_DEFAULT_PRIO_FLAGS (PTHREAD_MUTEX_DEFAULT_PRIO_INHERIT | \
@@ -402,7 +382,7 @@ typedef struct pthread_barrier_s pthread_barrier_t;
 
 struct pthread_once_s
 {
-  volatile bool done;
+  volatile uint8_t done;
   pthread_mutex_t mutex;
 };
 
@@ -427,7 +407,7 @@ struct pthread_rwlock_s
   pthread_cond_t  cv;
   unsigned int num_readers;
   unsigned int num_writers;
-  bool write_in_progress;
+  uint8_t write_in_progress;
 };
 
 #ifndef __PTHREAD_RWLOCK_T_DEFINED
@@ -437,16 +417,14 @@ typedef struct pthread_rwlock_s pthread_rwlock_t;
 
 #define PTHREAD_RWLOCK_INITIALIZER  {PTHREAD_MUTEX_INITIALIZER, \
                                      PTHREAD_COND_INITIALIZER, \
-                                     0, 0, false}
+                                     0, 0, 0}
 
 #ifdef CONFIG_PTHREAD_SPINLOCKS
 /* This (non-standard) structure represents a pthread spinlock */
 
 struct pthread_spinlock_s
 {
-  volatile spinlock_t sp_lock;  /* Indicates if the spinlock is locked or
-                                 * not.  See the values SP_LOCKED and
-                                 * SP_UNLOCKED. */
+  atomic_t sp_lock;             /* 1 if locked, 0 if not */
   pthread_t sp_holder;          /* ID of the thread that holds the spinlock */
 };
 #  ifndef __PTHREAD_SPINLOCK_T_DEFINED
@@ -485,9 +463,9 @@ int pthread_attr_setschedpolicy(FAR pthread_attr_t *attr, int policy);
 int pthread_attr_getschedpolicy(FAR const pthread_attr_t *attr,
                                 FAR int *policy);
 int pthread_attr_setschedparam(FAR pthread_attr_t *attr,
-                               FAR const struct sched_param *param);
+                               FAR const struct sched_param *);
 int pthread_attr_getschedparam(FAR const pthread_attr_t *attr,
-                               FAR struct sched_param *param);
+                               FAR struct sched_param *);
 int pthread_attr_setinheritsched(FAR pthread_attr_t *attr,
                                  int inheritsched);
 int pthread_attr_getinheritsched(FAR const pthread_attr_t *attr,
@@ -574,16 +552,12 @@ int  pthread_setcanceltype(int type, FAR int *oldtype);
 void pthread_testcancel(void);
 
 /* A thread may set up cleanup functions to execute when the thread exits or
- * is canceled.
+ * is canceled.  They need CONFIG_TLS_NCLEANUP > 0: without it, a program
+ * that calls them does not link.
  */
 
-#if CONFIG_TLS_NCLEANUP > 0
 void pthread_cleanup_pop(int execute);
 void pthread_cleanup_push(pthread_cleanup_t routine, FAR void *arg);
-#else
-#  define pthread_cleanup_pop(execute) ((void)(execute))
-#  define pthread_cleanup_push(routine,arg) ((void)(routine), (void)(arg))
-#endif
 
 /* A thread can await termination of another thread and retrieve the return
  * value of the thread.
@@ -609,9 +583,9 @@ int pthread_equal(pthread_t t1, pthread_t t2);
 /* Thread scheduling parameters */
 
 int pthread_getschedparam(pthread_t thread, FAR int *policy,
-                          FAR struct sched_param *param);
+                          FAR struct sched_param *);
 int pthread_setschedparam(pthread_t thread, int policy,
-                          FAR const struct sched_param *param);
+                          FAR const struct sched_param *);
 int pthread_setschedprio(pthread_t thread, int prio);
 
 #ifdef CONFIG_SMP
@@ -805,7 +779,6 @@ int pthread_atfork(CODE void (*prepare)(void),
  ****************************************************************************/
 
 #include <sys/types.h>
-#include <stdbool.h>
 
 /****************************************************************************
  * Public Type Definitions

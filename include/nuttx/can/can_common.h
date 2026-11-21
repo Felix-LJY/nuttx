@@ -35,14 +35,14 @@
  * Public Function Prototypes
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
+
+/****************************************************************************
+ * Public Function Prototypes
+ ****************************************************************************/
 
 /****************************************************************************
  * Name: can_bytes2dlc
@@ -62,7 +62,48 @@ extern "C"
  *
  ****************************************************************************/
 
-uint8_t can_bytes2dlc(uint8_t nbytes);
+static inline uint8_t can_bytes2dlc(uint8_t nbytes)
+{
+  if (nbytes <= 8)
+    {
+      return nbytes;
+    }
+#if defined(CONFIG_CAN_FD) || defined(CONFIG_NET_CAN_CANFD)
+  else if (nbytes <= 12)
+    {
+      return 9;
+    }
+  else if (nbytes <= 16)
+    {
+      return 10;
+    }
+  else if (nbytes <= 20)
+    {
+      return 11;
+    }
+  else if (nbytes <= 24)
+    {
+      return 12;
+    }
+  else if (nbytes <= 32)
+    {
+      return 13;
+    }
+  else if (nbytes <= 48)
+    {
+      return 14;
+    }
+  else /* if (nbytes <= 64) */
+    {
+      return 15;
+    }
+#else
+  else
+    {
+      return 8;
+    }
+#endif
+}
 
 /****************************************************************************
  * Name: can_dlc2bytes
@@ -82,9 +123,43 @@ uint8_t can_bytes2dlc(uint8_t nbytes);
  *
  ****************************************************************************/
 
-uint8_t can_dlc2bytes(uint8_t dlc);
+static inline uint8_t can_dlc2bytes(uint8_t dlc)
+{
+  if (dlc > 8)
+    {
+#if defined(CONFIG_CAN_FD) || defined(CONFIG_NET_CAN_CANFD)
+      switch (dlc)
+        {
+          case 9:
+            return 12;
 
-#undef EXTERN
+          case 10:
+            return 16;
+
+          case 11:
+            return 20;
+
+          case 12:
+            return 24;
+
+          case 13:
+            return 32;
+
+          case 14:
+            return 48;
+
+          default:
+          case 15:
+            return 64;
+        }
+#else
+      return 8;
+#endif
+    }
+
+  return dlc;
+}
+
 #if defined(__cplusplus)
 }
 #endif

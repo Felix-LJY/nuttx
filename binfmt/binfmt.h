@@ -39,13 +39,9 @@
  * Public Data
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /* This is a list of registered handlers for different binary formats.
@@ -54,7 +50,7 @@ extern "C"
  * list.
  */
 
-EXTERN FAR struct binfmt_s *g_binfmts;
+extern FAR struct binfmt_s *g_binfmts;
 
 /****************************************************************************
  * Public Function Prototypes
@@ -84,44 +80,44 @@ int binfmt_dumpmodule(FAR const struct binary_s *bin);
  * Name: binfmt_copyargv
  *
  * Description:
+ *   Get the argument list of the new program.  If ldargv is not NULL, it
+ *   takes the place of argv[0]: a loader gives the program to run and its
+ *   first arguments (for example, the interpreter of a script).
+ *
  *   In the kernel build, the argv list will likely lie in the caller's
  *   address environment and, hence, be inaccessible when we switch to the
  *   address environment of the new process address environment.  So we
  *   do not have any real option other than to copy the callers argv[] list.
  *
  * Input Parameters:
+ *   copy     - The argument list to use
+ *   ldargv   - The argument list of the loader, or NULL
  *   argv     - Argument list
  *
  * Returned Value:
- *   A non-zero copy is returned on success.
+ *   Zero (OK) on success; a negated errno value on failure.
  *
  ****************************************************************************/
 
-#if defined(CONFIG_ARCH_ADDRENV) && defined(CONFIG_BUILD_KERNEL)
-int binfmt_copyargv(FAR char * const **copy, FAR char * const *argv);
-#else
-#  define binfmt_copyargv(copy, argv) (*(copy) = (argv), 0)
-#endif
+int binfmt_copyargv(FAR char * const **copy, FAR char * const *ldargv,
+                    FAR char * const *argv);
 
 /****************************************************************************
  * Name: binfmt_freeargv
  *
  * Description:
- *   Release the copied argv[] list.
+ *   Release the list that binfmt_copyargv() returned, if it allocated it.
  *
  * Input Parameters:
  *   argv     - Argument list
+ *   ldargv   - The argument list of the loader that binfmt_copyargv() got
  *
  * Returned Value:
  *   None
  *
  ****************************************************************************/
 
-#if defined(CONFIG_ARCH_ADDRENV) && defined(CONFIG_BUILD_KERNEL)
-void binfmt_freeargv(FAR char * const *argv);
-#else
-#  define binfmt_freeargv(argv)
-#endif
+void binfmt_freeargv(FAR char * const *argv, FAR char * const *ldargv);
 
 /****************************************************************************
  * Name: binfmt_copyenv
@@ -142,7 +138,7 @@ void binfmt_freeargv(FAR char * const *argv);
  ****************************************************************************/
 
 #ifndef CONFIG_DISABLE_ENVIRON
-#  define binfmt_copyenv(copy, envp) binfmt_copyargv(copy, envp)
+#  define binfmt_copyenv(copy, envp) binfmt_copyargv(copy, NULL, envp)
 #else
 #  define binfmt_copyenv(copy, envp) (*(copy) = (envp), 0)
 #endif
@@ -162,7 +158,7 @@ void binfmt_freeargv(FAR char * const *argv);
  ****************************************************************************/
 
 #ifndef CONFIG_DISABLE_ENVIRON
-#  define binfmt_freeenv(envp) binfmt_freeargv(envp)
+#  define binfmt_freeenv(envp) binfmt_freeargv(envp, NULL)
 #else
 #  define binfmt_freeenv(envp)
 #endif
@@ -213,24 +209,25 @@ void binfmt_freeactions(FAR const posix_spawn_file_actions_t *copy);
 #  define binfmt_freeactions(copy)
 #endif
 
-#ifdef CONFIG_SCHED_USER_IDENTITY
+#ifdef CONFIG_BINFMT_CHECKEXEC
 /****************************************************************************
  * Name: binfmt_checkexecperm
  *
  * Description:
- *   Verify that the calling task has execute permission on the file
- *   described by 'bin'.  The file owner, group, and mode must already be
- *   populated in the binary_s structure.
+ *   Verify that the calling task has execute permission on a file with
+ *   the given mode, owner and group.
  *
  * Input Parameters:
- *   bin - Load structure with uid, gid, and mode populated
+ *   mode - The mode of the file
+ *   uid  - The owner of the file
+ *   gid  - The group of the file
  *
  * Returned Value:
  *   Zero (OK) on success; -EACCES if execute permission is denied.
  *
  ****************************************************************************/
 
-int binfmt_checkexecperm(FAR struct binary_s *bin);
+int binfmt_checkexecperm(mode_t mode, uid_t uid, gid_t gid);
 #endif
 
 #ifdef CONFIG_BUILTIN
@@ -262,6 +259,19 @@ int builtin_initialize(void);
  ****************************************************************************/
 
 void builtin_uninitialize(void);
+#endif
+
+#ifdef CONFIG_BINFMT_SCRIPT
+/****************************************************************************
+ * Name: script_initialize / script_uninitialize
+ *
+ * Description:
+ *   Register/unregister the script (#!) binary format handler.
+ *
+ ****************************************************************************/
+
+int script_initialize(void);
+void script_uninitialize(void);
 #endif
 
 #ifdef CONFIG_ELF
@@ -327,7 +337,6 @@ int nxflat_initialize(void);
 void nxflat_uninitialize(void);
 #endif
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

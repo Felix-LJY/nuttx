@@ -52,17 +52,16 @@ struct group
  * Public Function Prototypes
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 FAR struct group *getgrnam(FAR const char *name);
 FAR struct group *getgrgid(gid_t gid);
+FAR struct group *getgrent(void);
+void setgrent(void);
+void endgrent(void);
 int getgrnam_r(FAR const char *name,
                FAR struct group *grp,
                FAR char *buf,
@@ -75,7 +74,6 @@ int initgroups(FAR const char *user, gid_t group);
 int getgrouplist(FAR const char *user, gid_t group, FAR gid_t *groups,
                  FAR int *ngroups);
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

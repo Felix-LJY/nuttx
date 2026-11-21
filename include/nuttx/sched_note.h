@@ -34,6 +34,7 @@
 #include <stdbool.h>
 #include <stdarg.h>
 
+#include <nuttx/arch.h>
 #include <nuttx/macro.h>
 #include <nuttx/sched.h>
 #include <nuttx/spinlock_type.h>
@@ -143,19 +144,30 @@
 #define NOTE_PRINTF_GET_TYPE(tag, index) (((tag) >> (index) * 2) & 0x03)
 #define NOTE_PRINTF_GET_COUNT(tag)       (((tag) >> 28) & 0x0f)
 
+/* Promote an argument as "arg + 0" does, but also accept a pointer to an
+ * incomplete type, which "arg + 0" rejects.
+ */
+
+#define NOTE_PRINTF_PROMOTE(arg) (0 ? 0 : (arg))
+
 /* Check if a variable is 32-bit or 64-bit */
 
-#define NOTE_PRINTF_INT_TYPE(arg) (sizeof((arg) + 0) <= sizeof(uint32_t) ? \
+#define NOTE_PRINTF_INT_TYPE(arg) (sizeof(NOTE_PRINTF_PROMOTE(arg)) <= \
+                                   sizeof(uint32_t) ? \
                                    NOTE_PRINTF_UINT32 : NOTE_PRINTF_UINT64)
 
-/* Use object_size to mark strings of known size */
+/* Use the object size to mark strings of known size.  This is the builtin:
+ * a program can expand this macro, and NUTTX_NO_EXTENSIONS removes
+ * object_size().
+ */
 
-#define NOTE_PRINTF_OBJECT_SIZE(arg) object_size((FAR void *)(uintptr_t)(arg), 2)
+#define NOTE_PRINTF_OBJECT_SIZE(arg) \
+        __builtin_object_size((FAR void *)(uintptr_t)(arg), 2)
 
 /* Use _Generic to determine the type of the parameter */
 
 #define NOTE_PRINTF_ARG_TYPE(__arg__) \
-        _Generic((__arg__) + 0, \
+        _Generic(NOTE_PRINTF_PROMOTE(__arg__), \
                  float : NOTE_PRINTF_DOUBLE, \
                  double: NOTE_PRINTF_DOUBLE, \
                  char *: ({NOTE_PRINTF_OBJECT_SIZE(__arg__) > 0 ? \
@@ -179,31 +191,38 @@
 #define NOTE_PRINTF_TAG(...) \
         ((GET_ARG_COUNT(__VA_ARGS__) << 28) + NOTE_PRINTF_TYPES(__VA_ARGS__))
 
-#define SCHED_NOTE_IP \
-        ({ __label__ __here; __here: (unsigned long)&&__here; })
-
 #define sched_note_event(tag, event, buf, len) \
-        sched_note_event_ip(tag, SCHED_NOTE_IP, event, buf, len)
+        sched_note_event_ip(tag, up_getpc(), event, buf, len)
 #define sched_note_vprintf(tag, fmt, va) \
-        sched_note_vprintf_ip(tag, SCHED_NOTE_IP, fmt, 0, &(va))
+        sched_note_vprintf_ip(tag, up_getpc(), fmt, 0, &(va))
 
-#ifdef CONFIG_DRIVERS_NOTE_STRIP_FORMAT
+#if defined(CONFIG_DRIVERS_NOTE_STRIP_FORMAT) && !defined(__cplusplus)
+/* The type tag describes at most 14 arguments.  A call with more arguments
+ * keeps its format string and gives type 0.  C++ has no _Generic, so C++
+ * calls keep their format string too.
+ */
+
 #  define sched_note_printf(tag, fmt, ...) \
           do \
             { \
-              static const locate_data(".printf_format") \
-              char __fmt__[] = fmt; \
-              uint32_t __type__ = NOTE_PRINTF_TAG(__VA_ARGS__); \
-              static_assert(GET_ARG_COUNT(__VA_ARGS__) <= 14, \
-                            "The number of sched_note_nprintf " \
-                            "parameters needs to be less than 14"); \
-              sched_note_printf_ip(tag, SCHED_NOTE_IP, __fmt__, \
-                                   __type__, ##__VA_ARGS__); \
+              if (GET_ARG_COUNT(__VA_ARGS__) > 14) \
+                { \
+                  sched_note_printf_ip(tag, up_getpc(), fmt, 0, \
+                                       ##__VA_ARGS__); \
+                } \
+              else \
+                { \
+                  static const locate_data(".printf_format") \
+                  char __fmt__[] = fmt; \
+                  uint32_t __type__ = NOTE_PRINTF_TAG(__VA_ARGS__); \
+                  sched_note_printf_ip(tag, up_getpc(), __fmt__, \
+                                       __type__, ##__VA_ARGS__); \
+                } \
             } \
           while (0)
 #else
 #  define sched_note_printf(tag, fmt, ...) \
-          sched_note_printf_ip(tag, SCHED_NOTE_IP, fmt, 0, ##__VA_ARGS__)
+          sched_note_printf_ip(tag, up_getpc(), fmt, 0, ##__VA_ARGS__)
 #endif
 
 #define sched_note_begin(tag) \
@@ -225,6 +244,16 @@
             strlcpy(counter.name, name_, NAME_MAX); \
             sched_note_event(tag, NOTE_DUMP_COUNTER, \
                              &counter, sizeof(counter)); \
+          } \
+        while (0)
+
+#define sched_note_threadtime(_elapsed) \
+        do \
+          { \
+            struct note_threadtime_s threadtime; \
+            threadtime.elapsed = (_elapsed); \
+            sched_note_event(NOTE_TAG_SCHED, NOTE_DUMP_THREADTIME, \
+                             &threadtime, sizeof(threadtime)); \
           } \
         while (0)
 
@@ -273,6 +302,7 @@ enum note_type_e
   NOTE_DUMP_MARK,
   NOTE_DUMP_BINARY,
   NOTE_DUMP_COUNTER,
+  NOTE_DUMP_THREADTIME,
 
   /* Always last */
 
@@ -306,6 +336,7 @@ enum note_tag_e
   NOTE_TAG_SCHED,
   NOTE_TAG_VIDEO,
   NOTE_TAG_WIRLESS,
+  NOTE_TAG_RPMSG,
 
   /* Always last */
 
@@ -498,6 +529,11 @@ struct note_counter_s
   char name[NAME_MAX];
 };
 
+struct note_threadtime_s
+{
+  clock_t elapsed;
+};
+
 /* This is the type of the argument passed to the NOTECTL_GETMODE and
  * NOTECTL_SETMODE ioctls
  */
@@ -563,13 +599,9 @@ struct note_filter_named_tag_s
  * Public Function Prototypes
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -769,7 +801,6 @@ void sched_note_filter_tag(FAR struct note_filter_named_tag_s *oldf,
 
 #endif /* defined(__KERNEL__) || defined(CONFIG_BUILD_FLAT) */
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

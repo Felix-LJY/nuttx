@@ -1,3 +1,24 @@
+############################################################################
+# 
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.  The
+# ASF licenses this file to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance with the
+# License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
+############################################################################
 #
 # For a description of the syntax of this configuration file,
 # see the file kconfig-language.txt in the NuttX tools repository.
@@ -227,6 +248,12 @@ config SIM_LOOP_INTERVAL
 	default 10
 	---help---
 		Loop event sleep time
+
+config SIM_CAMERA_LOOP_INTERVAL
+	int "Simulator camera loop interval in ms"
+	default 10
+	---help---
+		Simulator camera loop event sleep time
 
 config SIM_STACKSIZE_ADJUSTMENT
 	int "The adjustment of stack size for sim"
@@ -505,6 +532,19 @@ config SIM_VIDEO_ENCODER_DEV_PATH
 	depends on SIM_VIDEO_ENCODER
 	default "/dev/video2"
 
+config SIM_JPEG_DECODER
+	bool "JPEG decoder support on sim"
+	depends on VIDEO
+	default n
+	---help---
+		v4l2m2m simulator JPEG decoder, uses the standard libjpeg
+		API from the host libjpeg library.
+
+config SIM_JPEG_DECODER_DEV_PATH
+	string "JPEG decoder device path"
+	depends on SIM_JPEG_DECODER
+	default "/dev/video3"
+
 endmenu
 
 menu "Simulated Graphics/Input"
@@ -651,6 +691,16 @@ config SIM_KEYBOARD
 	depends on SIM_X11FB
 	---help---
 		Support an X11 mouse-based keyboard emulation.  Also needs INPUT=y
+
+config SIM_MOUSE_BUFFSIZE
+	int "sim mouse buffer size"
+	default 16
+	depends on SIM_MOUSE
+	---help---
+		Number of mouse reports buffered by /dev/mouse0.  The X11 event
+		loop can deliver a button press and its release in the same
+		polling period; with a single report buffered the press would be
+		overwritten before the application reads it.
 
 config SIM_KEYBOARD_BUFFSIZE
 	int "sim keyboard buffer size"

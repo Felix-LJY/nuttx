@@ -150,8 +150,14 @@ out:
 
 int nxsem_tickwait_uninterruptible(FAR sem_t *sem, uint32_t delay)
 {
+#if defined(CONFIG_BUILD_FLAT) || defined(__KERNEL__)
+  FAR struct tcb_s *rtcb;
+  uint32_t flags;
+#endif
   clock_t end = clock_delay2abstick(delay);
   int ret;
+
+  NXSEM_SET_UNINTERRUPTIBLE(rtcb, flags);
 
   for (; ; )
     {
@@ -169,6 +175,8 @@ int nxsem_tickwait_uninterruptible(FAR sem_t *sem, uint32_t delay)
           delay = 0;
         }
     }
+
+  NXSEM_RESTORE_UNINTERRUPTIBLE(rtcb, flags);
 
   return ret;
 }

@@ -1,9 +1,7 @@
 /****************************************************************************
  * arch/arm64/src/bcm2711/bcm2711_oneshot.c
  *
- * Contributed by: Matteo Golin <linguini@apache.org>
- *
- * SPDX-License-Identifer: Apache-2.0
+ * SPDX-License-Identifier: Apache-2.0
  *
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements. See the NOTICE file distributed with
@@ -140,6 +138,7 @@ static struct bcm2711_chan_s g_chans[BCM_SYST_NUMCHANS] =
 static clkcnt_t get_current_count(void)
 {
   clkcnt_t count;
+
   count = (clkcnt_t)getreg32(BCM_SYST_CHI) << 32;
   count |= getreg32(BCM_SYST_CLO);
   return count;

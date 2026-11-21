@@ -1,6 +1,8 @@
-===============
-gd32f470zk-eval
-===============
+==========================
+GigaDevice GD32F470ZK-EVAL
+==========================
+
+.. tags:: arch:arm, chip:gd32f4, vendor:gigadevice
 
 The GD32F470Z-EVAL board is a hardware platform that enables prototyping
 on GD32F470ZK Cortex-M4F Stretch Performance MCU.

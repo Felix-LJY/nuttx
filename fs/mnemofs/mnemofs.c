@@ -57,10 +57,12 @@
 #include <nuttx/crc8.h>
 #include <nuttx/kmalloc.h>
 #include <nuttx/mtd/mtd.h>
+#include <nuttx/mutex.h>
 
 #include <errno.h>
 #include <string.h>
 #include <sys/statfs.h>
+#include <assert.h>
 
 #include "mnemofs.h"
 
@@ -868,12 +870,7 @@ static int mnemofs_bind(FAR struct inode *driver, FAR const void *data,
 
   finfo("sb allocated: %p\n", sb);
 
-  ret = nxmutex_init(&sb->lock);
-  if (ret < 0)
-    {
-      ferr("Could not initialize fs mutex\n");
-      goto errout_with_sb;
-    }
+  nxmutex_init(&sb->lock);
 
   ret = mnemofs_lock(sb);
   if (ret < 0)
@@ -1041,7 +1038,6 @@ errout_with_lock:
   kmm_free(sb->rwbuf);
 errout_with_mutex:
   nxmutex_destroy(&sb->lock);
-errout_with_sb:
   kmm_free(sb);
   return ret;
 }
@@ -1857,6 +1853,7 @@ static int mnemofs_rename(FAR struct inode *mountpt,
                           FAR const char *newrelpath)
 {
   FAR struct mfs_sb_s *sb;
+  struct stat buf;
   int ret;
 
   sb = mnemofs_mountpt_to_sb(mountpt);
@@ -1865,6 +1862,16 @@ static int mnemofs_rename(FAR struct inode *mountpt,
     {
       ferr("mnemofs_lock failed: %d\n", ret);
       return ret;
+    }
+
+  /* mfs_dir_rename() cannot replace an existing newrelpath.  EEXIST makes
+   * the VFS remove it first.
+   */
+
+  if (mfs_dir_stat(sb, newrelpath, &buf) == OK)
+    {
+      mnemofs_unlock(sb);
+      return -EEXIST;
     }
 
   ret = mfs_dir_rename(sb, oldrelpath, newrelpath);

@@ -217,5 +217,29 @@ int nrf53_i2ctool(void);
 void nrf53_spidev_initialize(void);
 #endif
 
+/****************************************************************************
+ * Name: nrf53_adc_setup
+ *
+ * Description:
+ *   Initialize ADC driver.
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_ADC
+int nrf53_adc_setup(void);
+#endif
+
+/****************************************************************************
+ * Name: nrf53_npm1100_init
+ *
+ * Description:
+ *   Register the nPM1100 PMIC charge-status driver as /dev/charge0.
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_NPM1100
+int nrf53_npm1100_init(void);
+#endif
+
 #endif /* __ASSEMBLY__ */
 #endif /* __BOARDS_ARM_NRF53_THINGY53_SRC_THINGY53_H */

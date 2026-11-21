@@ -1,8 +1,8 @@
-=========
-ne64badge
-=========
+=================================
+Future Electronics NE64 PoE Badge
+=================================
 
-.. tags:: vendor:freescale
+.. tags:: arch:hc, chip:m9s12, vendor:nxp
 
 This README discusses issues unique to NuttX configurations for the Future
 Electronics Group NE64 /PoE Badge board based on the MC9S12NE64 hcs12 cpu.

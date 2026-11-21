@@ -88,9 +88,13 @@ static int stat_recursive(FAR const char *path,
 
   /* Get an inode for this path */
 
-  SETUP_SEARCH(&desc, path, true);
+  ret = inode_search_setup(&desc, path, true);
+  if (ret < 0)
+    {
+      return ret;
+    }
 
-  ret = inode_find(&desc);
+  ret = inode_find(&desc, &inode);
   if (ret < 0)
     {
       /* This name does not refer to an inode in the pseudo file system and
@@ -102,10 +106,9 @@ static int stat_recursive(FAR const char *path,
 
   /* Get the search results */
 
-  inode = desc.node;
   DEBUGASSERT(inode != NULL);
 
-  ret = inode_checkpathperm(inode, 0, 0);
+  ret = inode_checkpathperm(inode, INODE_PATH_AMODE(&desc), 0);
   if (ret < 0)
     {
       inode_release(inode);
@@ -140,6 +143,23 @@ static int stat_recursive(FAR const char *path,
         {
           ret = -ENOSYS;
         }
+
+      /* A file system that gives no device number gets the serial number
+       * of its mount point: st_dev and st_ino then tell the files of two
+       * volumes apart.
+       */
+
+      if (ret >= 0 && buf->st_dev == 0)
+        {
+          buf->st_dev = inode->i_ino;
+        }
+
+      /* No file on a mount with MS_NOEXEC can be executed */
+
+      if (ret >= 0 && INODE_IS_NOEXEC(inode) && S_ISREG(buf->st_mode))
+        {
+          buf->st_mode &= ~(S_IXUSR | S_IXGRP | S_IXOTH);
+        }
     }
   else
 #endif
@@ -153,7 +173,7 @@ static int stat_recursive(FAR const char *path,
 
   inode_release(inode);
 errout_with_search:
-  RELEASE_SEARCH(&desc);
+  inode_search_release(&desc);
   return ret;
 }
 
@@ -178,6 +198,9 @@ errout_with_search:
 
 int nx_stat(FAR const char *path, FAR struct stat *buf, int resolve)
 {
+  struct stat kbuf;
+  int ret;
+
   /* Sanity checks */
 
   if (path == NULL  || buf == NULL)
@@ -192,9 +215,24 @@ int nx_stat(FAR const char *path, FAR struct stat *buf, int resolve)
 
   /* The perform the stat() operation on the path.  This is potentially
    * recursive if soft link support is enabled.
+   *
+   * Fill a local buffer and copy it to the caller's buffer at the end, when
+   * the inode and the path buffer are released.  A bad buffer then faults
+   * with nothing held.
    */
 
-  return stat_recursive(path, buf, resolve);
+  /* Clear it first: a file system fills only some of the fields, and the
+   * others must not give the caller what the kernel stack held.
+   */
+
+  memset(&kbuf, 0, sizeof(kbuf));
+  ret = stat_recursive(path, &kbuf, resolve);
+  if (ret >= 0)
+    {
+      memcpy(buf, &kbuf, sizeof(kbuf));
+    }
+
+  return ret;
 }
 
 /****************************************************************************
@@ -419,7 +457,7 @@ int inode_stat(FAR struct inode *inode, FAR struct stat *buf, int resolve)
 
       if (INODE_IS_MOUNTPT(inode) || INODE_IS_PSEUDODIR(inode))
         {
-          buf->st_mode |= S_IFDIR;
+          buf->st_mode |= S_IFDIR | S_IXOTH | S_IXGRP | S_IXUSR;
         }
 
       /* Check for a block driver */
@@ -456,7 +494,9 @@ int inode_stat(FAR struct inode *inode, FAR struct stat *buf, int resolve)
 #ifdef CONFIG_PSEUDOFS_FILE
           if (inode_is_pseudofile(inode))
             {
-              buf->st_mode |= S_IFREG;
+              /* A file in the pseudo file system can be a program */
+
+              buf->st_mode |= S_IFREG | S_IXOTH | S_IXGRP | S_IXUSR;
             }
           else
 #endif
@@ -469,11 +509,12 @@ int inode_stat(FAR struct inode *inode, FAR struct stat *buf, int resolve)
     {
       /* If it has no operations, then it must just be a intermediate
        * node in the inode tree.  It is something like a directory.
-       * We'll say that all pseudo-directories are read-able but not
-       * write-able.
+       * We'll say that all pseudo-directories are read-able and
+       * searchable but not write-able.
        */
 
-      buf->st_mode |= S_IFDIR | S_IROTH | S_IRGRP | S_IRUSR;
+      buf->st_mode |= S_IFDIR | S_IROTH | S_IRGRP | S_IRUSR | S_IXOTH |
+                      S_IXGRP | S_IXUSR;
     }
 
 #ifdef CONFIG_PSEUDOFS_ATTRIBUTES

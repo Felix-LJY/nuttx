@@ -2,7 +2,7 @@
 Nordic nRF5340 DK
 =================
 
-.. tags:: chip:nrf53, chip:nrf5340
+.. tags:: arch:arm, chip:nrf53, part:nrf5340, vendor:nordic
 
 The `nRF5340-DK (PCA10092) <https://www.nordicsemi.com/Products/Development-hardware/nrf5340-dk>`_
 is a development board based on the nRF5340 from Nordic.
@@ -89,6 +89,20 @@ composite_cpuapp
 
 NuttShell configuration for the application core with support for CDC/ACM with
 RNDIS composite driver.
+
+ieee802154_6lowpan_cpunet
+-------------------------
+
+6LoWPAN over the IEEE 802.15.4 MAC on the network core (``wpan0``), with
+the ``udp`` and ``nettest`` examples. The application core must run a
+configuration that boots the network core, for example ``nsh_cpuapp``.
+
+ieee802154_mac_cpunet
+---------------------
+
+IEEE 802.15.4 MAC on the network core with the ``i8sak`` tool on
+``/dev/ieee0`` (console on J-Link VCOM1). The application core must run a
+configuration that boots the network core, for example ``nsh_cpuapp``.
 
 nsh_cpuapp
 ----------

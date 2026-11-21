@@ -30,6 +30,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <assert.h>
 #include <nuttx/debug.h>
 
@@ -68,7 +69,9 @@ static void local_freectl(FAR struct local_conn_s *conn, int count)
       peer = conn;
     }
 
-  while (count-- > 0)
+  /* The receiver can take the files first */
+
+  while (count-- > 0 && peer->lc_cfpcount > 0)
     {
       file_put(peer->lc_cfps[--peer->lc_cfpcount]);
       peer->lc_cfps[peer->lc_cfpcount] = NULL;
@@ -76,7 +79,8 @@ static void local_freectl(FAR struct local_conn_s *conn, int count)
 }
 
 static int local_sendctl(FAR struct local_conn_s *conn,
-                         FAR const struct msghdr *msg)
+                         FAR const struct msghdr *msg,
+                         FAR struct local_conn_s **speer)
 {
   FAR struct local_conn_s *peer;
   FAR struct file *filep;
@@ -87,6 +91,7 @@ static int local_sendctl(FAR struct local_conn_s *conn,
   int i = 0;
 
   local_lock();
+  *speer = conn->lc_peer;
   peer = conn->lc_peer;
   if (peer == NULL)
     {
@@ -135,89 +140,85 @@ fail:
 #endif /* CONFIG_NET_LOCAL_SCM */
 
 /****************************************************************************
- * Name: local_send
+ * Name: local_pair_send
  *
  * Description:
- *   Send a local packet as a stream.
+ *   Send one datagram, whole or not at all, to the peer of a SOCK_DGRAM
+ *   socket pair.  The frame has no address, so recvfrom() on the peer
+ *   gives none.
  *
  * Input Parameters:
- *   psock    An instance of the internal socket structure.
+ *   conn     The connection of the sender
  *   buf      Data to send
- *   len      Length of data to send
- *   flags    Send flags (ignored for now)
+ *   len      Number of entries in buf
+ *   flags    Send flags
  *
  * Returned Value:
- *   On success, returns the number of characters sent.  On  error,
- *   -1 is returned, and errno is set appropriately (see send() for the
- *   list of errno numbers).
+ *   The length of the datagram, or a negated errno value: EMSGSIZE when
+ *   the datagram does not fit into the FIFO, ECONNREFUSED when the peer
+ *   was closed.
+ *
+ * Assumptions:
+ *   The caller holds lc_sendlock.
  *
  ****************************************************************************/
 
-static ssize_t local_send(FAR struct socket *psock,
-                          FAR const struct iovec *buf,
-                          size_t len, int flags)
-{
-  ssize_t ret;
-
-  switch (psock->s_type)
-    {
-#ifdef CONFIG_NET_LOCAL_STREAM
-      case SOCK_STREAM:
-#endif /* CONFIG_NET_LOCAL_STREAM */
 #ifdef CONFIG_NET_LOCAL_DGRAM
-      case SOCK_DGRAM:
-#endif /* CONFIG_NET_LOCAL_DGRAM */
-        {
-          FAR struct local_conn_s *conn = psock->s_conn;
+static ssize_t local_pair_send(FAR struct local_conn_s *conn,
+                               FAR const struct iovec *buf, size_t len,
+                               int flags)
+{
+  FAR const struct iovec *end = buf + len;
+  FAR const struct iovec *iov;
+  size_t rcvsize;
+  size_t need;
+  int space;
+  int ret;
 
-          /* Local TCP packet send */
-
-          DEBUGASSERT(buf);
-
-          /* Verify that this is a connected peer socket and that it has
-           * opened the outgoing FIFO for write-only access.
-           */
-
-          if (conn->lc_state != LOCAL_STATE_CONNECTED)
-            {
-              nerr("ERROR: not connected\n");
-              return -ENOTCONN;
-            }
-
-          /* Check shutdown state */
-
-          if (conn->lc_outfile.f_inode == NULL)
-            {
-              return -EPIPE;
-            }
-
-          /* Send the packet */
-
-          ret = nxmutex_lock(&conn->lc_sendlock);
-          if (ret < 0)
-            {
-              /* May fail because the task was canceled. */
-
-              return ret;
-            }
-
-          ret = local_send_packet(&conn->lc_outfile, buf, len);
-          nxmutex_unlock(&conn->lc_sendlock);
-        }
-        break;
-      default:
-        {
-          /* EDESTADDRREQ.  Signifies that the socket is not connection-mode
-           * and no peer address is set.
-           */
-
-          ret = -EDESTADDRREQ;
-        }
-        break;
+  ret = file_ioctl(&conn->lc_outfile, PIPEIOC_GETSIZE, 0);
+  if (ret < 0)
+    {
+      return ret;
     }
 
-  return ret;
+  rcvsize = ret;
+
+  /* The FIFO is in atomic mode, but it fails with -EAGAIN only when it is
+   * open with O_NONBLOCK.  For MSG_DONTWAIT, check the space here.  Only
+   * this socket writes to the FIFO and the caller holds lc_sendlock, so
+   * the space cannot become smaller before the write.
+   */
+
+  if ((flags & MSG_DONTWAIT) != 0 &&
+      (conn->lc_outfile.f_oflags & O_NONBLOCK) == 0)
+    {
+      need = 2 * sizeof(lc_size_t);
+      for (iov = buf; iov != end; iov++)
+        {
+          need += iov->iov_len;
+        }
+
+      ret = file_ioctl(&conn->lc_outfile, FIONSPACE, &space);
+      if (ret < 0)
+        {
+          return ret;
+        }
+
+      if (need <= rcvsize && space < need)
+        {
+          return -EAGAIN;
+        }
+    }
+
+  ret = local_send_frame(conn, "", buf, len, rcvsize);
+
+  /* -EPIPE: the peer was closed.  A datagram socket reports that as
+   * Linux does, and without SIGPIPE.
+   */
+
+  return ret == -EPIPE ? -ECONNREFUSED : ret;
 }
+#endif /* CONFIG_NET_LOCAL_DGRAM */
 
 /****************************************************************************
  * Name: local_sendto
@@ -253,7 +254,9 @@ static ssize_t local_sendto(FAR struct socket *psock,
 #ifdef CONFIG_NET_LOCAL_DGRAM
   FAR struct local_conn_s *conn = psock->s_conn;
   FAR struct local_conn_s *server;
-  FAR const struct sockaddr_un *unaddr = (FAR const struct sockaddr_un *)to;
+  FAR const struct sockaddr_un *unaddr;
+  struct sockaddr_un kaddr;
+  FAR const char *path;
   ssize_t ret;
 
   /* Verify that a valid address has been provided */
@@ -276,6 +279,9 @@ static ssize_t local_sendto(FAR struct socket *psock,
       return -EFAULT;
     }
 
+  local_copyaddr(&kaddr, to, tolen);
+  unaddr = &kaddr;
+
   /* If this is a connected socket, then return EISCONN */
 
   if (psock->s_type != SOCK_DGRAM)
@@ -286,7 +292,10 @@ static ssize_t local_sendto(FAR struct socket *psock,
 
   /* Verify that this is not a connected peer socket.  It need not be
    * bound, however.  If unbound, recvfrom will see this as a nameless
-   * connection.
+   * connection.  A DGRAM default peer set by connect() is not a state of
+   * its own, so it never reaches this check.  A socketpair() is
+   * LOCAL_STATE_CONNECTED with its outgoing FIFO already open, which the
+   * DEBUGASSERT below would catch, so refuse it here as master does.
    */
 
   if (conn->lc_state != LOCAL_STATE_UNBOUND &&
@@ -308,6 +317,23 @@ static ssize_t local_sendto(FAR struct socket *psock,
       return -ENOENT;
     }
 
+#ifdef CONFIG_NET_LOCAL_DGRAM
+  /* POSIX: for a datagram socket the peer address set by connect() "limits
+   * the remote sender for subsequent recv() functions".  Refuse to deliver
+   * to a receiver that has connected to somebody else.
+   */
+
+  if (server->lc_dconnected &&
+      strncmp(server->lc_daddr.sun_path +
+              (server->lc_daddr.sun_path[0] == '\0' ? 1 : 0),
+              conn->lc_path, UNIX_PATH_MAX - 1) != 0)
+    {
+      local_unlock();
+      nerr("ERROR: Receiver is connected to another peer\n");
+      return -EPERM;
+    }
+#endif
+
   local_unlock();
 
   /* Make sure that dgram is sent safely */
@@ -325,51 +351,44 @@ static ssize_t local_sendto(FAR struct socket *psock,
 
   DEBUGASSERT(conn->lc_outfile.f_inode == NULL);
 
+  /* An abstract address starts with a NUL, which local_findconn() skips.
+   * Skip it here too so that the FIFO name matches the one the receiver
+   * bound, instead of being the empty name.
+   */
+
+  path = &unaddr->sun_path[unaddr->sun_path[0] == '\0' ? 1 : 0];
+
   /* Make sure that half duplex FIFO has been created.
    * REVISIT:  Or should be just make sure that it already exists?
    */
 
-  ret = local_create_halfduplex(conn, unaddr->sun_path, server->lc_rcvsize);
+  ret = local_create_halfduplex(conn, path, server->lc_rcvsize);
   if (ret < 0)
     {
-      nerr("ERROR: Failed to create FIFO for %s: %zd\n",
-           unaddr->sun_path, ret);
+      nerr("ERROR: Failed to create FIFO for %s: %zd\n", path, ret);
       goto errout_with_lock;
     }
 
   /* Open the sending side of the transfer */
 
-  ret = local_open_sender(conn, unaddr->sun_path,
+  ret = local_open_sender(conn, path,
                           _SS_ISNONBLOCK(conn->lc_conn.s_flags) ||
                           (flags & MSG_DONTWAIT) != 0);
   if (ret < 0)
     {
-      nerr("ERROR: Failed to open FIFO for %s: %zd\n",
-           unaddr->sun_path, ret);
+      nerr("ERROR: Failed to open FIFO for %s: %zd\n", path, ret);
 
       goto errout_with_halfduplex;
     }
 
-  /* Send the preamble */
+  /* Send preamble and payload as one atomic frame */
 
-  ret = local_send_preamble(conn, &conn->lc_outfile, buf, len,
-                            server->lc_rcvsize);
+  ret = local_send_frame(conn, conn->lc_path, buf, len,
+                         server->lc_rcvsize);
   if (ret < 0)
     {
-      nerr("ERROR: Failed to send the preamble: %zd\n", ret);
-      goto errout_with_sender;
+      nerr("ERROR: Failed to send the frame: %zd\n", ret);
     }
-
-  /* Send the packet */
-
-  ret = local_send_packet(&conn->lc_outfile, buf, len);
-  if (ret < 0)
-    {
-      nerr("ERROR: Failed to send the packet: %zd\n", ret);
-      goto errout_with_sender;
-    }
-
-errout_with_sender:
 
   /* Now we can close the write-only socket descriptor */
 
@@ -391,6 +410,122 @@ errout_with_lock:
 #else
   return -EISCONN;
 #endif /* CONFIG_NET_LOCAL_DGRAM */
+}
+
+/****************************************************************************
+ * Name: local_send
+ *
+ * Description:
+ *   Send a local packet as a stream.
+ *
+ * Input Parameters:
+ *   psock    An instance of the internal socket structure.
+ *   buf      Data to send
+ *   len      Length of data to send
+ *   flags    Send flags (ignored for now)
+ *
+ * Returned Value:
+ *   On success, returns the number of characters sent.  On  error,
+ *   -1 is returned, and errno is set appropriately (see send() for the
+ *   list of errno numbers).
+ *
+ ****************************************************************************/
+
+static ssize_t local_send(FAR struct socket *psock,
+                          FAR const struct iovec *buf,
+                          size_t len, int flags)
+{
+  ssize_t ret;
+
+  switch (psock->s_type)
+    {
+      case SOCK_STREAM:
+        {
+          FAR struct local_conn_s *conn = psock->s_conn;
+
+          DEBUGASSERT(buf);
+
+          if (conn->lc_state != LOCAL_STATE_CONNECTED)
+            {
+              nerr("ERROR: not connected\n");
+              return -ENOTCONN;
+            }
+
+          if (conn->lc_outfile.f_inode == NULL)
+            {
+              return -EPIPE;
+            }
+
+          /* Serialize concurrent senders on the same socket */
+
+          ret = nxmutex_lock(&conn->lc_sendlock);
+          if (ret < 0)
+            {
+              /* May fail because the task was canceled. */
+
+              return ret;
+            }
+
+          ret = local_send_packet(&conn->lc_outfile, buf, len);
+          nxmutex_unlock(&conn->lc_sendlock);
+        }
+        break;
+
+#ifdef CONFIG_NET_LOCAL_DGRAM
+      case SOCK_DGRAM:
+        {
+          FAR struct local_conn_s *conn = psock->s_conn;
+
+          /* One of a socket pair: the FIFO to the peer is open */
+
+          if (conn->lc_state == LOCAL_STATE_CONNECTED)
+            {
+              if (conn->lc_outfile.f_inode == NULL)
+                {
+                  return -EPIPE;
+                }
+
+              ret = nxmutex_lock(&conn->lc_sendlock);
+              if (ret < 0)
+                {
+                  return ret;
+                }
+
+              ret = local_pair_send(conn, buf, len, flags);
+              nxmutex_unlock(&conn->lc_sendlock);
+              break;
+            }
+
+          if (!conn->lc_dconnected)
+            {
+              return -EDESTADDRREQ;
+            }
+
+          ret = local_sendto(psock, buf, len, flags,
+                  (FAR const struct sockaddr *)&conn->lc_daddr,
+                  sizeof(conn->lc_daddr));
+
+          /* connect() checked that the peer existed, so a peer that has
+           * gone away since is a refused connection rather than a name
+           * that was never there.
+           */
+
+          if (ret == -ENOENT)
+            {
+              ret = -ECONNREFUSED;
+            }
+        }
+        break;
+#endif /* CONFIG_NET_LOCAL_DGRAM */
+
+      default:
+        {
+          ret = -EDESTADDRREQ;
+        }
+        break;
+    }
+
+  return ret;
 }
 
 /****************************************************************************
@@ -421,35 +556,61 @@ ssize_t local_sendmsg(FAR struct socket *psock, FAR const struct msghdr *msg,
   FAR const struct sockaddr *to = msg->msg_name;
   FAR const struct iovec *buf = msg->msg_iov;
   socklen_t tolen = msg->msg_namelen;
-  size_t len = msg->msg_iovlen;
+  size_t iovlen = msg->msg_iovlen;
+  ssize_t ret;
 
 #ifdef CONFIG_NET_LOCAL_SCM
   FAR struct local_conn_s *conn = psock->s_conn;
+  FAR struct local_conn_s *peer = NULL;
   int count = 0;
 
   if (msg->msg_control &&
       msg->msg_controllen > sizeof(struct cmsghdr))
     {
-      count = local_sendctl(conn, msg);
+      /* Stream sockets require data to be sent with control messages */
+
+      if (psock->s_type == SOCK_STREAM)
+        {
+          size_t total = 0;
+          size_t i;
+
+          for (i = 0; i < iovlen; i++)
+            {
+              total += buf[i].iov_len;
+            }
+
+          if (total == 0)
+            {
+              return -EINVAL;
+            }
+        }
+
+      count = local_sendctl(conn, msg, &peer);
       if (count < 0)
         {
           return count;
         }
     }
 
-  len = to ? local_sendto(psock, buf, len, flags, to, tolen) :
-             local_send(psock, buf, len, flags);
+  ret = to ? local_sendto(psock, buf, iovlen, flags, to, tolen) :
+             local_send(psock, buf, iovlen, flags);
 
-  if (len < 0 && count > 0)
+  if (ret < 0 && count > 0)
     {
+      /* A peer that closed during the send released the files itself */
+
       local_lock();
-      local_freectl(conn, count);
+      if (conn->lc_peer == peer)
+        {
+          local_freectl(conn, count);
+        }
+
       local_unlock();
     }
 #else
-  len = to ? local_sendto(psock, buf, len, flags, to, tolen) :
-             local_send(psock, buf, len, flags);
+  ret = to ? local_sendto(psock, buf, iovlen, flags, to, tolen) :
+             local_send(psock, buf, iovlen, flags);
 #endif
 
-  return len;
+  return ret;
 }

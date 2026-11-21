@@ -33,6 +33,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <errno.h>
+#include <limits.h>
 #include <assert.h>
 #include <nuttx/debug.h>
 
@@ -75,53 +76,9 @@ struct bluetooth_sendto_s
   ssize_t is_sent;                      /* The number of bytes sent (or error) */
 };
 
-/* Used by bluetooth_dev_byidx_callback to locate the bc_ldev-th BT device */
-
-struct bluetooth_findbyidx_s
-{
-  uint8_t                    bf_tgt;   /* Target index among BT devices (bc_ldev) */
-  uint8_t                    bf_cur;   /* Count of BT devices seen so far */
-  FAR struct radio_driver_s *bf_radio; /* Result */
-};
-
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
-
-/****************************************************************************
- * Name: bluetooth_dev_byidx_callback
- *
- * Description:
- *   netdev_foreach callback that finds the bf_tgt-th NET_LL_BLUETOOTH device
- *   (0-based index among BT devices only).
- *
- *   bluetooth_sendto() uses bc_ldev to identify the bound BT device, but
- *   bc_ldev is a 0-based count among Bluetooth devices only — it bears no
- *   fixed relationship to the global netdev interface index.  Walking all
- *   netdevs and counting only NET_LL_BLUETOOTH entries makes the lookup
- *   independent of what other netdevs are registered and in what order.
- *
- ****************************************************************************/
-
-static int bluetooth_dev_byidx_callback(FAR struct net_driver_s *dev,
-                                        FAR void *arg)
-{
-  FAR struct bluetooth_findbyidx_s *match =
-    (FAR struct bluetooth_findbyidx_s *)arg;
-
-  if (dev->d_lltype == NET_LL_BLUETOOTH)
-    {
-      if (match->bf_cur == match->bf_tgt)
-        {
-          match->bf_radio = (FAR struct radio_driver_s *)dev;
-          return 1;
-        }
-
-      match->bf_cur++;
-    }
-
-  return 0;
-}
 
 /****************************************************************************
  * Name: bluetooth_sendto_eventhandler
@@ -190,7 +147,7 @@ static uint32_t bluetooth_sendto_eventhandler(FAR struct net_driver_s *dev,
 
       /* Allocate an IOB to hold the frame data */
 
-      iob = net_ioballoc(false);
+      iob = conn_dev_ioballoc(false, pstate->is_sock->s_conn, &radio->r_dev);
       if (iob == NULL)
         {
           nwarn("WARNING: Failed to allocate IOB\n");
@@ -213,6 +170,7 @@ static uint32_t bluetooth_sendto_eventhandler(FAR struct net_driver_s *dev,
       if (ret < 0)
         {
           nerr("ERROR: r_req_data() failed: %d\n", ret);
+          iob_free_chain(iob);
           goto errout;
         }
 
@@ -323,13 +281,7 @@ static ssize_t bluetooth_sendto(FAR struct socket *psock,
     }
   else if (psock->s_proto == BTPROTO_HCI)
     {
-      struct bluetooth_findbyidx_s match;
-      match.bf_tgt   = conn->bc_ldev;
-      match.bf_cur   = 0;
-      match.bf_radio = NULL;
-
-      netdev_foreach(bluetooth_dev_byidx_callback, &match);
-      radio = match.bf_radio;
+      radio = bluetooth_find_device_byindex(conn->bc_ldev);
 
       if (radio == NULL)
         {
@@ -362,12 +314,14 @@ static ssize_t bluetooth_sendto(FAR struct socket *psock,
   if (psock->s_proto == BTPROTO_L2CAP)
     {
       FAR struct sockaddr_l2 *destaddr = (FAR struct sockaddr_l2 *)to;
+
       memcpy(&state.is_destaddr, &destaddr->l2_bdaddr,
              sizeof(bt_addr_t));
     }
   else if (psock->s_proto == BTPROTO_HCI)
     {
       FAR struct sockaddr_hci *destaddr = (FAR struct sockaddr_hci *)to;
+
       state.is_channel = destaddr->hci_channel;
     }
   else
@@ -599,16 +553,38 @@ static ssize_t bluetooth_send(FAR struct socket *psock, FAR const void *buf,
 ssize_t bluetooth_sendmsg(FAR struct socket *psock,
                           FAR const struct msghdr *msg, int flags)
 {
-  FAR const void *buf = msg->msg_iov->iov_base;
-  size_t len = msg->msg_iov->iov_len;
-  FAR const struct sockaddr *to = msg->msg_name;
-  socklen_t tolen = msg->msg_namelen;
+  FAR const struct sockaddr *to;
+  FAR const void *buf;
+  socklen_t tolen;
+  size_t len;
+
+  /* POSIX: fail with EMSGSIZE if msg_iovlen <= 0 or > IOV_MAX */
+
+  if (msg->msg_iovlen == 0 || msg->msg_iovlen > IOV_MAX)
+    {
+      return -EMSGSIZE;
+    }
 
   /* Validity check, only single iov supported */
 
   if (msg->msg_iovlen != 1)
     {
       return -ENOTSUP;
+    }
+
+  if (msg->msg_iov == NULL)
+    {
+      return -EINVAL;
+    }
+
+  buf   = msg->msg_iov[0].iov_base;
+  len   = msg->msg_iov[0].iov_len;
+  to    = msg->msg_name;
+  tolen = msg->msg_namelen;
+
+  if (len > 0 && buf == NULL)
+    {
+      return -EINVAL;
     }
 
   return to ? bluetooth_sendto(psock, buf, len, flags, to, tolen) :

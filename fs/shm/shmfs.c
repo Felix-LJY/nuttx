@@ -25,7 +25,14 @@
  ****************************************************************************/
 
 #include <assert.h>
+#include <debug.h>
+#include <errno.h>
+#include <stdbool.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/param.h>
 
+#include <nuttx/nuttx.h>
 #include <nuttx/fs/ioctl.h>
 #include <nuttx/mm/map.h>
 #include <nuttx/arch.h>
@@ -85,6 +92,58 @@ const struct file_operations g_shmfs_operations =
  ****************************************************************************/
 
 /****************************************************************************
+ * Name: shmfs_copy
+ *
+ * Description:
+ *   Copy data between a buffer and a memory object.  In the kernel build
+ *   the object is a list of single pages from the page pool, which are not
+ *   always contiguous: copy page by page through the kernel address of
+ *   each page.  In the other builds the object is one block of memory.
+ *
+ ****************************************************************************/
+
+static void shmfs_copy(FAR struct shmfs_object_s *sho, off_t pos,
+                       FAR char *buffer, size_t len, bool write)
+{
+#ifdef CONFIG_BUILD_KERNEL
+  FAR uintptr_t *pages = (FAR uintptr_t *)sho->paddr;
+  FAR char *vaddr;
+  size_t offset;
+  size_t n;
+
+  while (len > 0)
+    {
+      offset = pos % MM_PGSIZE;
+      n      = MIN(len, MM_PGSIZE - offset);
+      vaddr  = (FAR char *)up_addrenv_page_vaddr(pages[pos / MM_PGSIZE]) +
+               offset;
+
+      if (write)
+        {
+          memcpy(vaddr, buffer, n);
+        }
+      else
+        {
+          memcpy(buffer, vaddr, n);
+        }
+
+      pos    += n;
+      buffer += n;
+      len    -= n;
+    }
+#else
+  if (write)
+    {
+      memcpy((FAR char *)sho->paddr + pos, buffer, len);
+    }
+  else
+    {
+      memcpy(buffer, (FAR char *)sho->paddr + pos, len);
+    }
+#endif
+}
+
+/****************************************************************************
  * Name: shmfs_read
  ****************************************************************************/
 
@@ -100,9 +159,16 @@ static ssize_t shmfs_read(FAR struct file *filep, FAR char *buffer,
 
   sho = filep->f_inode->i_private;
 
+  nread = nxmutex_lock(&sho->lock);
+  if (nread < 0)
+    {
+      return nread;
+    }
+
   if (filep->f_pos > sho->length)
     {
-      return 0;
+      nread = 0;
+      goto out;
     }
 
   /* Handle attempts to read beyond the end of the file. */
@@ -121,7 +187,7 @@ static ssize_t shmfs_read(FAR struct file *filep, FAR char *buffer,
 
   if (sho->paddr != NULL)
     {
-      memcpy(buffer, (FAR char *)sho->paddr + startpos, nread);
+      shmfs_copy(sho, startpos, buffer, nread, false);
       filep->f_pos += nread;
     }
   else
@@ -129,6 +195,8 @@ static ssize_t shmfs_read(FAR struct file *filep, FAR char *buffer,
       DEBUGASSERT(sho->length == 0 && nread == 0);
     }
 
+out:
+  nxmutex_unlock(&sho->lock);
   return nread;
 }
 
@@ -148,6 +216,12 @@ static ssize_t shmfs_write(FAR struct file *filep, FAR const char *buffer,
 
   sho = filep->f_inode->i_private;
 
+  nwritten = nxmutex_lock(&sho->lock);
+  if (nwritten < 0)
+    {
+      return nwritten;
+    }
+
   /* Handle attempts to write beyond the end of the file */
 
   startpos = filep->f_pos;
@@ -158,14 +232,15 @@ static ssize_t shmfs_write(FAR struct file *filep, FAR const char *buffer,
 
   if (endpos > sho->length)
     {
-      return -EFBIG;
+      nwritten = -EFBIG;
+      goto out;
     }
 
   /* Copy data from the user buffer to the memory object */
 
   if (sho->paddr != NULL)
     {
-      memcpy((FAR char *)sho->paddr + startpos, buffer, nwritten);
+      shmfs_copy(sho, startpos, (FAR char *)buffer, nwritten, true);
       filep->f_pos += nwritten;
     }
   else
@@ -173,6 +248,8 @@ static ssize_t shmfs_write(FAR struct file *filep, FAR const char *buffer,
       DEBUGASSERT(sho->length == 0 && nwritten == 0);
     }
 
+out:
+  nxmutex_unlock(&sho->lock);
   return nwritten;
 }
 
@@ -216,26 +293,33 @@ static int shmfs_close(FAR struct file *filep)
 static int shmfs_truncate(FAR struct file *filep, off_t length)
 {
   FAR struct shmfs_object_s *object;
-  int ret = 0;
+  int ret;
 
   if (length == 0)
     {
       return -EINVAL;
     }
 
-  inode_lock();
   object = filep->f_inode->i_private;
-  if (!object)
+  DEBUGASSERT(object != NULL);
+
+  ret = nxmutex_lock(&object->lock);
+  if (ret < 0)
     {
-      filep->f_inode->i_private = shmfs_alloc_object(length);
-      if (!filep->f_inode->i_private)
+      return ret;
+    }
+
+  if (object->paddr == NULL)
+    {
+      object->paddr = shmfs_alloc_buffer(length);
+      if (object->paddr != NULL)
         {
-          filep->f_inode->i_size = 0;
-          ret = -EFAULT;
+          object->length = length;
+          filep->f_inode->i_size = length;
         }
       else
         {
-          filep->f_inode->i_size = length;
+          ret = -ENOMEM;
         }
     }
   else if (object->length != length)
@@ -245,7 +329,7 @@ static int shmfs_truncate(FAR struct file *filep, off_t length)
       ret = -EINVAL;
     }
 
-  inode_unlock();
+  nxmutex_unlock(&object->lock);
   return ret;
 }
 
@@ -256,7 +340,11 @@ static int shmfs_truncate(FAR struct file *filep, off_t length)
 #ifndef CONFIG_DISABLE_PSEUDOFS_OPERATIONS
 static int shmfs_unlink(FAR struct inode *inode)
 {
-  if (atomic_read(&inode->i_crefs) <= 1)
+  /* i_crefs >= 2 at this point: caller holds find ref + tree ref,
+   * both released after we return.  <= 2 means no open fd/mmap.
+   */
+
+  if (atomic_read(&inode->i_crefs) <= 2)
     {
       shmfs_free_object(inode->i_private);
       inode->i_private = NULL;
@@ -280,7 +368,7 @@ static int shmfs_map_object(FAR struct shmfs_object_s *object,
 
   FAR struct tcb_s *tcb = this_task();
   FAR struct task_group_s *group = tcb->group;
-  FAR uintptr_t *pages = (FAR uintptr_t *)&object->paddr;
+  FAR uintptr_t *pages = (FAR uintptr_t *)object->paddr;
   uintptr_t mapaddr;
   unsigned int npages;
 
@@ -340,23 +428,52 @@ static int shmfs_mmap(FAR struct file *filep,
   FAR struct shmfs_object_s *object;
   int ret = -EINVAL;
 
-  /* We don't support offset at the moment, just mapping the whole object
-   * object is NULL if it hasn't been truncated yet
-   */
+  /* We don't support offset at the moment, just mapping the whole object */
 
   if (entry->offset != 0)
     {
       return ret;
     }
 
+  object = filep->f_inode->i_private;
+  DEBUGASSERT(object != NULL);
+
   /* Keep the inode when mmapped, increase refcount */
 
   inode_addref(filep->f_inode);
-  object = filep->f_inode->i_private;
-  if (object)
+
+  ret = nxmutex_lock(&object->lock);
+  if (ret < 0)
     {
-      ret = shmfs_map_object(object, &entry->vaddr);
+      inode_release(filep->f_inode);
+      return ret;
     }
+
+  /* Not truncated yet */
+
+  if (object->paddr == NULL)
+    {
+      ret = -EINVAL;
+      goto out;
+    }
+
+#ifndef CONFIG_BUILD_KERNEL
+  /* Without an MMU mapping the object address is returned directly, so
+   * a mapping longer than the page-rounded backing would expose adjacent
+   * heap memory.
+   */
+
+  if (entry->length > ALIGN_UP(object->length, sysconf(_SC_PAGESIZE)))
+    {
+      ret = -EINVAL;
+      goto out;
+    }
+#endif
+
+  ret = shmfs_map_object(object, &entry->vaddr);
+
+out:
+  nxmutex_unlock(&object->lock);
 
   if (ret < 0 ||
       (ret = shmfs_add_map(entry, filep->f_inode)) < 0)
@@ -407,6 +524,108 @@ static int shmfs_unmap_area(FAR struct task_group_s *group,
 }
 
 /****************************************************************************
+ * Name: shmfs_munmap_partial
+ *
+ * Description:
+ *   Shrink the mapping, or split it in two when the middle is unmapped.
+ *   Each resulting mapping holds one inode reference.  The object's pages
+ *   stay allocated until its last mapping is removed.
+ *
+ ****************************************************************************/
+
+static int shmfs_munmap_partial(FAR struct task_group_s *group,
+                                FAR struct mm_map_entry_s *entry,
+                                FAR void *start, size_t length)
+{
+  FAR struct mm_map_s *mm = get_group_mm(group);
+  FAR char *entry_end = (FAR char *)entry->vaddr + entry->length;
+  FAR char *unmap_end = (FAR char *)start + length;
+  off_t head;
+  off_t tail;
+  int ret;
+
+#ifdef CONFIG_BUILD_KERNEL
+  /* The MMU unmaps whole pages, so the bookkeeping must use the same
+   * page-rounded range.
+   */
+
+  if (!MM_ISALIGNED(start))
+    {
+      return -EINVAL;
+    }
+
+  unmap_end = (FAR char *)MIN(MM_PGALIGNUP(unmap_end),
+                              (uintptr_t)entry_end);
+  length    = unmap_end - (FAR char *)start;
+  if (start == entry->vaddr && unmap_end == entry_end)
+    {
+      return shmfs_munmap(group, entry, start, length);
+    }
+#endif
+
+  head = (FAR char *)start - (FAR char *)entry->vaddr;
+  tail = entry_end - unmap_end;
+
+  if (head > 0 && tail > 0)
+    {
+      FAR struct mm_map_entry_s *added = NULL;
+      struct mm_map_entry_s tailmap = *entry;
+
+      tailmap.vaddr  = unmap_end;
+      tailmap.length = tail;
+      tailmap.offset = entry->offset + head + length;
+
+      /* Track the tail before unmapping, so that a failure leaves only
+       * this entry to undo.
+       */
+
+      ret = mm_map_add(mm, &tailmap);
+      if (ret < 0)
+        {
+          return ret;
+        }
+
+      ret = shmfs_unmap_area(group, start, length);
+      if (ret < 0)
+        {
+          do
+            {
+              added = mm_map_next(mm, added);
+            }
+          while (added != NULL && (added == entry ||
+                 added->vaddr != tailmap.vaddr ||
+                 added->length != tailmap.length));
+
+          mm_map_remove(mm, added);
+          return ret;
+        }
+
+      entry->length = head;
+      inode_addref((FAR struct inode *)entry->priv.p);
+      return OK;
+    }
+
+  ret = shmfs_unmap_area(group, start, length);
+  if (ret < 0)
+    {
+      return ret;
+    }
+
+  if (tail > 0)
+    {
+      entry->vaddr   = unmap_end;
+      entry->offset += length;
+      entry->length  = tail;
+    }
+  else
+    {
+      entry->length = head;
+    }
+
+  return OK;
+}
+
+/****************************************************************************
  * Name: shmfs_munmap
  ****************************************************************************/
 
@@ -418,11 +637,9 @@ static int shmfs_munmap(FAR struct task_group_s *group,
   FAR struct inode *inode;
   int ret;
 
-  /* Partial unmap is not supported yet */
-
   if (start != entry->vaddr || length != entry->length)
     {
-      return -EINVAL;
+      return shmfs_munmap_partial(group, entry, start, length);
     }
 
   inode = (FAR struct inode *)entry->priv.p;
@@ -453,4 +670,30 @@ static int shmfs_munmap(FAR struct task_group_s *group,
     }
 
   return ret;
+}
+
+/****************************************************************************
+ * Public Functions
+ ****************************************************************************/
+
+/****************************************************************************
+ * Name: shmfs_initialize
+ *
+ * Description:
+ *   Create the directory of the shared memory objects
+ *   (CONFIG_FS_SHMFS_VFS_PATH) at boot, so that it exists before the first
+ *   object does.  Anyone can create an object in it (mode 1777).
+ *
+ ****************************************************************************/
+
+void shmfs_initialize(void)
+{
+  int ret;
+
+  ret = register_pseudodir(CONFIG_FS_SHMFS_VFS_PATH, 01777);
+  if (ret < 0 && ret != -EEXIST)
+    {
+      ferr("ERROR: Failed to create %s: %d\n", CONFIG_FS_SHMFS_VFS_PATH,
+           ret);
+    }
 }

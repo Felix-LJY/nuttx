@@ -24,8 +24,6 @@ set(SRCS stm32_boot.c stm32_bringup.c)
 
 if(CONFIG_ARCH_LEDS)
   list(APPEND SRCS stm32_autoleds.c)
-else()
-  list(APPEND SRCS stm32_userleds.c)
 endif()
 
 if(CONFIG_ARCH_BUTTONS)
@@ -38,10 +36,6 @@ endif()
 
 if(CONFIG_PWM)
   list(APPEND SRCS stm32_pwm.c)
-endif()
-
-if(CONFIG_TIMER)
-  list(APPEND SRCS stm32_timer.c)
 endif()
 
 target_sources(board PRIVATE ${SRCS})

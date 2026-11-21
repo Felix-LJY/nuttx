@@ -49,7 +49,7 @@
 
 static int nxmq_file_close(FAR struct file *filep);
 static int nxmq_file_poll(FAR struct file *filep,
-                          FAR struct pollfd *fds, bool setup);
+                          FAR struct pollfd_s *fds, bool setup);
 
 /****************************************************************************
  * Private Data
@@ -91,7 +91,7 @@ static int nxmq_file_close(FAR struct file *filep)
 }
 
 static int nxmq_file_poll(FAR struct file *filep,
-                          FAR struct pollfd *fds, bool setup)
+                          FAR struct pollfd_s *fds, bool setup)
 {
   FAR struct inode *inode = filep->f_inode;
   FAR struct mqueue_inode_s *msgq = inode->i_private;
@@ -137,7 +137,15 @@ static int nxmq_file_poll(FAR struct file *filep,
           eventset |= POLLIN;
         }
 
-      poll_notify(&fds, 1, eventset);
+      /* The eventset is never empty and an epoll node sets POLLALWAYS,
+       * so notifying unconditionally would make epoll_wait() tear down
+       * and set up this fd on every call while reporting nothing.
+       */
+
+      if ((eventset & (fds->events | POLLERR | POLLHUP)) != 0)
+        {
+          poll_notify(&fds, 1, eventset);
+        }
     }
   else if (fds->priv != NULL)
     {
@@ -174,15 +182,13 @@ static int file_mq_vopen(FAR struct file *mq, FAR const char *mq_name,
 
   if (!mq || !mq_name || *mq_name == '\0')
     {
-      ret = -EINVAL;
-      goto errout;
+      return -EINVAL;
     }
 
   if (sizeof(CONFIG_FS_MQUEUE_VFS_PATH) + 1 + strlen(mq_name)
       >= MAX_MQUEUE_PATH)
     {
-      ret = -ENAMETOOLONG;
-      goto errout;
+      return -ENAMETOOLONG;
     }
 
   /* Were we asked to create it? */
@@ -199,8 +205,7 @@ static int file_mq_vopen(FAR struct file *mq, FAR const char *mq_name,
         {
           if (attr->mq_maxmsg <= 0 || attr->mq_msgsize <= 0)
             {
-              ret = -EINVAL;
-              goto errout;
+              return -EINVAL;
             }
         }
     }
@@ -235,14 +240,17 @@ static int file_mq_vopen(FAR struct file *mq, FAR const char *mq_name,
    * have incremented the reference count on the inode.
    */
 
-  SETUP_SEARCH(&desc, fullpath, false);
+retry:
+  ret = inode_search_setup(&desc, fullpath, false);
+  if (ret < 0)
+    {
+      goto errout_with_lock;
+    }
 
-  ret = inode_find(&desc);
+  ret = inode_find(&desc, &inode);
   if (ret >= 0)
     {
       /* Something exists at this path.  Get the search results */
-
-      inode = desc.node;
 
       /* Verify that the inode is a message queue */
 
@@ -301,28 +309,51 @@ static int file_mq_vopen(FAR struct file *mq, FAR const char *mq_name,
           /* The mqueue does not exist and O_CREAT is not set */
 
           ret = -ENOENT;
-          goto errout_with_lock;
+          goto errout_with_search;
         }
 
-      /* Create an inode in the pseudo-filesystem at this path */
-
-      inode_lock();
-      ret = inode_reserve(fullpath, mode, &inode);
-      inode_unlock();
-
-      if (ret < 0)
-        {
-          goto errout_with_lock;
-        }
-
-      /* Allocate memory for the new message queue.  The new inode will
-       * be created with a reference count of zero.
-       */
+      /* Allocate memory for the new message queue */
 
       ret = nxmq_alloc_msgq(attr, &msgq);
       if (ret < 0)
         {
-          goto errout_with_inode;
+          goto errout_with_search;
+        }
+
+      /* Create an inode in the pseudo-filesystem at this path.  Set it up
+       * before dropping the tree lock: a concurrent mq_open() must not
+       * find a node that is not yet a message queue.
+       */
+
+      inode_lock();
+      ret = inode_reserve(fullpath, mode, &inode);
+      if (ret >= 0)
+        {
+          INODE_SET_MQUEUE(inode);
+          inode->u.i_ops    = &g_nxmq_fileops;
+          inode->i_private  = msgq;
+          msgq->inode       = inode;
+
+          /* Set the initial reference count on this inode to one */
+
+          inode_addref(inode);
+        }
+
+      inode_unlock();
+
+      if (ret < 0)
+        {
+          nxmq_free_msgq(msgq);
+
+          /* Another mq_open() created it first: open that one instead */
+
+          if (ret == -EEXIST)
+            {
+              inode_search_release(&desc);
+              goto retry;
+            }
+
+          goto errout_with_search;
         }
 
       /* Associate the inode with a file structure */
@@ -330,22 +361,13 @@ static int file_mq_vopen(FAR struct file *mq, FAR const char *mq_name,
       mq->f_oflags = oflags;
       mq->f_inode  = inode;
 
-      INODE_SET_MQUEUE(inode);
-      inode->u.i_ops    = &g_nxmq_fileops;
-      inode->i_private  = msgq;
-      msgq->inode       = inode;
-
-      /* Set the initial reference count on this inode to one */
-
-      atomic_add(&inode->i_crefs, 1);
-
       if (created)
         {
           *created = 1;
         }
     }
 
-  RELEASE_SEARCH(&desc);
+  inode_search_release(&desc);
   leave_critical_section(flags);
 #ifdef CONFIG_FS_NOTIFY
   notify_open(fullpath, oflags);
@@ -355,11 +377,11 @@ static int file_mq_vopen(FAR struct file *mq, FAR const char *mq_name,
 errout_with_inode:
   inode_release(inode);
 
-errout_with_lock:
-  RELEASE_SEARCH(&desc);
-  leave_critical_section(flags);
+errout_with_search:
+  inode_search_release(&desc);
 
-errout:
+errout_with_lock:
+  leave_critical_section(flags);
   return ret;
 }
 

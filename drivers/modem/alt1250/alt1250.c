@@ -73,7 +73,7 @@ static int alt1250_close(FAR struct file *filep);
 static ssize_t alt1250_read(FAR struct file *filep, FAR char *buffer,
                             size_t len);
 static int alt1250_ioctl(FAR struct file *filep, int cmd, unsigned long arg);
-static int alt1250_poll(FAR struct file *filep, FAR struct pollfd *fds,
+static int alt1250_poll(FAR struct file *filep, FAR struct pollfd_s *fds,
                         bool setup);
 
 parse_handler_t alt1250_additional_parsehdlr(uint16_t, uint8_t);
@@ -1296,6 +1296,7 @@ static int alt1250_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
         {
           FAR struct alt_evtbuffer_s *buff =
             (FAR struct alt_evtbuffer_s *)arg;
+
           add_evtbuff(dev, buff);
         }
         break;
@@ -1320,7 +1321,7 @@ static int alt1250_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
  * Name: alt1250_poll
  ****************************************************************************/
 
-static int alt1250_poll(FAR struct file *filep, FAR struct pollfd *fds,
+static int alt1250_poll(FAR struct file *filep, FAR struct pollfd_s *fds,
                         bool setup)
 {
   FAR struct inode *inode;

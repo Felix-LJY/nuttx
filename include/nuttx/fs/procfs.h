@@ -28,7 +28,9 @@
  ****************************************************************************/
 
 #include <nuttx/config.h>
+#include <stdbool.h>
 #include <nuttx/fs/fs.h>
+#include <nuttx/mm/mm.h>
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -59,7 +61,7 @@ struct procfs_operations
                        size_t buflen);
   CODE ssize_t (*write)(FAR struct file *filep, FAR const char *buffer,
                         size_t buflen);
-  CODE int     (*poll)(FAR struct file *filep, FAR struct pollfd *fds,
+  CODE int     (*poll)(FAR struct file *filep, FAR struct pollfd_s *fds,
                        bool setup);
 
   /* The two structures need not be common after this point. The following
@@ -115,6 +117,7 @@ struct procfs_entry_s
 struct procfs_file_s
 {
   FAR const struct procfs_entry_s *procfsentry;
+  ino_t ino;                                    /* File serial number */
 };
 
 /* The generic proc/ pseudo directory structure */
@@ -125,14 +128,11 @@ struct procfs_dir_priv_s
   uint8_t level;                                /* Directory level.  Currently 0 or 1 */
   uint16_t index;                               /* Index to the next directory entry */
   uint16_t nentries;                            /* Number of directory entries */
+  uint32_t hash;                                /* Path hash, for d_ino */
   FAR const struct procfs_entry_s *procfsentry; /* Pointer to procfs handler entry */
 };
 
 /* An entry for procfs_register_meminfo */
-
-struct mallinfo;
-struct mm_heap_s;
-struct mm_memdump_s;
 
 struct procfs_meminfo_entry_s
 {
@@ -157,11 +157,8 @@ struct procfs_meminfo_entry_s
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -299,7 +296,6 @@ void procfs_register_meminfo(FAR struct procfs_meminfo_entry_s *entry);
 
 void procfs_unregister_meminfo(FAR struct procfs_meminfo_entry_s *entry);
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

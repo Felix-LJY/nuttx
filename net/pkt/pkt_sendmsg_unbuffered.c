@@ -131,9 +131,18 @@ static uint32_t psock_send_eventhandler(FAR struct net_driver_s *dev,
           pstate->snd_sent          = pstate->snd_buflen;
           pstate->snd_conn->pendiob = dev->d_iob;
 
+#ifdef CONFIG_NET_TIMESTAMP
+          if (_SO_GETOPT(pstate->snd_conn->sconn.s_options,
+                         SO_TIMESTAMPING))
+            {
+              dev->d_iob->io_conn = &pstate->snd_conn->sconn;
+            }
+#endif
+
           if (pstate->snd_sock->s_type == SOCK_DGRAM)
             {
               FAR struct eth_hdr_s *ethhdr = NETLLBUF;
+
               memcpy(ethhdr->dest, pstate->addr->sll_addr, ETHER_ADDR_LEN);
               memcpy(ethhdr->src, &dev->d_mac.ether, ETHER_ADDR_LEN);
               ethhdr->type = pstate->addr->sll_protocol;
@@ -183,13 +192,13 @@ end_wait:
 ssize_t pkt_sendmsg(FAR struct socket *psock, FAR const struct msghdr *msg,
                     int flags)
 {
-  FAR const void *buf = msg->msg_iov->iov_base;
-  size_t len = msg->msg_iov->iov_len;
-  FAR struct sockaddr_ll *addr = msg->msg_name;
+  FAR struct sockaddr_ll *addr;
   FAR struct net_driver_s *dev;
   FAR struct pkt_conn_s *conn;
+  FAR const void *buf;
   struct send_s state;
-  int ret = OK;
+  size_t len;
+  int ret;
 
   /* Validity check */
 
@@ -199,6 +208,9 @@ ssize_t pkt_sendmsg(FAR struct socket *psock, FAR const struct msghdr *msg,
       return ret;
     }
 
+  buf  = msg->msg_iov[0].iov_base;
+  len  = msg->msg_iov[0].iov_len;
+  addr = msg->msg_name;
   conn = psock->s_conn;
 
   if (psock->s_type == SOCK_DGRAM)

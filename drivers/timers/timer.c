@@ -38,6 +38,7 @@
 #include <nuttx/spinlock.h>
 #include <nuttx/lib/lib.h>
 #include <nuttx/signal.h>
+#include <nuttx/kmalloc.h>
 #include <nuttx/fs/fs.h>
 #include <nuttx/mutex.h>
 #include <nuttx/timers/timer.h>
@@ -57,7 +58,7 @@ struct timer_upperhalf_s
   uint8_t crefs;           /* The number of times the device has been opened */
   spinlock_t spinlock;     /* Spinlock */
   FAR char *path;          /* Registration path */
-  FAR struct pollfd *fds;
+  FAR struct pollfd_s *fds;
 
   /* The contained signal info */
 
@@ -85,7 +86,7 @@ static ssize_t timer_write(FAR struct file *filep, FAR const char *buffer,
 static int     timer_ioctl(FAR struct file *filep, int cmd,
                            unsigned long arg);
 static int     timer_poll(FAR struct file *filep,
-                          FAR struct pollfd *fds, bool setup);
+                          FAR struct pollfd_s *fds, bool setup);
 
 /****************************************************************************
  * Private Data
@@ -128,9 +129,16 @@ static bool timer_notifier(FAR uint32_t *next_interval_us, FAR void *arg)
 
   /* Signal the waiter.. if there is one */
 
-  poll_notify(&upper->fds, 1, POLLIN);
+  if (upper->fds != NULL)
+    {
+      poll_notify(&upper->fds, 1, POLLIN);
+    }
 
-  nxsig_notification(notify->pid, &notify->event, SI_QUEUE, &upper->work);
+  if (notify->event.sigev_notify != SIGEV_NONE)
+    {
+      nxsig_notification(notify->pid, &notify->event, SI_QUEUE,
+                         &upper->work);
+    }
 
   return notify->periodic;
 }
@@ -280,173 +288,173 @@ static int timer_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
 
   switch (cmd)
     {
-    /* cmd:         TCIOC_START
-     * Description: Start the timer
-     * Argument:    Ignored
-     */
+      /* cmd:         TCIOC_START
+       * Description: Start the timer
+       * Argument:    Ignored
+       */
 
-    case TCIOC_START:
-      {
-        /* Start the timer, resetting the time to the current timeout */
+      case TCIOC_START:
+        {
+          /* Start the timer, resetting the time to the current timeout */
 
-        ret = TIMER_START(lower);
-      }
-      break;
+          ret = TIMER_START(lower);
+        }
+        break;
 
-    /* cmd:         TCIOC_STOP
-     * Description: Stop the timer
-     * Argument:    Ignored
-     */
+      /* cmd:         TCIOC_STOP
+       * Description: Stop the timer
+       * Argument:    Ignored
+       */
 
-    case TCIOC_STOP:
-      {
-        /* Stop the timer */
+      case TCIOC_STOP:
+        {
+          /* Stop the timer */
 
-        ret = TIMER_STOP(lower);
-        nxsig_cancel_notification(&upper->work);
-      }
-      break;
+          ret = TIMER_STOP(lower);
+          nxsig_cancel_notification(&upper->work);
+        }
+        break;
 
-    /* cmd:         TCIOC_GETSTATUS
-     * Description: Get the status of the timer.
-     * Argument:    A writeable pointer to struct timer_status_s.
-     */
+      /* cmd:         TCIOC_GETSTATUS
+       * Description: Get the status of the timer.
+       * Argument:    A writeable pointer to struct timer_status_s.
+       */
 
-    case TCIOC_GETSTATUS:
-      {
-        FAR struct timer_status_s *status;
+      case TCIOC_GETSTATUS:
+        {
+          FAR struct timer_status_s *status;
 
-        /* Get the current timer status */
+          /* Get the current timer status */
 
-        status = (FAR struct timer_status_s *)((uintptr_t)arg);
-        if (status)
-          {
-            ret = TIMER_GETSTATUS(lower, status);
-          }
-        else
-          {
-            ret = -EINVAL;
-          }
-      }
-      break;
+          status = (FAR struct timer_status_s *)((uintptr_t)arg);
+          if (status)
+            {
+              ret = TIMER_GETSTATUS(lower, status);
+            }
+          else
+            {
+              ret = -EINVAL;
+            }
+        }
+        break;
 
-    case TCIOC_TICK_GETSTATUS:
-      {
-        FAR struct timer_status_s *status;
+      case TCIOC_TICK_GETSTATUS:
+        {
+          FAR struct timer_status_s *status;
 
-        /* Get the current timer status */
+          /* Get the current timer status */
 
-        status = (FAR struct timer_status_s *)((uintptr_t)arg);
-        if (status)
-          {
-            ret = TIMER_TICK_GETSTATUS(lower, status);
-          }
-        else
-          {
-            ret = -EINVAL;
-          }
-      }
-      break;
+          status = (FAR struct timer_status_s *)((uintptr_t)arg);
+          if (status)
+            {
+              ret = TIMER_TICK_GETSTATUS(lower, status);
+            }
+          else
+            {
+              ret = -EINVAL;
+            }
+        }
+        break;
 
-    /* cmd:         TCIOC_SETTIMEOUT
-     * Description: Reset the timeout to this value
-     * Argument:    A 32-bit timeout value in microseconds.
-     *
-     * TODO: pass pointer to uint64 ns? Need to determine if these timers
-     * are 16 or 32 bit...
-     */
+      /* cmd:         TCIOC_SETTIMEOUT
+       * Description: Reset the timeout to this value
+       * Argument:    A 32-bit timeout value in microseconds.
+       *
+       * TODO: pass pointer to uint64 ns? Need to determine if these timers
+       * are 16 or 32 bit...
+       */
 
-    case TCIOC_SETTIMEOUT:
-      {
-        /* Set a new timeout value (and reset the timer) */
+      case TCIOC_SETTIMEOUT:
+        {
+          /* Set a new timeout value (and reset the timer) */
 
-        ret = TIMER_SETTIMEOUT(lower, (uint32_t)arg);
-      }
-      break;
+          ret = TIMER_SETTIMEOUT(lower, (uint32_t)arg);
+        }
+        break;
 
-    /* cmd:         TCIOC_TICK_SETTIMEOUT
-     * Description: Reset the timeout to this value
-     * Argument:    A 32-bit timeout value in ticks.
-     *
-     * TODO: pass pointer to uint64 ns? Need to determine if these timers
-     * are 16 or 32 bit...
-     */
+      /* cmd:         TCIOC_TICK_SETTIMEOUT
+       * Description: Reset the timeout to this value
+       * Argument:    A 32-bit timeout value in ticks.
+       *
+       * TODO: pass pointer to uint64 ns? Need to determine if these timers
+       * are 16 or 32 bit...
+       */
 
-    case TCIOC_TICK_SETTIMEOUT:
-      {
-        /* Set a new timeout value (and reset the timer) */
+      case TCIOC_TICK_SETTIMEOUT:
+        {
+          /* Set a new timeout value (and reset the timer) */
 
-        ret = TIMER_TICK_SETTIMEOUT(lower, (uint32_t)arg);
-      }
-      break;
+          ret = TIMER_TICK_SETTIMEOUT(lower, (uint32_t)arg);
+        }
+        break;
 
-    /* cmd:         TCIOC_NOTIFICATION
-     * Description: Notify application via a signal when the timer expires.
-     * Argument:    signal information
-     */
+      /* cmd:         TCIOC_NOTIFICATION
+       * Description: Notify application via a signal when the timer expires.
+       * Argument:    signal information
+       */
 
 #ifndef CONFIG_DISABLE_ALL_SIGNALS
-    case TCIOC_NOTIFICATION:
-      {
-        FAR struct timer_notify_s *notify =
-          (FAR struct timer_notify_s *)((uintptr_t)arg);
+      case TCIOC_NOTIFICATION:
+        {
+          FAR struct timer_notify_s *notify =
+            (FAR struct timer_notify_s *)((uintptr_t)arg);
 
-        if (notify != NULL)
-          {
-            memcpy(&upper->notify, notify, sizeof(*notify));
-            ret = timer_setcallback((FAR void *)upper, timer_notifier,
-                                    (FAR void *)upper);
-          }
-        else
-          {
-            ret = -EINVAL;
-          }
-      }
-      break;
+          if (notify != NULL)
+            {
+              memcpy(&upper->notify, notify, sizeof(*notify));
+              ret = timer_setcallback((FAR void *)upper, timer_notifier,
+                                      (FAR void *)upper);
+            }
+          else
+            {
+              ret = -EINVAL;
+            }
+        }
+        break;
 #endif
 
-    /* cmd:         TCIOC_MAXTIMEOUT
-     * Description: Get the maximum supported timeout value
-     * Argument:    A 32-bit timeout value in microseconds.
-     */
+      /* cmd:         TCIOC_MAXTIMEOUT
+       * Description: Get the maximum supported timeout value
+       * Argument:    A 32-bit timeout value in microseconds.
+       */
 
-    case TCIOC_MAXTIMEOUT:
-      {
-        /*  Get the maximum supported timeout value */
+      case TCIOC_MAXTIMEOUT:
+        {
+          /*  Get the maximum supported timeout value */
 
-        ret = TIMER_MAXTIMEOUT(lower, (FAR uint32_t *)arg);
-      }
-      break;
+          ret = TIMER_MAXTIMEOUT(lower, (FAR uint32_t *)arg);
+        }
+        break;
 
-    /* cmd:         TCIOC_TICK_MAXTIMEOUT
-     * Description: Get the maximum supported timeout value
-     * Argument:    A 32-bit timeout value in ticks.
-     */
+      /* cmd:         TCIOC_TICK_MAXTIMEOUT
+       * Description: Get the maximum supported timeout value
+       * Argument:    A 32-bit timeout value in ticks.
+       */
 
-    case TCIOC_TICK_MAXTIMEOUT:
-      {
-        /*  Get the maximum supported timeout value */
+      case TCIOC_TICK_MAXTIMEOUT:
+        {
+          /*  Get the maximum supported timeout value */
 
-        ret = TIMER_TICK_MAXTIMEOUT(lower, (FAR uint32_t *)arg);
-      }
-      break;
+          ret = TIMER_TICK_MAXTIMEOUT(lower, (FAR uint32_t *)arg);
+        }
+        break;
 
-    /* Any unrecognized IOCTL commands might be platform-specific ioctl
-     * commands
-     */
+      /* Any unrecognized IOCTL commands might be platform-specific ioctl
+       * commands
+       */
 
-    default:
-      {
-        tmrinfo("Forwarding unrecognized cmd: %d arg: %ld\n", cmd, arg);
+      default:
+        {
+          tmrinfo("Forwarding unrecognized cmd: %d arg: %ld\n", cmd, arg);
 
-        /* An ioctl commands that are not recognized by the "upper-half"
-         * driver are forwarded to the lower half driver through this
-         * method.
-         */
+          /* An ioctl commands that are not recognized by the "upper-half"
+           * driver are forwarded to the lower half driver through this
+           * method.
+           */
 
-        ret = TIMER_IOCTL(lower, cmd, arg);
-      }
-      break;
+          ret = TIMER_IOCTL(lower, cmd, arg);
+        }
+        break;
     }
 
   nxmutex_unlock(&upper->lock);
@@ -458,7 +466,7 @@ static int timer_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
  ****************************************************************************/
 
 static int timer_poll(FAR struct file *filep,
-                      FAR struct pollfd *fds, bool setup)
+                      FAR struct pollfd_s *fds, bool setup)
 {
   FAR struct inode             *inode = filep->f_inode;
   FAR struct timer_upperhalf_s *upper = inode->i_private;

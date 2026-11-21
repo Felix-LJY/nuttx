@@ -28,7 +28,7 @@
  ****************************************************************************/
 
 #include <nuttx/config.h>
-#include <nuttx/mutex.h>
+#include <nuttx/spinlock.h>
 #include <nuttx/circbuf.h>
 #include <sys/types.h>
 
@@ -87,6 +87,8 @@
 
 #define PIPE_FLAG_POLICY    (1 << 0) /* Bit 0: Policy=Free buffer when empty */
 #define PIPE_FLAG_UNLINKED  (1 << 1) /* Bit 1: The driver has been unlinked */
+#define PIPE_FLAG_ATOMIC    (1 << 2) /* Bit 2: writev admits a request as a
+                                      * single atomic frame */
 
 #define PIPE_POLICY_0(f)    do { (f) &= ~PIPE_FLAG_POLICY; } while (0)
 #define PIPE_POLICY_1(f)    do { (f) |= PIPE_FLAG_POLICY; } while (0)
@@ -95,6 +97,10 @@
 
 #define PIPE_UNLINK(f)      do { (f) |= PIPE_FLAG_UNLINKED; } while (0)
 #define PIPE_IS_UNLINKED(f) (((f) & PIPE_FLAG_UNLINKED) != 0)
+
+#define PIPE_ATOMIC_0(f)    do { (f) &= ~PIPE_FLAG_ATOMIC; } while (0)
+#define PIPE_ATOMIC_1(f)    do { (f) |= PIPE_FLAG_ATOMIC; } while (0)
+#define PIPE_IS_ATOMIC(f)   (((f) & PIPE_FLAG_ATOMIC) != 0)
 
 /****************************************************************************
  * Public Types
@@ -117,7 +123,7 @@ typedef uint8_t pipe_ndx_t;   /*  8-bit index */
 
 struct pipe_dev_s
 {
-  rmutex_t         d_bflock;      /* Used to serialize access to d_buffer and indices */
+  rspinlock_t      d_bflock;      /* Used to serialize access to d_buffer and indices */
   sem_t            d_rdsem;       /* Empty buffer - Reader waits for data write AND
                                    * block O_RDONLY open until there is at least one writer */
   sem_t            d_wrsem;       /* Full buffer - Writer waits for data read AND
@@ -132,11 +138,11 @@ struct pipe_dev_s
   struct circbuf_s d_buffer;      /* Buffer allocated when device opened */
 
   /* The following is a list if poll structures of threads waiting for
-   * driver events. The 'struct pollfd' reference for each open is also
+   * driver events. The 'struct pollfd_s' reference for each open is also
    * retained in the f_priv field of the 'struct file'.
    */
 
-  FAR struct pollfd *d_fds[CONFIG_DEV_PIPE_NPOLLWAITERS];
+  FAR struct pollfd_s *d_fds[CONFIG_DEV_PIPE_NPOLLWAITERS];
 };
 
 /****************************************************************************
@@ -144,15 +150,13 @@ struct pipe_dev_s
  ****************************************************************************/
 
 #ifdef __cplusplus
-#  define EXTERN extern "C"
 extern "C"
 {
-#else
-#  define EXTERN extern
 #endif
 
 struct file;  /* Forward reference */
 struct inode; /* Forward reference */
+struct uio;   /* Forward reference */
 
 FAR struct pipe_dev_s *pipecommon_allocdev(size_t bufsize);
 void    pipecommon_freedev(FAR struct pipe_dev_s *dev);
@@ -160,14 +164,14 @@ int     pipecommon_open(FAR struct file *filep);
 int     pipecommon_close(FAR struct file *filep);
 ssize_t pipecommon_read(FAR struct file *, FAR char *, size_t);
 ssize_t pipecommon_write(FAR struct file *, FAR const char *, size_t);
+ssize_t pipecommon_writev(FAR struct file *filep, FAR struct uio *uio);
 int     pipecommon_ioctl(FAR struct file *filep, int cmd, unsigned long arg);
-int     pipecommon_poll(FAR struct file *filep, FAR struct pollfd *fds,
+int     pipecommon_poll(FAR struct file *filep, FAR struct pollfd_s *fds,
                                bool setup);
 #ifndef CONFIG_DISABLE_PSEUDOFS_OPERATIONS
 int     pipecommon_unlink(FAR struct inode *priv);
 #endif
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

@@ -28,16 +28,28 @@
 
 #include <nuttx/arch.h>
 #include <nuttx/clock.h>
-#include <nuttx/spinlock.h>
+#include <nuttx/irq.h>
+#include <nuttx/sched.h>
 #include <nuttx/wdog.h>
-
-#ifndef CONFIG_ARCH_PERF_EVENTS_USER_ACCESS
 
 /****************************************************************************
  * Preprocessors
  ****************************************************************************/
 
-#  if defined(CONFIG_PERF_OVERFLOW_CORRECTION) && ULONG_MAX != UINT64_MAX
+/* Use up_perf_*() only when they count: the arch counter runs only with
+ * ARCH_PERF_EVENTS, and arch_alarm.c or arch_timer.c give up_perf_*() only
+ * without ARCH_HAVE_PERF_EVENTS.  Else use the system ticks.
+ */
+
+#if defined(CONFIG_ARCH_PERF_EVENTS) || \
+    (!defined(CONFIG_ARCH_HAVE_PERF_EVENTS) && \
+     (defined(CONFIG_ALARM_ARCH) || defined(CONFIG_TIMER_ARCH)))
+#  define USE_UP_PERF
+#endif
+
+#ifndef CONFIG_ARCH_PERF_EVENTS_USER_ACCESS
+#  if defined(USE_UP_PERF) && defined(CONFIG_PERF_OVERFLOW_CORRECTION) && \
+      ULONG_MAX != UINT64_MAX
 
 /****************************************************************************
  * Private Types
@@ -46,7 +58,9 @@
 struct perf_s
 {
   struct wdog_s wdog;
-  spinlock_t lock;
+#ifdef CONFIG_SMP
+  struct smp_call_data_s call;
+#endif
   unsigned long last;
   clock_t overflow;
   clock_t timeout;
@@ -56,11 +70,25 @@ struct perf_s
  * Private Data
  ****************************************************************************/
 
-static struct perf_s g_perf;
+/* Each CPU has its own counter, so each CPU has its own overflow state */
+
+static struct perf_s g_perf[CONFIG_SMP_NCPUS];
 
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
+
+/****************************************************************************
+ * perf_update_cpu
+ ****************************************************************************/
+
+#ifdef CONFIG_SMP
+static int perf_update_cpu(FAR void *arg)
+{
+  perf_gettime();
+  return OK;
+}
+#endif
 
 /****************************************************************************
  * perf_update
@@ -70,7 +98,14 @@ static void perf_update(wdparm_t arg)
 {
   FAR struct perf_s *perf = (FAR struct perf_s *)arg;
 
+#ifdef CONFIG_SMP
+  /* The watchdog can run on any CPU: read the counter of the state's CPU */
+
+  nxsched_smp_call_single_async(perf - g_perf, &perf->call);
+#else
   perf_gettime();
+#endif
+
   wd_start_next(&perf->wdog, perf->timeout, perf_update, arg);
 }
 
@@ -84,8 +119,8 @@ static void perf_update(wdparm_t arg)
 
 clock_t perf_gettime(void)
 {
-  FAR struct perf_s *perf = &g_perf;
-  irqstate_t flags = spin_lock_irqsave(&perf->lock);
+  irqstate_t flags = up_irq_save();
+  FAR struct perf_s *perf = &g_perf[this_cpu()];
   clock_t now = up_perf_gettime();
   clock_t result;
 
@@ -94,6 +129,10 @@ clock_t perf_gettime(void)
       perf->timeout =
         ((clock_t)1 << (CONFIG_ARCH_PERF_COUNT_BITWIDTH - 1)) *
         TICK_PER_SEC / up_perf_getfreq();
+
+#ifdef CONFIG_SMP
+      nxsched_smp_call_init(&perf->call, perf_update_cpu, NULL);
+#endif
 
       /* Periodic check for overflow */
 
@@ -106,12 +145,11 @@ clock_t perf_gettime(void)
 
   perf->last = now;
   result = now | (perf->overflow << CONFIG_ARCH_PERF_COUNT_BITWIDTH);
-  spin_unlock_irqrestore(&perf->lock, flags);
+  up_irq_restore(flags);
   return result;
 }
 
-#  elif defined(CONFIG_ALARM_ARCH) || defined (CONFIG_TIMER_ARCH) || \
-        defined(CONFIG_ARCH_PERF_EVENTS)
+#  elif defined(USE_UP_PERF)
 
 /****************************************************************************
  * perf_gettime
@@ -136,8 +174,7 @@ clock_t perf_gettime(void)
 #  endif
 #endif /* !CONFIG_ARCH_PERF_EVENTS_USER_ACCESS */
 
-#if defined(CONFIG_ALARM_ARCH) || defined (CONFIG_TIMER_ARCH) || \
-    defined(CONFIG_ARCH_PERF_EVENTS)
+#ifdef USE_UP_PERF
 
 /****************************************************************************
  * perf_convert

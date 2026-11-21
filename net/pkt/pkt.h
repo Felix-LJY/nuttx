@@ -42,9 +42,9 @@
 /* Allocate a new packet socket data callback */
 
 #define pkt_callback_alloc(dev,conn) \
-  devif_callback_alloc(dev, &conn->sconn.list, &conn->sconn.list_tail)
+  devif_callback_alloc(dev, &conn->sconn.s_list, &conn->sconn.s_listtail)
 #define pkt_callback_free(dev,conn,cb) \
-  devif_conn_callback_free(dev, cb, &conn->sconn.list, &conn->sconn.list_tail)
+  devif_conn_callback_free(dev, cb, &conn->sconn.s_list, &conn->sconn.s_listtail)
 
 /****************************************************************************
  * Public Type Definitions
@@ -53,14 +53,14 @@
 /* Representation of a packet socket connection */
 
 struct devif_callback_s; /* Forward reference */
-struct pollfd;           /* Forward reference */
+struct pollfd_s;         /* Forward reference */
 
 /* This is a container that holds the poll-related information */
 
 struct pkt_poll_s
 {
   FAR struct pkt_conn_s       *conn; /* Needed to handle loss of connection */
-  FAR struct pollfd           *fds;  /* Needed to handle poll events */
+  FAR struct pollfd_s         *fds;  /* Needed to handle poll events */
   FAR struct devif_callback_s *cb;   /* Needed to teardown the poll */
 };
 
@@ -76,6 +76,9 @@ struct pkt_conn_s
   uint8_t    crefs;    /* Reference counts on this instance */
   uint16_t   type;     /* The Ethernet type of the packet */
 
+#if CONFIG_NET_RECV_BUFSIZE > 0
+  int32_t    rcvbufs;  /* Maximum amount of bytes queued in recv */
+#endif
 #ifdef CONFIG_NET_PKT_WRITE_BUFFERS
   /* Write buffering
    *
@@ -104,6 +107,10 @@ struct pkt_conn_s
 
   struct iob_queue_s readahead;   /* Read-ahead buffering */
 
+#ifdef CONFIG_NET_TIMESTAMP
+  struct iob_queue_s errahead;    /* Error-ahead buffering */
+#endif
+
   FAR struct iob_s  *pendiob;     /* The iob currently being sent */
 
   /* The following is a list of poll structures of threads waiting for
@@ -118,16 +125,13 @@ struct pkt_conn_s
  ****************************************************************************/
 
 #ifdef __cplusplus
-#  define EXTERN extern "C"
 extern "C"
 {
-#else
-#  define EXTERN extern
 #endif
 
 /* The packet socket interface */
 
-EXTERN const struct sock_intf_s g_pkt_sockif;
+extern const struct sock_intf_s g_pkt_sockif;
 
 /****************************************************************************
  * Public Function Prototypes
@@ -165,12 +169,20 @@ void pkt_free(FAR struct pkt_conn_s *conn);
  *   Find a connection structure that is the appropriate connection to be
  *   used with the provided network device
  *
+ * Input Parameters:
+ *   dev  - The device driver structure containing the received packet
+ *   conn - A pointer to the PKT connection structure
+ *   loopback - Indicate whether it is a loopback packet
+ *
+ *
  * Assumptions:
  *   This function is called from network logic at with the network locked.
  *
  ****************************************************************************/
 
-FAR struct pkt_conn_s *pkt_active(FAR struct net_driver_s *dev);
+FAR struct pkt_conn_s *pkt_active(FAR struct net_driver_s *dev,
+                                  FAR struct pkt_conn_s *conn,
+                                  bool loopback);
 
 /****************************************************************************
  * Name: pkt_nextconn()
@@ -358,7 +370,7 @@ void pkt_poll(FAR struct net_driver_s *dev, FAR struct pkt_conn_s *conn);
  *
  ****************************************************************************/
 
-int pkt_pollsetup(FAR struct socket *psock, FAR struct pollfd *fds);
+int pkt_pollsetup(FAR struct socket *psock, FAR struct pollfd_s *fds);
 
 /****************************************************************************
  * Name: pkt_pollteardown
@@ -376,7 +388,7 @@ int pkt_pollsetup(FAR struct socket *psock, FAR struct pollfd *fds);
  *
  ****************************************************************************/
 
-int pkt_pollteardown(FAR struct socket *psock, FAR struct pollfd *fds);
+int pkt_pollteardown(FAR struct socket *psock, FAR struct pollfd_s *fds);
 
 /****************************************************************************
  * Name: pkt_sendmsg
@@ -463,7 +475,6 @@ int pkt_setsockopt(FAR struct socket *psock, int level, int option,
 
 #endif
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

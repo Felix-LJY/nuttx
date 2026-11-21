@@ -1,3 +1,24 @@
+############################################################################
+# arch/mips/src/pic32mz/Kconfig
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.  The
+# ASF licenses this file to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance with the
+# License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
+############################################################################
 #
 # For a description of the syntax of this configuration file,
 # see the file kconfig-language.txt in the NuttX tools repository.
@@ -48,6 +69,14 @@ config ARCH_CHIP_PIC32MZ2048EFM
 		Microchip PIC32MZ2048EFH with Crypto Engine (MIPS32 M5150) such as
 		the PIC32MZ2048EFM144-I/PH used in the PIC32MZ EF STARTER KIT
 
+config ARCH_CHIP_WFI32E01
+	bool "WFI32E01"
+	select ARCH_CHIP_PIC32MZW1
+	---help---
+		Microchip WFI32E01 (PIC32MZ-W1 family, MIPS32 M-Class core with
+		integrated 802.11n Wi-Fi), as found in the WFI32E01PC/PE/UC/UE
+		modules.
+
 endchoice
 
 config ARCH_CHIP_PIC32MZEC
@@ -61,6 +90,13 @@ config ARCH_CHIP_PIC32MZEF
 	bool
 	default n
 	select ARCH_MIPS_M5150
+	select MIPS32_HAVE_ICACHE
+	select MIPS32_HAVE_DCACHE
+
+config ARCH_CHIP_PIC32MZW1
+	bool
+	default n
+	select ARCH_MIPS_MICROAPTIV
 	select MIPS32_HAVE_ICACHE
 	select MIPS32_HAVE_DCACHE
 
@@ -84,11 +120,179 @@ config PIC32MZ_T1
 	bool
 	default y
 
+config PIC32MZ_W1_PMU_MLDO
+	bool "PIC32MZ-W1: keep the PMU in its power-on MLDO mode"
+	default n
+	depends on ARCH_CHIP_PIC32MZW1
+	---help---
+		Skip the regulator reconfiguration (MLDO -> buck on B0 silicon,
+		MLDO trim update on A1/G) and leave the PMU in the MLDO mode it
+		powers up in with factory-calibrated settings (DS70005425 36.1).
+		Less efficient, but uses only documented behaviour.
+
+config PIC32MZ_W1_FLASH_WAITSTATES
+	int "PIC32MZ-W1: program flash wait states"
+	default 5
+	range 0 7
+	depends on ARCH_CHIP_PIC32MZW1
+	---help---
+		Value written to PRECON.PFMWS.  DS70005425 gives no
+		SYSCLK-to-wait-state table for PIC32MZ-W1; the default of 5 at
+		200 MHz SYSCLK is the value used by Microchip's
+		WFI32_Ethernet_Wi-Fi_Bridge_OOB example.  The reset value, 7, is
+		the most conservative choice.
+
+config PIC32MZ_W1_ETH_EXTREFCLK
+	bool "PIC32MZ-W1: RMII reference clock from an external oscillator"
+	default n
+	depends on ARCH_CHIP_PIC32MZW1 && PIC32MZ_ETHERNET
+	---help---
+		By default the Ethernet/Wi-Fi PLL drives the 50 MHz RMII reference
+		clock on ETH_CLK_OUT (RC12), which feeds both the MAC and the PHY.
+		Select this option if the board has a 50 MHz oscillator that
+		clocks the PHY and the MAC reference clock input (EREFCLK)
+		instead.  ETH_CLK_OUT is then left disabled
+		(EWPLLCON.ETHCLKOUTEN = 0).
+
+config PIC32MZ_W1_BOOTTRACE
+	bool "PIC32MZ-W1 early boot trace on UART1"
+	default n
+	depends on ARCH_CHIP_PIC32MZW1 && PIC32MZ_UART1
+	---help---
+		Bring-up aid.  Right after reset, run UART1 from the internal FRC
+		(independent of the PLLs) at ~115200 8N1 and emit one character
+		per PMU/clock bring-up step, so a hang can be located without a
+		debugger.  The normal console takes over afterwards.
+
+config PIC32MZ_W1_WLAN
+	bool "PIC32MZ-W1: Wi-Fi"
+	default n
+	depends on ARCH_CHIP_PIC32MZW1 && MIPS32_TOOLCHAIN_MICROCHIPL_XC32
+	depends on NETDEVICES && DRIVERS_IEEE80211 && NETDEV_WIRELESS_HANDLER
+	select CRYPTO
+	---help---
+		Wi-Fi network device (wlan0) built on Microchip's closed PIC32MZ-W1
+		WLAN library (pic32mzw1.a from the MPLAB Harmony wireless_wifi
+		repository, downloaded at build time under Microchip's license).
+		Station or Soft-AP, open or WPA/WPA2/WPA3-Personal, configured
+		through wapi.  The library is built
+		with XC32 (microMIPS, soft-float), so only XC32 is supported.
+
+if PIC32MZ_W1_WLAN
+
+config PIC32MZ_W1_WLAN_PRIORITY
+	int "WLAN thread priority"
+	default 100
+
+config PIC32MZ_W1_WLAN_STACKSIZE
+	int "WLAN thread stack size"
+	default 4096
+
+config PIC32MZ_W1_BA414E
+	bool "BA414E public key engine (WPA3-Personal)"
+	default n
+	---help---
+		Use the BA414E public key engine for the big number and elliptic
+		curve operations of WPA3-Personal (SAE), station and Soft-AP.
+		Without it they run in software (crypto/ecc.c), about 50 ms per
+		point multiplication.  The engine runs a microcode program from Microchip's
+		MPLAB Harmony driver source (drivers/ba414e/src/drv_ba414e.c in
+		https://github.com/Microchip-MPLAB-Harmony/crypto), which is
+		under Microchip's license and not part of NuttX.
+
+if PIC32MZ_W1_BA414E
+
+choice
+	prompt "BA414E microcode"
+	default PIC32MZ_W1_BA414E_UCODE_BUILTIN
+
+config PIC32MZ_W1_BA414E_UCODE_BUILTIN
+	bool "Download at build time"
+	---help---
+		Download drv_ba414e.c (Harmony crypto v3.9.0) at build time and
+		link its microcode into the image.
+
+config PIC32MZ_W1_BA414E_UCODE_FILE
+	bool "Load from a file"
+	---help---
+		Load the microcode from a file when the engine is first used,
+		that is on the first WPA3 connection or Soft-AP start.  The file
+		holds the 810 32-bit values of the init_ucode_array[810]
+		initializer of drv_ba414e.c, in array order, each little endian:
+		no header, exactly 3240 bytes.  Any file system works (ROMFS,
+		tmpfs, a flash file system...) as long as the file is there
+		before the first use.
+
+endchoice
+
+config PIC32MZ_W1_BA414E_UCODE_PATH
+	string "Microcode file"
+	default "/etc/ba414e.bin"
+	depends on PIC32MZ_W1_BA414E_UCODE_FILE
+
+config PIC32MZ_W1_BA414E_SELFTEST
+	bool "BA414E self-test"
+	default n
+	---help---
+		Run known-answer tests of the BA414E primitives (P-256 and
+		modular arithmetic) once the microcode is loaded, and log the
+		results and times.
+
+endif # PIC32MZ_W1_BA414E
+
+endif # PIC32MZ_W1_WLAN
+
 menu "PIC32MZ Peripheral Support"
 
 config PIC32MZ_WDT
 	bool "Watchdog timer (WDT)"
 	default n
+	depends on ARCH_CHIP_WFI32E01
+	select WATCHDOG
+	---help---
+		Watchdog timer driver (/dev/watchdog0).  The time-out is fixed
+		by the device configuration (BOARD_WD_PRESCALER in board.h).  If
+		PIC32MZ_WDTENABLE is set the watchdog is running from reset and
+		cannot be stopped, otherwise the application starts it.
+
+if PIC32MZ_WDT
+
+config PIC32MZ_WDT_BASE_US
+	int "Watchdog base period (microseconds)"
+	default 1000
+	range 1 1000000
+	---help---
+		Duration of the 1:1 postscaler step of the watchdog.  The time-out
+		is this value times BOARD_WD_PRESCALER.  The datasheet does not
+		state it for the run-mode watchdog (LPRC based, so only accurate
+		to about -18%/+13%).
+
+endif # PIC32MZ_WDT
+
+config PIC32MZ_PROGMEM
+	bool "Program flash storage (NVM)"
+	default n
+	depends on ARCH_CHIP_PIC32MZW1
+	select ARCH_HAVE_PROGMEM
+	select ARCH_HAVE_PROGMEM_READ
+	---help---
+		Use the last pages of the program flash to store data, through the
+		progmem interface (MTD_PROGMEM makes an MTD device of it).  The
+		pages are erased and programmed by the flash controller (NVM), so
+		the program image must not reach them: the linker script of the
+		board has to stop the program flash PIC32MZ_PROGMEM_NPAGES pages
+		before its end.
+
+if PIC32MZ_PROGMEM
+
+config PIC32MZ_PROGMEM_NPAGES
+	int "Number of 4 KB pages"
+	default 2
+	range 1 64
+	---help---
+		Pages reserved at the end of the 1 MB program flash.
+
+endif # PIC32MZ_PROGMEM
 
 config PIC32MZ_T2
 	bool "Timer 2 (T2)"
@@ -939,26 +1143,32 @@ config PIC32MZ_GPIOIRQ_PORTC
 config PIC32MZ_GPIOIRQ_PORTD
 	bool "I/O PORTD Interrupt Support"
 	default n
+	depends on !ARCH_CHIP_PIC32MZW1
 
 config PIC32MZ_GPIOIRQ_PORTE
 	bool "I/O PORTE Interrupt Support"
 	default n
+	depends on !ARCH_CHIP_PIC32MZW1
 
 config PIC32MZ_GPIOIRQ_PORTF
 	bool "I/O PORTF Interrupt Support"
 	default n
+	depends on !ARCH_CHIP_PIC32MZW1
 
 config PIC32MZ_GPIOIRQ_PORTG
 	bool "I/O PORTG Interrupt Support"
 	default n
+	depends on !ARCH_CHIP_PIC32MZW1
 
 config PIC32MZ_GPIOIRQ_PORTH
 	bool "I/O PORTH Interrupt Support"
 	default n
+	depends on !ARCH_CHIP_PIC32MZW1
 
 config PIC32MZ_GPIOIRQ_PORTJ
 	bool "I/O PORTJ Interrupt Support"
 	default n
+	depends on !ARCH_CHIP_PIC32MZW1
 
 config PIC32MZ_GPIOIRQ_PORTK
 	bool "I/O PORTK Interrupt Support"
@@ -1112,12 +1322,34 @@ config PIC32MZ_ETH_NTXDESC
 	---help---
 		Configured number of Tx descriptors. Default: 2
 
+config PIC32MZ_ETH_MACADDR
+	hex "Ethernet MAC address"
+	default 0x000000000000
+	depends on PIC32MZ_ETHERNET
+	---help---
+		MAC address of the Ethernet interface, for chips without a factory
+		programmed station address (the PIC32MZ-W1 has none).  Use a
+		locally administered address (second least significant bit of the
+		first octet set), e.g. 0x02e0deadbeef.
+
+		Zero keeps the address programmed at reset, or one assigned later
+		with SIOCSIFHWADDR.
+
 config PIC32MZ_ETH_NRXDESC
 	int "Number Rx descriptors"
 	default 4
 	depends on PIC32MZ_ETHERNET
 	---help---
 		Configured number of Rx descriptors. Default: 4
+
+		The ring must absorb the burst that the TCP window allows, which
+		is about (free IOBs - IOB_THROTTLE) * IOB_BUFSIZE / frame size
+		frames.  At 100 Mbit/s the sender sends the window at line rate,
+		and a ring that is too small overruns in the hardware without any
+		counter; the TCP throughput then collapses to a few Mbit/s because
+		of retransmission timeouts.  For example, 32 descriptors for 48
+		IOBs of 1600 bytes with IOB_THROTTLE=16.  The default of 4 only
+		suits small IOBs and windows (24 IOBs of 196 bytes).
 
 config PIC32MZ_ETH_PRIORITY
 	int "Interrupt priority"
@@ -1216,6 +1448,7 @@ config PIC32MZ_FMIIEN
 	int "Ethernet MII"
 	default 1
 	range 0 1
+	depends on !ARCH_CHIP_PIC32MZW1
 	---help---
 		Ethernet MII enable selection
 
@@ -1241,6 +1474,7 @@ config PIC32MZ_FETHIO
 	int "Ethernet I/O pins"
 	default 1
 	range 0 1
+	depends on !ARCH_CHIP_PIC32MZW1
 	---help---
 		Ethernet I/O pin selection
 

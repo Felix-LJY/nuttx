@@ -20,8 +20,6 @@
 #
 ############################################################################
 
-include $(TOPDIR)/Make.defs
-
 CSRCS = stm32_boot.c stm32_bringup.c stm32_spi.c
 
 ifeq ($(CONFIG_ARCH_LEDS),y)
@@ -54,6 +52,10 @@ ifeq ($(CONFIG_MTD_AT45DB),y)
 CSRCS += stm32_at45db.c
 endif
 
+ifeq ($(CONFIG_MTD_W25),y)
+CSRCS += stm32_w25.c
+endif
+
 ifeq ($(CONFIG_SENSORS_INA226),y)
 CSRCS += stm32_ina226.c
 endif
@@ -72,10 +74,6 @@ endif
 
 ifeq ($(CONFIG_SENSORS_ZEROCROSS),y)
   CSRCS += stm32_zerocross.c
-endif
-
-ifeq ($(CONFIG_TIMER),y)
-CSRCS += stm32_timer.c
 endif
 
 ifeq ($(CONFIG_BOARDCTL_IOCTL),y)

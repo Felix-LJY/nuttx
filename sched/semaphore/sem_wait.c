@@ -76,6 +76,9 @@ int nxsem_wait_slow(FAR sem_t *sem)
   sigset_t pendingset;
 #endif
   FAR struct tcb_s *rtcb = this_task();
+#ifdef CONFIG_MM_KMAP
+  FAR sem_t *usem;
+#endif
   irqstate_t flags;
   int ret = OK;
   bool unlocked;
@@ -96,14 +99,22 @@ int nxsem_wait_slow(FAR sem_t *sem)
    * TSTATE_WAIT_SEM. In that window, the wait cannot yet be aborted by
    * sem_wait_irq(). If sem_wait then blocks without re-checking unmasked
    * pending signals, it can sleep indefinitely and miss the interrupt.
+   *
+   * Not for a mutex or an uninterruptible semaphore: the kernel retries
+   * them until it gets the semaphore (mm_lock(), for example).  During a
+   * system call an unmasked signal stays pending until the call returns,
+   * so the check would make every retry fail at once.
    */
 
-  pendingset = nxsig_pendingset(rtcb);
-  nxsig_nandset(&pendingset, &pendingset, &rtcb->sigprocmask);
-  if (!sigisemptyset(&pendingset))
+  if (!mutex && (rtcb->flags & TCB_FLAG_UNINTERRUPTIBLE) == 0)
     {
-      leave_critical_section(flags);
-      return -EINTR;
+      pendingset = nxsig_pendingset(rtcb);
+      nxsig_nandset(&pendingset, &pendingset, &rtcb->sigprocmask);
+      if (!sigisemptyset(&pendingset))
+        {
+          leave_critical_section(flags);
+          return -EINTR;
+        }
     }
 #endif
 
@@ -195,6 +206,7 @@ int nxsem_wait_slow(FAR sem_t *sem)
       DEBUGASSERT(rtcb->waitobj == NULL);
 
 #ifdef CONFIG_MM_KMAP
+      usem = sem;
       sem = kmm_map_user(rtcb, sem, sizeof(*sem));
 #endif
 
@@ -290,11 +302,14 @@ int nxsem_wait_slow(FAR sem_t *sem)
       ret = rtcb->errcode != OK ? -rtcb->errcode : OK;
 
 #ifdef CONFIG_MM_KMAP
+      /* Use the address of the caller after the unmap */
+
       kmm_unmap(sem);
+      sem = usem;
 #endif
 
 #ifdef CONFIG_PRIORITY_INHERITANCE
-      if (prioinherit != 0)
+      if (prioinherit != SEM_PRIO_NONE)
         {
           sched_unlock();
         }

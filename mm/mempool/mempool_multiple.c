@@ -127,7 +127,7 @@ mempool_multiple_find(FAR struct mempool_multiple_s *mpool, size_t size)
   while (left < right)
     {
       mid = (left + right) >> 1;
-      if (mpool->pools[mid].blocksize > size)
+      if (mpool->pools[mid].blocksize >= size)
         {
           right = mid;
         }
@@ -428,14 +428,15 @@ mempool_multiple_init(FAR const char *name,
         }
     }
 
-  mpool = alloc(arg, sizeof(uintptr_t),
-                sizeof(struct mempool_multiple_s) +
-                npools * sizeof(struct mempool_s));
-
+  ret = sizeof(struct mempool_multiple_s) +
+        npools * sizeof(struct mempool_s);
+  mpool = alloc(arg, sizeof(uintptr_t), ret);
   if (mpool == NULL)
     {
       return NULL;
     }
+
+  memset(mpool, 0, ret);
 
   pools = (FAR struct mempool_s *)
           ((uintptr_t)mpool + sizeof(struct mempool_multiple_s));
@@ -451,15 +452,13 @@ mempool_multiple_init(FAR const char *name,
   mpool->pools = pools;
   mpool->npools = npools;
   mpool->minpoolsize = minpoolsize;
-  mpool->delta = 0;
 
   for (i = 0; i < npools; i++)
     {
       pools[i].blocksize = poolsize[i];
       pools[i].expandsize = expandsize - mpool->minpoolsize;
-      pools[i].initialsize = 0;
-      pools[i].interruptsize = 0;
       pools[i].priv = mpool;
+      pools[i].name = name;
       pools[i].alloc = mempool_multiple_alloc_callback;
       pools[i].free = mempool_multiple_free_callback;
       pools[i].check = mempool_multiple_check;
@@ -468,7 +467,7 @@ mempool_multiple_init(FAR const char *name,
 #else
       pools[i].wait = false;
 #endif
-      ret = mempool_init(pools + i, name);
+      ret = mempool_init(pools + i);
       if (ret < 0)
         {
           goto err_with_pools;
@@ -489,7 +488,6 @@ mempool_multiple_init(FAR const char *name,
         }
     }
 
-  mpool->dict_used = 0;
   mpool->dict_col_num_log2 = fls(dict_expendsize /
                                  sizeof(struct mpool_dict_s));
 
@@ -514,7 +512,7 @@ err_with_pools:
       mempool_deinit(pools + i);
     }
 
-  mempool_multiple_free_chunk(mpool, pools);
+  free(arg, mpool);
   return NULL;
 }
 
@@ -551,7 +549,7 @@ FAR void *mempool_multiple_alloc(FAR struct mempool_multiple_s *mpool,
   end = mpool->pools + mpool->npools;
   do
     {
-      FAR void *blk = mempool_allocate(pool);
+      FAR void *blk = mempool_allocate(pool, UINT_MAX);
 
       if (blk)
         {
@@ -596,6 +594,11 @@ FAR void *mempool_multiple_realloc(FAR struct mempool_multiple_s *mpool,
       return NULL;
     }
 
+  if (size > 0 && mempool_multiple_find(mpool, size) == dict->pool)
+    {
+      return oldblk;
+    }
+
   blk = mempool_multiple_alloc(mpool, size);
   if (blk != NULL && oldblk != NULL)
     {
@@ -637,7 +640,7 @@ int mempool_multiple_free(FAR struct mempool_multiple_s *mpool,
   blk = (FAR char *)blk - (((FAR char *)kasan_clear_tag(blk) -
                             ((FAR char *)kasan_clear_tag(dict->addr) +
                              mpool->minpoolsize)) %
-                           MEMPOOL_REALBLOCKSIZE(dict->pool));
+                           MEMPOOL_REALBLOCKSIZE(dict->pool->blocksize));
   mempool_release(dict->pool, blk);
   return 0;
 }
@@ -717,7 +720,8 @@ FAR void *mempool_multiple_memalign(FAR struct mempool_multiple_s *mpool,
   end = mpool->pools + mpool->npools;
   do
     {
-      FAR char *blk = mempool_allocate(pool);
+      FAR char *blk = mempool_allocate(pool, UINT_MAX);
+
       if (blk != NULL)
         {
           return (FAR void *)ALIGN_UP((uintptr_t)blk, alignment);
@@ -737,6 +741,7 @@ void mempool_multiple_foreach(FAR struct mempool_multiple_s *mpool,
                               FAR void *arg)
 {
   size_t i;
+
   for (i = 0; i < mpool->npools; i++)
     {
       handle(mpool->pools + i, arg);

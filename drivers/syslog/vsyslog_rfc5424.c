@@ -105,12 +105,22 @@ int nx_vsyslog(int priority, FAR const IPTR char *fmt, FAR va_list *ap)
 #ifdef CONFIG_SYSLOG_RFC5424_HOSTNAME
   char hostname_buf[HOST_NAME_MAX + 1];
 #endif
+#ifdef CONFIG_SYSLOG_OPENLOG
+  FAR const char *ident;
+  char tail[16];
+#endif
 
   /* Wrap the low-level output in a stream object and let lib_vsprintf
    * do the work.
    */
 
   lib_syslograwstream_open(&stream);
+
+#ifdef CONFIG_SYSLOG_DROPMASK
+  /* The channels select the messages by their priority */
+
+  stream.priority = LOG_PRI(priority);
+#endif
 
 #ifdef CONFIG_SYSLOG_TIMESTAMP
 
@@ -146,6 +156,12 @@ int nx_vsyslog(int priority, FAR const IPTR char *fmt, FAR va_list *ap)
     {
       memcpy(hostname_buf, NILVALUE, sizeof(NILVALUE));
     }
+#endif
+
+#ifdef CONFIG_SYSLOG_OPENLOG
+  /* The ident and the process ID of openlog() start the MSG */
+
+  ident = syslog_ident(tail, sizeof(tail));
 #endif
 
   /* Output the RFC5424 header */
@@ -190,6 +206,9 @@ int nx_vsyslog(int priority, FAR const IPTR char *fmt, FAR va_list *ap)
 #if HAVE_RFC5424_SDATA
       " " /* Space at the end of structured data before message */
 #endif
+#ifdef CONFIG_SYSLOG_OPENLOG
+      "%.*s%s" /* Ident of openlog() */
+#endif
 
       /* Beginning of formatted arguments */
 
@@ -214,7 +233,15 @@ int nx_vsyslog(int priority, FAR const IPTR char *fmt, FAR va_list *ap)
       , 0 /* TODO: Not sure if synced */
       , 0 /* TODO: Not sure if time zone known */
 #endif
+
+#ifdef CONFIG_SYSLOG_OPENLOG
+      /* Ident of openlog() */
+
+      , OPENLOG_IDENT_SIZE - 1, ident, tail
+#endif
+
       /* End of formatted arguments */
+
   );
 
   /* MSG string is generated below from common code for all syslog

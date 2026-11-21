@@ -30,16 +30,15 @@ list(
   lib_circbuf.c
   lib_creat.c
   lib_mknod.c
-  lib_umask.c
   lib_utsname.c
   lib_getrandom.c
   lib_xorshift128.c
   lib_tea_encrypt.c
   lib_tea_decrypt.c
-  lib_cxx_initialize.c
   lib_idr.c
   lib_impure.c
   lib_memfd.c
+  lib_posix_madvise.c
   lib_mutex.c
   lib_fchmodat.c
   lib_fstatat.c
@@ -48,7 +47,14 @@ list(
   lib_mkdirat.c
   lib_utimensat.c
   lib_mallopt.c
-  lib_getnprocs.c)
+  lib_getnprocs.c
+  lib_getstacksize.c
+  lib_mntent.c
+  lib_can_isotp.c)
+
+if(CONFIG_HAVE_CXXINITIALIZE)
+  list(APPEND SRCS lib_cxx_initialize.c)
+endif()
 
 if(CONFIG_LIBC_TEMPBUFFER)
   list(APPEND SRCS lib_tempbuffer.c)
@@ -87,10 +93,10 @@ list(
   lib_crc32hf4acfb13.c
   lib_crc16.c
   lib_crc16ccitt.c
-  lib_crc16ibm.c
   lib_crc16xmodem.c
   lib_crc16h1021.c
   lib_crc16h8005.c
+  lib_xorsum16.c
   lib_crc8.c
   lib_crc8ccitt.c
   lib_crc8h1d.c
@@ -115,6 +121,12 @@ if(CONFIG_LIBC_SLCDCODEC)
   list(APPEND SRCS lib_slcdencode.c lib_slcddecode.c)
 endif()
 
+# The NXFLAT module ABI marker
+
+if(CONFIG_NXFLAT)
+  list(APPEND SRCS lib_nxflat.c)
+endif()
+
 # Environment search path support
 
 if(CONFIG_LIBC_ENVPATH)
@@ -128,6 +140,8 @@ endif()
 if(CONFIG_FDCHECK)
   list(APPEND SRCS lib_fdcheck.c)
 endif()
+
+list(APPEND SRCS lib_tag.c)
 
 if(CONFIG_SCHED_INSTRUMENTATION_DUMP)
   list(APPEND SRCS lib_note.c)

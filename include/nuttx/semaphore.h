@@ -31,8 +31,17 @@
 
 #include <errno.h>
 #include <semaphore.h>
+#include <stdint.h>
+#include <time.h>
 
-#include <nuttx/clock.h>
+/* The OS and its libraries get the clock helpers here.  A program that
+ * defines NUTTX_NO_EXTENSIONS does not: <stdio.h> and <pthread.h> include
+ * this file, and nuttx/clock.h defines names such as TM_YEAR_BASE.
+ */
+
+#ifndef NUTTX_NO_EXTENSIONS
+#  include <nuttx/clock.h>
+#endif
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -63,6 +72,49 @@
 
 #define NXSEM_COUNT(s)        ((FAR atomic_t *)&((s)->val.semcount))
 #define NXSEM_IS_MUTEX(s)     (((s)->flags & SEM_TYPE_MUTEX) != 0)
+
+/* The uninterruptible waits set TCB_FLAG_UNINTERRUPTIBLE on the waiting
+ * task: then a pending signal does not make nxsem_wait_slow() fail at once.
+ * Not in user space: there, the flag would also stop a signal from ending
+ * sem_wait(), and the retry gets the signal when the system call returns.
+ */
+
+#if defined(CONFIG_BUILD_FLAT) || defined(__KERNEL__)
+#  define NXSEM_SET_UNINTERRUPTIBLE(tcb, flags) \
+  do \
+    { \
+      (tcb) = nxsched_self(); \
+      (flags) = (tcb)->flags & TCB_FLAG_UNINTERRUPTIBLE; \
+      (tcb)->flags |= TCB_FLAG_UNINTERRUPTIBLE; \
+    } \
+  while (0)
+
+#  define NXSEM_RESTORE_UNINTERRUPTIBLE(tcb, flags) \
+  do \
+    { \
+      if ((flags) == 0) \
+        { \
+          (tcb)->flags &= ~TCB_FLAG_UNINTERRUPTIBLE; \
+        } \
+    } \
+  while (0)
+#else
+#  define NXSEM_SET_UNINTERRUPTIBLE(tcb, flags) do { } while (0)
+#  define NXSEM_RESTORE_UNINTERRUPTIBLE(tcb, flags) do { } while (0)
+#endif
+
+/* In user space, the atomics of LIBC_ATOMIC_IRQ and LIBC_ATOMIC_HWSPINLOCK
+ * are system calls.  There, the semaphore operations skip the fast path:
+ * the slow path is one system call.
+ */
+
+#if !defined(CONFIG_BUILD_FLAT) && !defined(__KERNEL__) && \
+    (defined(CONFIG_LIBC_ATOMIC_IRQ) || \
+     defined(CONFIG_LIBC_ATOMIC_HWSPINLOCK))
+#  define NXSEM_FASTPATH      false
+#else
+#  define NXSEM_FASTPATH      true
+#endif
 
 /* Mutex related helper macros */
 
@@ -127,11 +179,8 @@ struct nsem_inode_s
 #ifndef __ASSEMBLY__
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -158,8 +207,7 @@ extern "C"
  *
  * Returned Value:
  *   This is an internal OS interface and should not be used by applications.
- *   It follows the NuttX internal error return policy:  Zero (OK) is
- *   returned on success.  A negated errno value is returned on failure.
+ *   Zero (OK) is always returned.
  *
  ****************************************************************************/
 
@@ -184,8 +232,7 @@ int nxsem_init(FAR sem_t *sem, int pshared, int32_t value);
  *
  * Returned Value:
  *   This is an internal OS interface and should not be used by applications.
- *   It follows the NuttX internal error return policy:  Zero (OK) is
- *   returned on success.  A negated errno value is returned on failure.
+ *   Zero (OK) is always returned.
  *
  ****************************************************************************/
 
@@ -786,7 +833,6 @@ int nxsem_getprioceiling(FAR const sem_t *sem, FAR int *prioceiling);
 int nxsem_setprioceiling(FAR sem_t *sem, int prioceiling,
                          FAR int *old_ceiling);
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

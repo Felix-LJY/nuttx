@@ -32,8 +32,10 @@
 #include <sched.h>
 #include <errno.h>
 #include <assert.h>
+#include <limits.h>
 
 #include <nuttx/cancelpt.h>
+#include <nuttx/fs/uio.h>
 
 #include "inode/inode.h"
 #include "vfs.h"
@@ -69,23 +71,6 @@ static ssize_t file_writev_compat(FAR struct file *filep,
       if (iov[i].iov_len == 0)
         {
           continue;
-        }
-
-      if (iov[i].iov_base == NULL)
-        {
-          return -EINVAL;
-        }
-
-      /* Sanity check to avoid total length overflow */
-
-      if (SSIZE_MAX - ntotal < iov[i].iov_len)
-        {
-          if (ntotal > 0)
-            {
-              break;
-            }
-
-          return -EINVAL;
         }
 
       nwritten = inode->u.i_ops->write(filep, iov[i].iov_base,
@@ -149,20 +134,22 @@ ssize_t file_writev(FAR struct file *filep,
                     FAR const struct iovec *iov, int iovcnt)
 {
   FAR struct inode *inode;
-  ssize_t ret;
+  size_t len = 0;
+  ssize_t ret = -EBADF;
+  int i;
 
   /* Was this file opened for write access? */
 
   if ((filep->f_oflags & O_ACCMODE) == O_RDONLY)
     {
-      return -EACCES;
+      return -EBADF;
     }
 
   /* Check buffer count and pointer for iovec */
 
-  if (iovcnt == 0)
+  if (iovcnt <= 0 || iovcnt > IOV_MAX)
     {
-      return 0;
+      return -EINVAL;
     }
 
   if (iov == NULL)
@@ -170,11 +157,20 @@ ssize_t file_writev(FAR struct file *filep,
       return -EFAULT;
     }
 
-  /* Are all iov_base accessible? */
+  /* Verify each iovec entry and check for total length overflow */
 
-  for (ret = 0; ret < iovcnt; ret++)
+  for (i = 0; i < iovcnt; i++)
     {
-      if (iov[ret].iov_base == NULL && iov[ret].iov_len != 0)
+      if (SSIZE_MAX - len < iov[i].iov_len)
+        {
+          return -EINVAL;
+        }
+
+      len += iov[i].iov_len;
+
+      /* Are all iov_base accessible? */
+
+      if (iov[i].iov_base == NULL && iov[i].iov_len != 0)
         {
           return -EFAULT;
         }
@@ -184,7 +180,6 @@ ssize_t file_writev(FAR struct file *filep,
    * If yes, then let the driver perform the write.
    */
 
-  ret = -EBADF;
   inode = filep->f_inode;
   if (inode != NULL && inode->u.i_ops)
     {
@@ -192,6 +187,7 @@ ssize_t file_writev(FAR struct file *filep,
 
       FS_PROFILE_START(start_time);
 
+#ifdef CONFIG_FS_UIO
       if (inode->u.i_ops->writev)
         {
           struct uio uio;
@@ -202,7 +198,9 @@ ssize_t file_writev(FAR struct file *filep,
               ret = inode->u.i_ops->writev(filep, &uio);
             }
         }
-      else if (inode->u.i_ops->write)
+      else
+#endif
+      if (inode->u.i_ops->write)
         {
           ret = file_writev_compat(filep, iov, iovcnt);
         }
@@ -249,12 +247,78 @@ ssize_t file_writev(FAR struct file *filep,
 ssize_t file_write(FAR struct file *filep, FAR const void *buf,
                    size_t nbytes)
 {
-  struct iovec iov;
+  FAR struct inode *inode;
+  ssize_t ret = -EBADF;
 
-  iov.iov_base = (FAR void *)buf;
-  iov.iov_len = nbytes;
+  DEBUGASSERT(filep);
+  inode = filep->f_inode;
 
-  return file_writev(filep, &iov, 1);
+#ifdef CONFIG_FS_UIO
+  if (inode == NULL || inode->u.i_ops == NULL ||
+      inode->u.i_ops->write == NULL)
+    {
+      struct iovec iov;
+
+      iov.iov_base = (FAR void *)buf;
+      iov.iov_len = nbytes;
+
+      return file_writev(filep, &iov, 1);
+    }
+#endif
+
+  /* Was this file opened for write access? */
+
+  if ((filep->f_oflags & O_ACCMODE) == O_RDONLY)
+    {
+      /* No.. File is not writable */
+
+      return -EBADF;
+    }
+
+  if (nbytes == 0)
+    {
+      return 0;
+    }
+
+  if (nbytes > SSIZE_MAX)
+    {
+      return -EINVAL;
+    }
+
+  if (buf == NULL)
+    {
+      return -EFAULT;
+    }
+
+  /* Is a driver registered? Does it support the write method?
+   * If yes, then let the driver perform the write.
+   */
+
+  if (inode != NULL && inode->u.i_ops)
+    {
+      clock_t start_time;
+
+      FS_PROFILE_START(start_time);
+
+      if (inode->u.i_ops->write)
+        {
+          ret = inode->u.i_ops->write(filep, buf, nbytes);
+        }
+
+      FS_PROFILE_STOP(start_time, g_fs_profile.total_write_time,
+                      g_fs_profile.writes);
+    }
+
+  /* Return the number of bytes written (or possibly an error code) */
+
+#ifdef CONFIG_FS_NOTIFY
+  if (ret > 0)
+    {
+      notify_write(filep);
+    }
+#endif
+
+  return ret;
 }
 
 /****************************************************************************
@@ -333,11 +397,23 @@ ssize_t nx_writev(int fd, FAR const struct iovec *iov, int iovcnt)
 
 ssize_t nx_write(int fd, FAR const void *buf, size_t nbytes)
 {
-  struct iovec iov;
+  FAR struct file *filep;
+  ssize_t ret;
 
-  iov.iov_base = (void *)buf;
-  iov.iov_len = nbytes;
-  return nx_writev(fd, &iov, 1);
+  /* First, get the file structure.  Note that on failure,
+   * file_get() will return the errno.
+   */
+
+  ret = file_get(fd, &filep);
+  if (ret >= 0)
+    {
+      /* Then let file_write do all of the work. */
+
+      ret = file_write(filep, buf, nbytes);
+      file_put(filep);
+    }
+
+  return ret;
 }
 
 /****************************************************************************
@@ -459,9 +535,21 @@ ssize_t writev(int fd, FAR const struct iovec *iov, int iovcnt)
 
 ssize_t write(int fd, FAR const void *buf, size_t nbytes)
 {
-  struct iovec iov;
+  ssize_t ret;
 
-  iov.iov_base = (void *)buf;
-  iov.iov_len = nbytes;
-  return writev(fd, &iov, 1);
+  /* write() is a cancellation point */
+
+  enter_cancellation_point();
+
+  /* Let nx_write() do all of the work */
+
+  ret = nx_write(fd, buf, nbytes);
+  if (ret < 0)
+    {
+      set_errno(-ret);
+      ret = ERROR;
+    }
+
+  leave_cancellation_point();
+  return ret;
 }

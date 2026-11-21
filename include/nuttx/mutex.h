@@ -28,7 +28,7 @@
  ****************************************************************************/
 
 #include <assert.h>
-#include <stdbool.h>
+#include <stdint.h>
 
 #include <nuttx/semaphore.h>
 
@@ -70,11 +70,8 @@ typedef struct rmutex_s rmutex_t;
 #ifndef __ASSEMBLY__
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -110,8 +107,7 @@ void nxmutex_add_backtrace(FAR mutex_t *mutex);
  *
  * Return Value:
  *   This is an internal OS interface and should not be used by applications.
- *   It follows the NuttX internal error return policy:  Zero (OK) is
- *   returned on success.  A negated errno value is returned on failure.
+ *   Zero (OK) is always returned.
  *
  ****************************************************************************/
 
@@ -131,7 +127,7 @@ int nxmutex_init(FAR mutex_t *mutex);
  *
  ****************************************************************************/
 
-bool nxmutex_is_hold(FAR mutex_t *mutex);
+uint8_t nxmutex_is_hold(FAR mutex_t *mutex);
 
 /****************************************************************************
  * Name: nxmutex_ticklock
@@ -452,7 +448,7 @@ static inline_function pid_t nxmutex_get_holder(FAR mutex_t *mutex)
  *
  ****************************************************************************/
 
-static inline_function bool nxmutex_is_locked(FAR mutex_t *mutex)
+static inline_function uint8_t nxmutex_is_locked(FAR mutex_t *mutex)
 {
   return NXSEM_MACQUIRED(mutex->sem.val.mholder);
 }
@@ -471,8 +467,7 @@ static inline_function bool nxmutex_is_locked(FAR mutex_t *mutex)
  *
  * Return Value:
  *   This is an internal OS interface and should not be used by applications.
- *   It follows the NuttX internal error return policy:  Zero (OK) is
- *   returned on success.  A negated errno value is returned on failure.
+ *   Zero (OK) is always returned.
  *
  ****************************************************************************/
 
@@ -610,13 +605,13 @@ static inline_function void nxmutex_reset(FAR mutex_t *mutex)
 static inline_function int nxmutex_breaklock(FAR mutex_t *mutex,
                                              FAR unsigned int *locked)
 {
-  int ret = OK;
+  int ret;
 
-  *locked = false;
+  *locked = 0;
   ret = nxmutex_unlock(mutex);
   if (ret >= 0)
     {
-      *locked = true;
+      *locked = 1;
     }
 
   return ret;
@@ -642,7 +637,7 @@ static inline_function int nxmutex_breaklock(FAR mutex_t *mutex,
 static inline_function int nxmutex_restorelock(FAR mutex_t *mutex,
                                                unsigned int locked)
 {
-  return locked ? nxmutex_lock(mutex) : OK;
+  return locked ? nxmutex_lock(mutex) : 0;
 }
 
 /****************************************************************************
@@ -735,8 +730,7 @@ static inline_function int nxmutex_setprioceiling(FAR mutex_t *mutex,
  *
  * Return Value:
  *   This is an internal OS interface and should not be used by applications.
- *   It follows the NuttX internal error return policy:  Zero (OK) is
- *   returned on success.  A negated errno value is returned on failure.
+ *   Zero (OK) is always returned.
  *
  ****************************************************************************/
 
@@ -757,8 +751,7 @@ static inline_function int nxrmutex_init(FAR rmutex_t *rmutex)
  *
  * Return Value:
  *   This is an internal OS interface and should not be used by applications.
- *   It follows the NuttX internal error return policy:  Zero (OK) is
- *   returned on success.  A negated errno value is returned on failure.
+ *   Zero (OK) is always returned.
  *
  ****************************************************************************/
 
@@ -766,11 +759,7 @@ static inline_function int nxrmutex_destroy(FAR rmutex_t *rmutex)
 {
   int ret = nxmutex_destroy(&rmutex->mutex);
 
-  if (ret >= 0)
-    {
-      rmutex->count = 0;
-    }
-
+  rmutex->count = 0;
   return ret;
 }
 
@@ -788,7 +777,7 @@ static inline_function int nxrmutex_destroy(FAR rmutex_t *rmutex)
  *
  ****************************************************************************/
 
-static inline_function bool nxrmutex_is_hold(FAR rmutex_t *rmutex)
+static inline_function uint8_t nxrmutex_is_hold(FAR rmutex_t *rmutex)
 {
   return nxmutex_is_hold(&rmutex->mutex);
 }
@@ -811,7 +800,7 @@ static inline_function bool nxrmutex_is_hold(FAR rmutex_t *rmutex)
  *
  ****************************************************************************/
 
-static inline_function bool nxrmutex_is_recursive(FAR rmutex_t *rmutex)
+static inline_function uint8_t nxrmutex_is_recursive(FAR rmutex_t *rmutex)
 {
   return rmutex->count > 1;
 }
@@ -852,7 +841,7 @@ static inline_function int nxrmutex_get_holder(FAR rmutex_t *rmutex)
  *
  ****************************************************************************/
 
-static inline_function bool nxrmutex_is_locked(FAR rmutex_t *rmutex)
+static inline_function uint8_t nxrmutex_is_locked(FAR rmutex_t *rmutex)
 {
   return nxmutex_is_locked(&rmutex->mutex);
 }
@@ -874,7 +863,6 @@ static inline_function void nxrmutex_reset(FAR rmutex_t *rmutex)
   nxmutex_reset(&rmutex->mutex);
 }
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

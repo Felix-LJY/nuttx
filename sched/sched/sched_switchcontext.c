@@ -28,6 +28,10 @@
 
 #include <nuttx/sched_note.h>
 
+#ifdef CONFIG_SPINLOCK_DEBUG
+#  include <nuttx/spinlock.h>
+#endif
+
 /****************************************************************************
  * Public Functions
  ****************************************************************************/
@@ -62,6 +66,10 @@ void nxsched_switch_context(FAR struct tcb_s *from, FAR struct tcb_s *to)
     }
 #endif
 
+#ifdef CONFIG_SPINLOCK_DEBUG
+  spinlock_switch_context(from);
+#endif
+
 #ifdef CONFIG_SCHED_SPORADIC
   /* Perform sporadic schedule operations */
 
@@ -90,7 +98,8 @@ void nxsched_switch_context(FAR struct tcb_s *from, FAR struct tcb_s *to)
   /* Indicate that the task has been suspended */
 
 #ifdef CONFIG_SCHED_CRITMONITOR
-  nxsched_switch_critmon(from, to);
+  nxsched_suspend_critmon(from);
+  nxsched_resume_critmon(to);
 #endif
 
 #ifdef CONFIG_SCHED_INSTRUMENTATION

@@ -109,6 +109,20 @@ enum local_state_s
  */
 
 struct devif_callback_s;       /* Forward reference */
+struct local_conn_s;           /* Forward reference */
+
+/* A poll of a connected stream socket.  It waits on the FIFOs of the
+ * socket, and the socket reports their events with the events of its own
+ * state (see local_netpoll.c).
+ */
+
+struct local_pollfd_s
+{
+  FAR struct local_conn_s *lp_conn; /* The socket; NULL: the entry is free */
+  FAR struct pollfd_s *lp_fds;      /* The poll of the caller */
+  struct pollfd_s lp_in;            /* The poll of lc_infile */
+  struct pollfd_s lp_out;           /* The poll of lc_outfile */
+};
 
 struct local_conn_s
 {
@@ -124,6 +138,9 @@ struct local_conn_s
   uint8_t lc_proto;              /* SOCK_STREAM or SOCK_DGRAM */
   uint8_t lc_type;               /* See enum local_type_e */
   uint8_t lc_state;              /* See enum local_state_e */
+  bool lc_pair;                  /* One end of a socketpair() */
+  uint8_t lc_shutdown;           /* SHUT_RD: no more data comes in, SHUT_WR:
+                                  * no more data goes out */
   struct file lc_infile;         /* File for read-only FIFO (peers) */
   struct file lc_outfile;        /* File descriptor of write-only FIFO (peers) */
   char lc_path[UNIX_PATH_MAX];   /* Path assigned by bind() */
@@ -141,7 +158,30 @@ struct local_conn_s
 #endif /* CONFIG_NET_LOCAL_SCM */
 
   mutex_t lc_sendlock;           /* Make sending multi-thread safe */
+  mutex_t lc_recvlock;           /* Make receiving multi-thread safe */
   mutex_t lc_polllock;           /* Lock for net poll */
+
+#ifdef CONFIG_NET_LOCAL_DGRAM
+  struct sockaddr_un lc_daddr;   /* DGRAM: peer address set by connect() */
+  bool lc_dconnected;            /* DGRAM: lc_daddr is valid.  Kept apart from
+                                  * lc_state so that bind() and connect()
+                                  * do not overwrite each other.
+                                  */
+#endif
+
+  /* The polls of the FIFOs: a socket of a datagram socket pair uses pair
+   * (for POLLIN and POLLOUT together), a connected stream socket uses
+   * stream (each poll takes a slot of its FIFOs, so as many as a FIFO
+   * has).  A socket uses only the array of its type.
+   */
+
+  union
+  {
+    struct pollfd_s pair[2*LOCAL_NPOLLWAITERS];
+#ifdef CONFIG_NET_LOCAL_STREAM
+    struct local_pollfd_s stream[CONFIG_DEV_PIPE_NPOLLWAITERS];
+#endif
+  } lc_pfds;
 
 #ifdef CONFIG_NET_LOCAL_STREAM
   /* SOCK_STREAM fields common to both client and server */
@@ -152,8 +192,7 @@ struct local_conn_s
    * socket events.
    */
 
-  FAR struct pollfd *lc_event_fds[LOCAL_NPOLLWAITERS];
-  struct pollfd lc_inout_fds[2*LOCAL_NPOLLWAITERS];
+  FAR struct pollfd_s *lc_event_fds[LOCAL_NPOLLWAITERS];
 
   /* Union of fields unique to SOCK_STREAM client, server, and connected
    * peers.
@@ -185,16 +224,13 @@ struct local_conn_s
  ****************************************************************************/
 
 #ifdef __cplusplus
-#  define EXTERN extern "C"
 extern "C"
 {
-#else
-#  define EXTERN extern
 #endif
 
 /* The local socket interface */
 
-EXTERN const struct sock_intf_s g_local_sockif;
+extern const struct sock_intf_s g_local_sockif;
 
 /* Global protection lock for local socket */
 
@@ -286,6 +322,9 @@ void local_free(FAR struct local_conn_s *conn);
  * Returned Value:
  *   None
  *
+ * Assumptions:
+ *   Called with local lock held
+ *
  ****************************************************************************/
 
 void local_addref(FAR struct local_conn_s *conn);
@@ -303,6 +342,9 @@ void local_addref(FAR struct local_conn_s *conn);
  * Returned Value:
  *   None
  *
+ * Assumptions:
+ *   Called with local lock held
+ *
  ****************************************************************************/
 
 void local_subref(FAR struct local_conn_s *conn);
@@ -319,6 +361,24 @@ void local_subref(FAR struct local_conn_s *conn);
  ****************************************************************************/
 
 FAR struct local_conn_s *local_nextconn(FAR struct local_conn_s *conn);
+
+/****************************************************************************
+ * Name: local_copyaddr
+ *
+ * Description:
+ *   Copy an address from a program.  It has addrlen bytes and no NUL has to
+ *   follow its name, so what follows it in the memory of the program is not
+ *   part of it.  The copy always ends with a NUL.
+ *
+ * Input Parameters:
+ *   unaddr  - The copy
+ *   addr    - The address of the program
+ *   addrlen - The length of the address
+ *
+ ****************************************************************************/
+
+void local_copyaddr(FAR struct sockaddr_un *unaddr,
+                    FAR const struct sockaddr *addr, socklen_t addrlen);
 
 /****************************************************************************
  * Name: local_findconn
@@ -391,6 +451,9 @@ int psock_local_connect(FAR struct socket *psock,
  *
  * Input Parameters:
  *   conn - A reference to local connection structure
+ *
+ * Assumptions:
+ *   Called with local lock held
  *
  ****************************************************************************/
 
@@ -477,28 +540,32 @@ ssize_t local_sendmsg(FAR struct socket *psock, FAR const struct msghdr *msg,
                       int flags);
 
 /****************************************************************************
- * Name: local_send_preamble
+ * Name: local_send_frame
  *
  * Description:
- *   Send a packet on the write-only FIFO.
+ *   Send one datagram on the write-only FIFO as a single atomic writev, so
+ *   that the reader is never woken on a preamble whose payload has not been
+ *   written yet.
  *
  * Input Parameters:
- * conn      A reference to local connection structure
- * filep     File structure of write-only FIFO.
- * buf       Data to send
- * len       Length of data to send
- * preamble  preamble Flag to indicate the preamble sync header assembly
+ *   conn     A reference to local connection structure
+ *   path     The address of the sender ("" for none)
+ *   buf      Payload to send
+ *   len      Number of payload iovec segments
+ *   rcvsize  Receive buffer size the peer advertised, preamble room
+ *            included
  *
  * Returned Value:
- *   Packet length is returned on success; a negated errno value is returned
- *   on any failure.
+ *   Payload length is returned on success; a negated errno value is
+ *   returned on any failure.  -EMSGSIZE means the whole frame, preamble
+ *   included, does not fit in rcvsize.
  *
  ****************************************************************************/
 
-int local_send_preamble(FAR struct local_conn_s *conn,
-                        FAR struct file *filep,
-                        FAR const struct iovec *buf,
-                        size_t len, size_t rcvsize);
+ssize_t local_send_frame(FAR struct local_conn_s *conn,
+                         FAR const char *path,
+                         FAR const struct iovec *buf, size_t len,
+                         size_t rcvsize);
 
 /****************************************************************************
  * Name: local_send_packet
@@ -512,13 +579,16 @@ int local_send_preamble(FAR struct local_conn_s *conn,
  *   len      Length of data to send
  *
  * Returned Value:
- *   Zero is returned on success; a negated errno value is returned on any
- *   failure.
+ *   The number of bytes sent is returned on success.  It is less than the
+ *   length of the data when the FIFO is full and does not wait, or when a
+ *   signal came while the send waited.  A negated errno value is returned
+ *   on any failure (-EINTR: a signal came before the first byte).
  *
  ****************************************************************************/
 
-int local_send_packet(FAR struct file *filep, FAR const struct iovec *buf,
-                      size_t len);
+ssize_t local_send_packet(FAR struct file *filep,
+                          FAR const struct iovec *buf,
+                          size_t len);
 
 /****************************************************************************
  * Name: local_recvmsg
@@ -560,17 +630,21 @@ ssize_t local_recvmsg(FAR struct socket *psock, FAR struct msghdr *msg,
  *   len   - Length of data to receive [in]
  *           Length of data actually received [out]
  *   once  - Flag to indicate the buf may only be read once
+ *   intr  - A signal can end the wait for the first byte.  Use false for
+ *           the parts of a datagram after its start: a datagram must be
+ *           read whole.
  *
  * Returned Value:
  *   Zero is returned on success; a negated errno value is returned on any
  *   failure.  If -ECONNRESET is received, then the sending side has closed
  *   the FIFO. In this case, the returned data may still be valid (if the
- *   returned len > 0).
+ *   returned len > 0).  -EINTR: a signal came before the first byte (only
+ *   if intr is true).
  *
  ****************************************************************************/
 
 int local_fifo_read(FAR struct file *filep, FAR uint8_t *buf,
-                    size_t *len, bool once);
+                    size_t *len, bool once, bool intr);
 
 /****************************************************************************
  * Name: local_getaddr
@@ -713,6 +787,25 @@ void local_event_pollnotify(FAR struct local_conn_s *conn,
                             pollevent_t eventset);
 
 /****************************************************************************
+ * Name: local_shutdown_pollnotify
+ *
+ * Description:
+ *   shutdown() changed the state of a stream socket and is about to close
+ *   one of its FIFOs.  Stop the polls of that FIFO and tell all polls of
+ *   the socket the new state.
+ *
+ * Input Parameters:
+ *   conn  - The socket
+ *   filep - lc_infile or lc_outfile, which shutdown() closes next
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_NET_LOCAL_STREAM
+void local_shutdown_pollnotify(FAR struct local_conn_s *conn,
+                               FAR struct file *filep);
+#endif
+
+/****************************************************************************
  * Name: local_pollsetup
  *
  * Description:
@@ -728,7 +821,7 @@ void local_event_pollnotify(FAR struct local_conn_s *conn,
  *
  ****************************************************************************/
 
-int local_pollsetup(FAR struct socket *psock, FAR struct pollfd *fds);
+int local_pollsetup(FAR struct socket *psock, FAR struct pollfd_s *fds);
 
 /****************************************************************************
  * Name: local_pollteardown
@@ -746,7 +839,7 @@ int local_pollsetup(FAR struct socket *psock, FAR struct pollfd *fds);
  *
  ****************************************************************************/
 
-int local_pollteardown(FAR struct socket *psock, FAR struct pollfd *fds);
+int local_pollteardown(FAR struct socket *psock, FAR struct pollfd_s *fds);
 
 /****************************************************************************
  * Name: local_generate_instance_id
@@ -762,13 +855,13 @@ int32_t local_generate_instance_id(void);
  * Name: local_set_pollthreshold
  *
  * Description:
- *   Set the local pollin and pollout threshold:
+ *   Set the poll thresholds of the FIFO that a socket of a SOCK_DGRAM
+ *   socket pair reads.
  *
  ****************************************************************************/
 
 #ifdef CONFIG_NET_LOCAL_DGRAM
-int local_set_pollthreshold(FAR struct local_conn_s *conn,
-                            unsigned long threshold);
+int local_set_pollthreshold(FAR struct local_conn_s *conn);
 #endif
 
 /****************************************************************************
@@ -781,7 +874,6 @@ int local_set_pollthreshold(FAR struct local_conn_s *conn,
 
 int local_set_nonblocking(FAR struct local_conn_s *conn);
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

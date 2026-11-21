@@ -64,6 +64,23 @@ int spi_transfer(FAR struct spi_dev_s *spi, FAR struct spi_sequence_s *seq)
 
   DEBUGASSERT(spi != NULL && seq != NULL && seq->trans != NULL);
 
+  /* Lower-half exchangeseqs implementations de-select at the end of the
+   * sequence, so a sequence that keeps CS must use the generic loop.
+   */
+
+  if (spi->ops->exchangeseqs && !seq->keepcs)
+    {
+      /* -ENOTSUP means: not handled, use the generic loop below */
+
+      ret = SPI_EXCHANGESEQS(spi, seq, 1, NULL);
+      if (ret != -ENOTSUP)
+        {
+          return ret;
+        }
+
+      ret = OK;
+    }
+
   /* Get exclusive access to the SPI bus */
 
   SPI_LOCK(spi, true);
@@ -95,6 +112,8 @@ int spi_transfer(FAR struct spi_dev_s *spi, FAR struct spi_sequence_s *seq)
 
   for (i = 0, trans = seq->trans; i < (int)seq->ntrans; i++, trans++)
     {
+      bool deselect = trans->deselect;
+
       /* Establish the fixed SPI attributes for unique to this transaction */
 
 #ifdef CONFIG_SPI_HWFEATURES
@@ -104,6 +123,19 @@ int spi_transfer(FAR struct spi_dev_s *spi, FAR struct spi_sequence_s *seq)
           spierr("ERROR: SPI_HWFEATURES failed: %d\n", ret);
           break;
         }
+
+#  ifdef CONFIG_SPI_CS_CONTROL
+      /* The CS forcing features override the per-transfer deselect */
+
+      if ((trans->hwfeat & HWFEAT_FORCE_CS_INACTIVE_AFTER_TRANSFER) != 0)
+        {
+          deselect = true;
+        }
+      else if ((trans->hwfeat & HWFEAT_FORCE_CS_ACTIVE_AFTER_TRANSFER) != 0)
+        {
+          deselect = false;
+        }
+#  endif
 #endif
 
 #ifdef CONFIG_SPI_CMDDATA
@@ -121,11 +153,17 @@ int spi_transfer(FAR struct spi_dev_s *spi, FAR struct spi_sequence_s *seq)
 
       /* Perform the transfer */
 
-      SPI_EXCHANGE(spi, trans->txbuffer, trans->rxbuffer, trans->nwords);
+      ret = SPI_EXCHANGE(spi, trans->txbuffer, trans->rxbuffer,
+                         trans->nwords);
+      if (ret < 0)
+        {
+          spierr("ERROR: SPI_EXCHANGE failed: %d\n", ret);
+          break;
+        }
 
       /* Possibly de-select the SPI device after the transfer */
 
-      if (trans->deselect)
+      if (deselect)
         {
           SPI_SELECT(spi, seq->dev, false);
         }
@@ -138,8 +176,68 @@ int spi_transfer(FAR struct spi_dev_s *spi, FAR struct spi_sequence_s *seq)
         }
     }
 
-  SPI_SELECT(spi, seq->dev, false);
+  /* De-select unless the sequence keeps CS asserted for a follow-up
+   * sequence; an aborted sequence always de-selects.
+   */
+
+  if (!seq->keepcs || ret < 0)
+    {
+      SPI_SELECT(spi, seq->dev, false);
+    }
+
   SPI_LOCK(spi, false);
   return ret;
 }
 
+/****************************************************************************
+ * Name: spi_transferseqs
+ *
+ * Description:
+ *   This is a helper function that can be used to encapsulate and manage
+ *   n sequence of SPI transfers.  The SPI bus will be locked and the
+ *   SPI device selected for the duration of the transfers.
+ *
+ * Input Parameters:
+ *   spi      - An instance of the SPI device to use for the transfer
+ *   seqs     - A pointer to the spi sequence info to be exchanged
+ *   nseqs    - The number of sequences to be exchanged
+ *   cookie   - A pointer to the cookie info to return a unique identifier
+ *              for the spi sequences being exchanged.
+ *
+ * Returned Value:
+ *   Zero (OK) on success; a negated errno value on failure.
+ *
+ ****************************************************************************/
+
+int spi_transferseqs(FAR struct spi_dev_s *spi,
+                     FAR struct spi_sequence_s *seqs, size_t nseqs,
+                     FAR void **cookie)
+{
+  FAR struct spi_sequence_s *seq = seqs;
+  int ret = OK;
+  int i;
+
+  DEBUGASSERT(spi != NULL && seqs != NULL && nseqs > 0);
+
+  if (spi->ops->exchangeseqs)
+    {
+      /* -ENOTSUP means: not handled, use the generic loop below */
+
+      ret = SPI_EXCHANGESEQS(spi, seqs, nseqs, cookie);
+      if (ret != -ENOTSUP)
+        {
+          return ret;
+        }
+    }
+
+  for (i = 0; i < nseqs; i++, seq++)
+    {
+      ret = spi_transfer(spi, seq);
+      if (ret < 0)
+        {
+          break;
+        }
+    }
+
+  return ret;
+}

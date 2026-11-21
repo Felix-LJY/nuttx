@@ -42,10 +42,6 @@
 #define PID_MM_LEAK    ((pid_t)-2)
 #define PID_MM_MEMPOOL ((pid_t)-1)
 
-/* For Linux and MacOS compatibility */
-
-#define malloc_usable_size malloc_size
-
 /* mallopt options that actually do something */
 
 #define M_TRIM_THRESHOLD    -1
@@ -99,9 +95,10 @@ extern "C"
 {
 #endif
 
-int mallopt(int param, int value);
+int mallopt(int, int);
 struct mallinfo mallinfo(void);
 size_t malloc_size(FAR void *ptr);
+size_t malloc_usable_size(FAR void *ptr);
 struct mallinfo_task mallinfo_task(FAR const struct malltask *task);
 
 #if defined(__cplusplus)

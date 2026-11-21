@@ -485,11 +485,20 @@ int up_relocateadd(const Elf64_Rela *rel, const Elf64_Sym *sym,
   uint64_t val;
   int ret = 0;
 
+  /* Only R_AARCH64_NONE may come without a symbol (symbol index 0) */
+
+  if (sym == NULL && ELF64_R_TYPE(rel->r_info) != R_AARCH64_NONE)
+    {
+      berr("ERROR: Relocation type %d has no symbol\n",
+           (int)ELF64_R_TYPE(rel->r_info));
+      return -EINVAL;
+    }
+
   /* addr corresponds to P in the AArch64 ELF document. */
 
   /* val corresponds to (S + A) in the AArch64 ELF document. */
 
-  val = sym->st_value + rel->r_addend;
+  val = (sym != NULL ? sym->st_value : 0) + rel->r_addend;
 
   /* Handle the relocation by relocation type */
 
@@ -692,6 +701,11 @@ int up_relocateadd(const Elf64_Rela *rel, const Elf64_Sym *sym,
 
         /* fallthrough */
 
+      /* For the GOT relocations, the loader gives the address of the GOT
+       * slot as the value of the symbol.
+       */
+
+      case R_AARCH64_ADR_GOT_PAGE:
       case R_AARCH64_ADR_PREL_PG_HI21:
         {
           if (((uint64_t)addr & 0xfff) < 0xff8)
@@ -715,8 +729,12 @@ int up_relocateadd(const Elf64_Rela *rel, const Elf64_Sym *sym,
                 }
               else
                 {
-                  berr("Out of range for ADR\n");
-                  return -EINVAL;
+                  /* The erratum 843419 workaround needs the target within
+                   * 1 MB.  Otherwise keep the ADRP: it reaches 4 GB.
+                   */
+
+                  ret = reloc_insn_imm(RELOC_OP_PAGE, addr, val, 12, 21,
+                                       INSN_IMM_ADR);
                 }
             }
         }
@@ -747,6 +765,7 @@ int up_relocateadd(const Elf64_Rela *rel, const Elf64_Sym *sym,
         }
         break;
 
+      case R_AARCH64_LD64_GOT_LO12_NC:
       case R_AARCH64_LDST64_ABS_LO12_NC:
         {
           overflow_check = false;

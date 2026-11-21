@@ -26,15 +26,17 @@
 
 #include <nuttx/config.h>
 
-#include <sys/sendfile.h>
-#include <stdbool.h>
 #include <errno.h>
-#include <nuttx/debug.h>
+#include <fcntl.h>
+#include <limits.h>
+#include <stdbool.h>
+#include <sys/sendfile.h>
 
+#include <nuttx/debug.h>
 #include <nuttx/fs/fs.h>
 #include <nuttx/kmalloc.h>
+#include <nuttx/lib/lib.h>
 #include <nuttx/net/net.h>
-#include "fs_heap.h"
 
 /****************************************************************************
  * Private Functions
@@ -46,8 +48,9 @@ static ssize_t copyfile(FAR struct file *outfile, FAR struct file *infile,
   FAR uint8_t *iobuffer;
   FAR uint8_t *wrbuffer;
   off_t startpos = 0;
-  ssize_t nbytesread;
+  ssize_t nbytesread = 0;
   ssize_t nbyteswritten;
+  ssize_t ret = 0;
   size_t  ntransferred;
   bool endxfr;
 
@@ -76,7 +79,7 @@ static ssize_t copyfile(FAR struct file *outfile, FAR struct file *infile,
 
   /* Allocate an I/O buffer */
 
-  iobuffer = fs_heap_malloc(CONFIG_SENDFILE_BUFSIZE);
+  iobuffer = lib_get_tempbuffer(CONFIG_SENDFILE_BUFSIZE);
   if (!iobuffer)
     {
       return -ENOMEM;
@@ -124,10 +127,12 @@ static ssize_t copyfile(FAR struct file *outfile, FAR struct file *infile,
 
               if (nbytesread != -EINTR || ntransferred == 0)
                 {
-                  /* Read error.  Break out and return the error condition. */
+                  /* Read error.  Break out and return the error condition
+                   * if nothing was transferred.
+                   */
 
-                  ntransferred = nbytesread;
-                  endxfr       = true;
+                  ret    = nbytesread;
+                  endxfr = true;
                   break;
                 }
             }
@@ -184,11 +189,11 @@ static ssize_t copyfile(FAR struct file *outfile, FAR struct file *infile,
                   if (nbyteswritten != -EINTR || ntransferred == 0)
                     {
                       /* Write error.  Break out and return the error
-                       * condition.
+                       * condition if nothing was transferred.
                        */
 
-                      ntransferred = nbyteswritten;
-                      endxfr       = true;
+                      ret    = nbyteswritten;
+                      endxfr = true;
                       break;
                     }
                 }
@@ -199,23 +204,15 @@ static ssize_t copyfile(FAR struct file *outfile, FAR struct file *infile,
 
   /* Release the I/O buffer */
 
-  fs_heap_free(iobuffer);
+  lib_put_tempbuffer(iobuffer);
 
   /* Return the current file position */
 
   if (offset)
     {
-      /* Use file_seek to get the current file position */
+      /* Return the file position after the last byte transferred */
 
-      off_t curpos = file_seek(infile, 0, SEEK_CUR);
-      if (curpos < 0)
-        {
-          return curpos;
-        }
-
-      /* Return the current file position */
-
-      *offset = curpos;
+      *offset += ntransferred;
 
       /* Use file_seek again to restore the original file position */
 
@@ -225,12 +222,25 @@ static ssize_t copyfile(FAR struct file *outfile, FAR struct file *infile,
           return startpos;
         }
     }
+  else if (nbytesread > 0)
+    {
+      /* Give back the bytes read but not written.  An input that cannot
+       * seek loses them.
+       */
+
+      file_seek(infile, -nbytesread, SEEK_CUR);
+    }
 
   /* Finally return the number of bytes actually transferred (or ERROR
-   * if any failure occurred).
+   * if no data was transferred).
    */
 
-  return ntransferred;
+  if (ntransferred > 0)
+    {
+      return ntransferred;
+    }
+
+  return ret;
 }
 
 /****************************************************************************
@@ -241,7 +251,7 @@ static ssize_t copyfile(FAR struct file *outfile, FAR struct file *infile,
  * Name: file_sendfile
  *
  * Description:
- *   Equivalent to the standard sendfile function except that is accepts a
+ *   Equivalent to the standard sendfile function except that it accepts a
  *   struct file instance instead of a file descriptor.
  *
  ****************************************************************************/
@@ -249,10 +259,36 @@ static ssize_t copyfile(FAR struct file *outfile, FAR struct file *infile,
 ssize_t file_sendfile(FAR struct file *outfile, FAR struct file *infile,
                       FAR off_t *offset, size_t count)
 {
+  if (outfile == NULL || infile == NULL)
+    {
+      return -EBADF;
+    }
+
+  if (outfile == infile)
+    {
+      return -EINVAL;
+    }
+
+  if ((infile->f_oflags & O_ACCMODE) == O_WRONLY ||
+      (outfile->f_oflags & O_ACCMODE) == O_RDONLY)
+    {
+      return -EBADF;
+    }
+
+  if (offset != NULL && *offset < 0)
+    {
+      return -EINVAL;
+    }
+
   if (count == 0)
     {
       nwarn("WARNING: sendfile count is zero\n");
       return 0;
+    }
+
+  if (count > SSIZE_MAX)
+    {
+      count = SSIZE_MAX;
     }
 
 #ifdef CONFIG_NET_SENDFILE
@@ -263,13 +299,21 @@ ssize_t file_sendfile(FAR struct file *outfile, FAR struct file *infile,
   FAR struct socket *psock;
 
   psock = file_socket(outfile);
-  if (psock != NULL)
+
+  /* psock_sendfile() seeks the input to send its data again: an input that
+   * cannot seek (a pipe, a FIFO or a socket) uses the slow path.
+   */
+
+  if (psock != NULL && infile->f_inode != NULL &&
+      !INODE_IS_NOSEEK(infile->f_inode))
     {
       /* Then let psock_sendfile do the work. */
 
-      int ret = psock_sendfile(psock, infile, offset, count);
+      ssize_t ret = psock_sendfile(psock, infile, offset, count);
+
       if (ret >= 0 || ret != -ENOSYS)
         {
+          psock_sigpipe(psock, ret, 0);
           return ret;
         }
 
@@ -324,10 +368,11 @@ ssize_t file_sendfile(FAR struct file *outfile, FAR struct file *infile,
  * Returned Value:
  *   If the transfer was successful, the number of bytes written to outfd is
  *   returned.  On error, -1 is returned, and errno is set appropriately.
- *   There error values are those returned by read() or write() plus:
+ *   These error values are those returned by read() or write() plus:
  *
- *   EINVAL - Bad input parameters.
- *   ENOMEM - Could not allocated an I/O buffer
+ *   EBADF  - A file descriptor is invalid or has wrong access mode.
+ *   EINVAL - Bad input parameters (e.g., negative offset or outfd == infd).
+ *   ENOMEM - Could not allocate an I/O buffer.
  *
  ****************************************************************************/
 
@@ -335,7 +380,13 @@ ssize_t sendfile(int outfd, int infd, FAR off_t *offset, size_t count)
 {
   FAR struct file *outfile;
   FAR struct file *infile;
-  int ret;
+  ssize_t ret;
+
+  if (outfd == infd)
+    {
+      ret = -EINVAL;
+      goto errout;
+    }
 
   ret = file_get(outfd, &outfile);
   if (ret < 0)

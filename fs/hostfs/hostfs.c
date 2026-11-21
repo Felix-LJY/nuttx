@@ -116,6 +116,7 @@ static int     hostfs_stat(FAR struct inode *mountpt,
 static int     hostfs_chstat(FAR struct inode *mountpt,
                              FAR const char *relpath,
                              FAR const struct stat *buf, int flags);
+static int     hostfs_syncfs(FAR struct inode *mountpt);
 
 #ifdef CONFIG_FS_LINKS
 static int     hostfs_link(FAR struct inode *mountpt,
@@ -175,7 +176,7 @@ const struct mountpt_operations g_hostfs_operations =
   hostfs_rename,        /* rename */
   hostfs_stat,          /* stat */
   hostfs_chstat,        /* chstat */
-  NULL,                 /* syncfs */
+  hostfs_syncfs,        /* syncfs */
   NULL,                 /* ioctldir */
   NULL,                 /* permission */
 #ifdef CONFIG_FS_LINKS
@@ -290,7 +291,7 @@ static int hostfs_open(FAR struct file *filep, FAR const char *relpath,
         }
       else
         {
-          goto errout_with_buffer;
+          goto errout_with_fd;
         }
     }
 
@@ -312,6 +313,9 @@ static int hostfs_open(FAR struct file *filep, FAR const char *relpath,
 
   ret = OK;
   goto errout_with_lock;
+
+errout_with_fd:
+  host_close(hf->fd);
 
 errout_with_buffer:
   fs_heap_free(hf);
@@ -1032,6 +1036,7 @@ static int hostfs_bind(FAR struct inode *blkdriver, FAR const void *data,
   FAR char *options;
   FAR char *saveptr;
   FAR char *ptr;
+  struct stat st;
   int len;
   int ret;
 
@@ -1112,6 +1117,14 @@ static int hostfs_bind(FAR struct inode *blkdriver, FAR const void *data,
   if (fs->fs_root[len - 1] != '/')
     {
       strlcat(fs->fs_root, "/", sizeof(fs->fs_root));
+    }
+
+  ret = host_stat(fs->fs_root, &st);
+  if (ret < 0)
+    {
+      nxmutex_unlock(&fs->fs_lock);
+      fs_heap_free(fs);
+      return ret;
     }
 
   *handle = (FAR void *)fs;
@@ -1391,10 +1404,8 @@ int hostfs_rename(FAR struct inode *mountpt, FAR const char *oldrelpath,
 
   /* Append to the host's root directory */
 
-  strlcpy(oldpath, fs->fs_root, sizeof(oldpath));
-  strlcat(oldpath, oldrelpath, sizeof(oldpath));
-  strlcpy(newpath, fs->fs_root, sizeof(newpath));
-  strlcat(newpath, newrelpath, sizeof(newpath));
+  hostfs_mkpath(fs, oldrelpath, oldpath, HOSTFS_MAX_PATH);
+  hostfs_mkpath(fs, newrelpath, newpath, HOSTFS_MAX_PATH);
 
   /* Call the host FS to do the mkdir */
 
@@ -1506,6 +1517,44 @@ static int hostfs_chstat(FAR struct inode *mountpt, FAR const char *relpath,
 errout_with_path:
   lib_put_tempbuffer(path);
   return ret;
+}
+
+/****************************************************************************
+ * Name: hostfs_syncfs
+ *
+ * Description: Synchronize the filesystem
+ *
+ ****************************************************************************/
+
+static int hostfs_syncfs(FAR struct inode *mountpt)
+{
+  FAR struct hostfs_mountpt_s *fs;
+  FAR struct hostfs_ofile_s *hf;
+  int ret;
+
+  /* Sanity checks */
+
+  DEBUGASSERT(mountpt && mountpt->i_private);
+
+  /* Get the mountpoint private data from the inode structure */
+
+  fs = mountpt->i_private;
+
+  ret = nxmutex_lock(&fs->fs_lock);
+  if (ret < 0)
+    {
+      return ret;
+    }
+
+  /* Iterate over all open files and sync each one */
+
+  for (hf = fs->fs_head; hf != NULL; hf = hf->fnext)
+    {
+      host_sync(hf->fd);
+    }
+
+  nxmutex_unlock(&fs->fs_lock);
+  return OK;
 }
 
 #ifdef CONFIG_FS_LINKS

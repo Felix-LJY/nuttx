@@ -146,16 +146,11 @@ python_tools() {
     construct \
     cvt2utf \
     cxxfilt \
-    esptool==5.2.0 \
+    esptool==5.3.1 \
     imgtool \
     kconfiglib \
-    pexpect==4.8.0 \
     pyelftools \
-    pyserial==3.5 \
-    pytest==6.2.5 \
-    pytest-json==0.4.0 \
-    pytest-ordering==0.6 \
-    pytest-repeat==0.9.1
+    pyserial==3.5
 }
 
 riscv_gcc_toolchain() {
@@ -172,6 +167,42 @@ riscv_gcc_toolchain() {
     rm ${basefile}.tar.gz
   fi
   command riscv-none-elf-gcc --version
+}
+
+rh850_gcc_toolchain() {
+  add_path "${NUTTXTOOLS}"/v850-elf-gcc/bin
+
+  if [ ! -f "${NUTTXTOOLS}/v850-elf-gcc/bin/v850-elf-gcc" ]; then
+    local basefile
+    basefile=v850-elf-toolchain-linux-x86_64
+    cd "${NUTTXTOOLS}"
+    # Download the RH850 GCC toolchain prebuilt by Linumiz
+    curl -O -L -s https://github.com/linumiz/rh850-gcc-toolchain/releases/download/v1.2.0/${basefile}.tar.gz
+    echo "a2194a060295008a2bd67db0e24c1cda8a795eba832b49b3f1d4cbb64cb242bd  ${basefile}.tar.gz" | sha256sum -c -
+    mkdir -p v850-elf-gcc
+    tar -C v850-elf-gcc -xzf ${basefile}.tar.gz
+    rm ${basefile}.tar.gz
+  fi
+
+  command v850-elf-gcc --version
+}
+
+rh850_qemu() {
+  add_path "${NUTTXTOOLS}"/qemu-rh850/bin
+
+  if [ ! -f "${NUTTXTOOLS}/qemu-rh850/bin/qemu-system-rh850" ]; then
+    local basefile
+    basefile=qemu-rh850-linux-x86_64
+    cd "${NUTTXTOOLS}"
+    # Download qemu-system-rh850 prebuilt by Linumiz
+    curl -O -L -s https://github.com/linumiz/qemu-rh850/releases/download/rh850-v1.2.0/${basefile}.tar.gz
+    echo "1e1d3d5d3a365ec24047e9128b11df09fdfddb2b385aa4c77dc45253aa448f6b  ${basefile}.tar.gz" | sha256sum -c -
+    mkdir -p qemu-rh850
+    tar -C qemu-rh850 -xzf ${basefile}.tar.gz
+    rm ${basefile}.tar.gz
+  fi
+
+  command qemu-system-rh850 --version
 }
 
 rx_gcc_toolchain() {
@@ -337,6 +368,7 @@ setup_links() {
   ln -sf "$(which ccache)" "${NUTTXTOOLS}"/ccache/bin/g++
   ln -sf "$(which ccache)" "${NUTTXTOOLS}"/ccache/bin/p32-gcc
   ln -sf "$(which ccache)" "${NUTTXTOOLS}"/ccache/bin/rx-elf-gcc
+  ln -sf "$(which ccache)" "${NUTTXTOOLS}"/ccache/bin/v850-elf-gcc
   ln -sf "$(which ccache)" "${NUTTXTOOLS}"/ccache/bin/riscv-none-elf-gcc
   ln -sf "$(which ccache)" "${NUTTXTOOLS}"/ccache/bin/riscv-none-elf-g++
   ln -sf "$(which ccache)" "${NUTTXTOOLS}"/ccache/bin/sparc-gaisler-elf-gcc
@@ -355,7 +387,7 @@ install_build_tools() {
   mkdir -p "${NUTTXTOOLS}"
   echo "#!/usr/bin/env sh" > "${NUTTXTOOLS}"/env.sh
 
-  install="arm_clang_toolchain arm_gcc_toolchain arm64_gcc_toolchain bloaty kconfig_frontends mips_gcc_toolchain python_tools riscv_gcc_toolchain rx_gcc_toolchain sparc_gcc_toolchain xtensa_esp_gcc_toolchain util_linux wasi_sdk raspberrypi_pico_sdk"
+  install="arm_clang_toolchain arm_gcc_toolchain arm64_gcc_toolchain bloaty kconfig_frontends mips_gcc_toolchain python_tools riscv_gcc_toolchain rh850_gcc_toolchain rh850_qemu rx_gcc_toolchain sparc_gcc_toolchain xtensa_esp_gcc_toolchain util_linux wasi_sdk raspberrypi_pico_sdk"
 
   oldpath=$(cd . && pwd -P)
   for func in ${install}; do

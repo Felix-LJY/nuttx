@@ -31,7 +31,7 @@
 #include <string.h>
 #include <aio.h>
 
-#include <nuttx/queue.h>
+#include <nuttx/list.h>
 #include <nuttx/wqueue.h>
 
 #ifdef CONFIG_FS_AIO
@@ -60,11 +60,15 @@
 struct file;
 struct aio_container_s
 {
-  dq_entry_t aioc_link;            /* Supports a doubly linked list */
+  struct list_node aioc_link;      /* Supports a doubly linked list */
   FAR struct aiocb *aioc_aiocbp;   /* The contained AIO control block */
   FAR struct file *aioc_filep;     /* File structure to use with the I/O */
   struct work_s aioc_work;         /* Used to defer I/O to the work thread */
-  pid_t aioc_pid;                  /* ID of the waiting task */
+  pid_t aioc_pid;                  /* ID of the waiting task.  Set to
+                                    * INVALID_PROCESS_ID once aio_cleanup()
+                                    * has taken ownership of the container;
+                                    * aioc_decant() then leaves it alone.
+                                    */
 #ifdef CONFIG_PRIORITY_INHERITANCE
   uint8_t aioc_prio;               /* Priority of the waiting task */
 #endif
@@ -74,20 +78,16 @@ struct aio_container_s
  * Public Data
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /* This is a list of pending asynchronous I/O.  The user must hold the
  * lock on this list in order to access the list.
  */
 
-EXTERN dq_queue_t g_aio_pending;
+extern struct list_node g_aio_pending;
 
 /****************************************************************************
  * Public Function Prototypes
@@ -242,7 +242,6 @@ int aio_signal(pid_t pid, FAR struct aiocb *aiocbp);
 int aio_read_internal(FAR struct aiocb *aiocbp);
 int aio_write_internal(FAR struct aiocb *aiocbp);
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

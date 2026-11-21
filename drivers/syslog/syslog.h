@@ -30,6 +30,24 @@
 #include <nuttx/config.h>
 
 #include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <syslog.h>
+
+#include <nuttx/arch.h>
+#include <nuttx/sched.h>
+#include <nuttx/tls.h>
+
+/****************************************************************************
+ * Pre-processor Definitions
+ ****************************************************************************/
+
+/* The message priorities that the console channels do not write */
+
+#ifdef CONFIG_SYSLOG_CONSOLE_LEVEL
+#  define SYSLOG_CONSOLE_DROPMASK \
+     ((uint8_t)~LOG_UPTO(CONFIG_SYSLOG_CONSOLE_LEVEL))
+#endif
 
 /****************************************************************************
  * Public Data
@@ -38,11 +56,8 @@
 #ifndef __ASSEMBLY__
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /* This is the current syslog channel in use.  It initially points to
@@ -50,11 +65,67 @@ extern "C"
  */
 
 #ifdef CONFIG_SYSLOG
-EXTERN FAR syslog_channel_t *
+extern FAR syslog_channel_t *
 #ifndef CONFIG_SYSLOG_REGISTER
 const
 #endif
 g_syslog_channel[CONFIG_SYSLOG_MAX_CHANNELS];
+
+/****************************************************************************
+ * Inline Functions
+ ****************************************************************************/
+
+/****************************************************************************
+ * Name: syslog_ident
+ *
+ * Description:
+ *   Get the ident that the task group of the caller set with openlog(), and
+ *   write the text after it to 'tail': "[pid]: " with LOG_PID, ": " for a
+ *   non-empty ident, else nothing.  The messages of the OS that run in the
+ *   task get the ident too.  The task information can be in user memory:
+ *   print the ident with a precision of OPENLOG_IDENT_SIZE - 1.  No ident
+ *   in an interrupt handler.
+ *
+ * Returned Value:
+ *   The ident, or "" when there is nothing to print.
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_SYSLOG_OPENLOG
+static inline FAR const char *syslog_ident(FAR char *tail, size_t size)
+{
+  FAR struct task_info_s *info;
+  FAR struct tcb_s *tcb;
+
+  tail[0] = '\0';
+  if (up_interrupt_context())
+    {
+      return "";
+    }
+
+  tcb = nxsched_self();
+  if (tcb == NULL || tcb->group == NULL || tcb->group->tg_info == NULL)
+    {
+      return "";
+    }
+
+  info = tcb->group->tg_info;
+  if ((info->ta_openlog.ol_option & LOG_PID) != 0)
+    {
+      snprintf(tail, size, "[%d]: ", tcb->group->tg_pid);
+    }
+  else if (info->ta_openlog.ol_ident[0] != '\0')
+    {
+      snprintf(tail, size, ": ");
+    }
+  else
+    {
+      return "";
+    }
+
+  return info->ta_openlog.ol_ident;
+}
+#endif
 
 /****************************************************************************
  * Public Function Prototypes
@@ -238,9 +309,12 @@ void syslog_flush_intbuffer(bool force);
  *   one character at a time.
  *
  * Input Parameters:
- *   buffer - The buffer containing the data to be output
- *   buflen - The number of bytes in the buffer
- *   force  - Use the force() method of the channel vs. the putc() method.
+ *   priority - The priority of the message, or SYSLOG_PRIORITY_NONE.
+ *              A channel does not write the data if its sc_dropmask has
+ *              the bit of the priority.
+ *   buffer   - The buffer containing the data to be output
+ *   buflen   - The number of bytes in the buffer
+ *   force    - Use the force() method of the channel vs. the putc() method.
  *
  * Returned Value:
  *   On success, the number of characters written is returned.  A negated
@@ -248,11 +322,10 @@ void syslog_flush_intbuffer(bool force);
  *
  ****************************************************************************/
 
-ssize_t syslog_write_foreach(FAR const char *buffer,
+ssize_t syslog_write_foreach(int priority, FAR const char *buffer,
                              size_t buflen, bool force);
 #endif /* CONFIG_SYSLOG */
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

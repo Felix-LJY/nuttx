@@ -44,19 +44,26 @@
 #  error "Unsupported STM32L4 chip"
 #endif
 
+/* Compatibility with the single APB1ENR clock-enable register of F1/F2/F4.
+ * This part splits APB1ENR into APB1ENR1/APB1ENR2; alias the legacy APB1ENR
+ * USART clock-enable names so the shared M3/M4 drivers keep working.
+ */
+
+#define STM32_RCC_APB1ENR         STM32_RCC_APB1ENR1
+#define RCC_APB1ENR_USART2EN      RCC_APB1ENR1_USART2EN
+#define RCC_APB1ENR_USART3EN      RCC_APB1ENR1_USART3EN
+#define RCC_APB1ENR_UART4EN       RCC_APB1ENR1_UART4EN
+#define RCC_APB1ENR_UART5EN       RCC_APB1ENR1_UART5EN
+
 /****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
 
 #ifndef __ASSEMBLY__
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -199,7 +206,6 @@ void stm32_rcc_enablelsi(void);
 
 void stm32_rcc_disablelsi(void);
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

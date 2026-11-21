@@ -193,6 +193,10 @@
 #define STM32_TIM10_CLKIN  (2*STM32_PCLK2_FREQUENCY)
 #define STM32_TIM11_CLKIN  (2*STM32_PCLK2_FREQUENCY)
 
+/* LPTIM1 kernel clock is PCLK1 (STM32_RCC_DCKCFGR2_LPTIM1SRC) */
+
+#define STM32_LPTIM1_CLKIN STM32_PCLK1_FREQUENCY
+
 /* SDMMC dividers.  Note that slower clocking is required when DMA
  * is disabledin order to avoid RX overrun/TX underrun errors due
  * to delayed responses to service FIFOs in interrupt driven mode.
@@ -386,7 +390,10 @@
 #define GPIO_TIM3_CH3OUT (GPIO_TIM3_CH3OUT_2|GPIO_SPEED_50MHz)
 #define GPIO_TIM3_CH4OUT (GPIO_TIM3_CH4OUT_1|GPIO_SPEED_50MHz)
 
-#if defined(CONFIG_NUCLEO_F746ZG_CONSOLE_ARDUINO)
+/* USART3: ST-LINK virtual COM port (PD8 TX, PD9 RX), the default console */
+
+#define GPIO_USART3_RX (GPIO_USART3_RX_3|GPIO_SPEED_100MHz)
+#define GPIO_USART3_TX (GPIO_USART3_TX_3|GPIO_SPEED_100MHz)
 
 /* USART6:
  *
@@ -402,18 +409,8 @@
  *   -- ----- --------- -----
  */
 
-#  define GPIO_USART6_RX (GPIO_USART6_RX_2|GPIO_SPEED_100MHz)
-#  define GPIO_USART6_TX (GPIO_USART6_TX_2|GPIO_SPEED_100MHz)
-#endif
-
-/* USART3:
- * Use  USART3 and the USB virtual COM port
- */
-
-#if defined(CONFIG_NUCLEO_F746ZG_CONSOLE_VIRTUAL)
-#  define GPIO_USART3_RX (GPIO_USART3_RX_3|GPIO_SPEED_100MHz)
-#  define GPIO_USART3_TX (GPIO_USART3_TX_3|GPIO_SPEED_100MHz)
-#endif
+#define GPIO_USART6_RX (GPIO_USART6_RX_2|GPIO_SPEED_100MHz)
+#define GPIO_USART6_TX (GPIO_USART6_TX_2|GPIO_SPEED_100MHz)
 
 #if defined(CONFIG_NUCLEO_F746ZG_CONSOLE_MORPHO_UART4)
 
@@ -433,16 +430,6 @@
 
 #  define GPIO_UART4_RX (GPIO_UART4_RX_1|GPIO_SPEED_100MHz)
 #  define GPIO_UART4_TX (GPIO_UART4_TX_1|GPIO_SPEED_100MHz)
-
-/* USART3 seems to be forced selected by the Nucleo-F746ZG kconfig - bug */
-
-#  define GPIO_USART3_RX (GPIO_USART3_RX_1|GPIO_SPEED_100MHz)
-#  define GPIO_USART3_TX (GPIO_USART3_TX_1|GPIO_SPEED_100MHz)
-
-/* USART6 seems to be forced selected by the Nucleo-F722E kconfig - bug */
-
-#  define GPIO_USART6_RX (GPIO_USART6_RX_2|GPIO_SPEED_100MHz)
-#  define GPIO_USART6_TX (GPIO_USART6_TX_2|GPIO_SPEED_100MHz)
 
 #endif
 

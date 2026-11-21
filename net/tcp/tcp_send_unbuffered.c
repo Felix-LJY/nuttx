@@ -290,7 +290,13 @@ static uint32_t tcpsend_eventhandler(FAR struct net_driver_s *dev,
 
       ret = devif_send(dev, &pstate->snd_buffer[pstate->snd_acked],
                        sndlen, tcpip_hdrsize(conn));
-      if (ret <= 0)
+      if (ret == -ENOMEM)
+        {
+          /* Out of IOBs: retry on the next timeout */
+
+          return flags;
+        }
+      else if (ret <= 0)
         {
           pstate->snd_sent = ret;
           goto end_wait;
@@ -322,7 +328,7 @@ static uint32_t tcpsend_eventhandler(FAR struct net_driver_s *dev,
           tcp_lost_connection(conn, pstate->snd_cb, flags);
         }
 
-      pstate->snd_sent = -ENOTCONN;
+      pstate->snd_sent = TCP_NOTCONN_ERROR(conn);
       goto end_wait;
     }
 
@@ -377,7 +383,13 @@ static uint32_t tcpsend_eventhandler(FAR struct net_driver_s *dev,
 
           ret = devif_send(dev, &pstate->snd_buffer[pstate->snd_sent],
                            sndlen, tcpip_hdrsize(conn));
-          if (ret <= 0)
+          if (ret == -ENOMEM)
+            {
+              /* Out of IOBs: retry on the next poll */
+
+              return flags;
+            }
+          else if (ret <= 0)
             {
               pstate->snd_sent = ret;
               goto end_wait;
@@ -473,7 +485,8 @@ end_wait:
  *   ENOTSOCK
  *     The argument s is not a socket.
  *   EPIPE
- *     The local end has been shut down on a connection oriented socket.
+ *     The local end has been shut down on a connection oriented socket, or
+ *     the connection was closed.
  *     In this case the process will also receive a SIGPIPE unless
  *     MSG_NOSIGNAL is set.
  *
@@ -500,14 +513,15 @@ ssize_t psock_tcp_send(FAR struct socket *psock,
   conn = psock->s_conn;
 
   /* Check early if this is an un-connected socket, if so, then
-   * return -ENOTCONN. Note, we will have to check this again, as we can't
-   * guarantee the state won't change until we have the network locked.
+   * return -ENOTCONN (-EPIPE after the connection was closed).  Note, we
+   * will have to check this again, as we can't guarantee the state won't
+   * change until we have the network locked.
    */
 
   if (!_SS_ISCONNECTED(conn->sconn.s_flags))
     {
       nerr("ERROR: Not connected\n");
-      ret = -ENOTCONN;
+      ret = tcp_reset_report(conn, TCP_NOTCONN_ERROR(conn));
       goto errout;
     }
 
@@ -544,7 +558,6 @@ ssize_t psock_tcp_send(FAR struct socket *psock,
   if (ret < 0)
     {
       nerr("ERROR: Not reachable\n");
-      ret = -ENETUNREACH;
       goto errout;
     }
 #endif /* CONFIG_NET_ARP_SEND || CONFIG_NET_ICMPv6_NEIGHBOR */
@@ -565,8 +578,8 @@ ssize_t psock_tcp_send(FAR struct socket *psock,
   if (!_SS_ISCONNECTED(conn->sconn.s_flags))
     {
       nerr("ERROR: No longer connected\n");
+      ret = tcp_reset_report(conn, TCP_NOTCONN_ERROR(conn));
       conn_dev_unlock(&conn->sconn, conn->dev);
-      ret = -ENOTCONN;
       goto errout;
     }
 
@@ -654,7 +667,7 @@ ssize_t psock_tcp_send(FAR struct socket *psock,
 
   if (state.snd_sent < 0)
     {
-      ret = state.snd_sent;
+      ret = tcp_reset_report(conn, state.snd_sent);
       goto errout;
     }
 

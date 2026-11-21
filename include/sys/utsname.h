@@ -66,24 +66,20 @@
 
 struct utsname
 {
-  char sysname[SYS_NAMELEN];      /* Name of OS */
-  char nodename[HOST_NAME_MAX];   /* Name of this network node */
-  char release[SYS_NAMELEN];      /* Release level */
-  char version[VERSION_NAMELEN];  /* Version level */
-  char machine[SYS_NAMELEN];      /* Machine hardware */
+  char sysname[SYS_NAMELEN];        /* Name of OS */
+  char nodename[HOST_NAME_MAX + 1]; /* Name of this network node */
+  char release[SYS_NAMELEN];        /* Release level */
+  char version[VERSION_NAMELEN];    /* Version level */
+  char machine[SYS_NAMELEN];        /* Machine hardware */
 };
 
 /****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -92,7 +88,6 @@ extern "C"
 
 int uname(FAR struct utsname *name);
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

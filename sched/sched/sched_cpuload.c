@@ -49,7 +49,7 @@
 #  endif
 #  define CPULOAD_TICKSPERSEC CONFIG_SCHED_CPULOAD_TICKSPERSEC
 #else
-#  define CPULOAD_TICKSPERSEC CLOCKS_PER_SEC
+#  define CPULOAD_TICKSPERSEC CLK_TCK
 #endif
 
 /* When g_cpuload_total exceeds the following time constant, the load and
@@ -140,12 +140,24 @@ static void cpuload_callback(wdparm_t arg)
 
 void nxsched_process_taskload_ticks(FAR struct tcb_s *tcb, clock_t ticks)
 {
+#ifdef CONFIG_SCHED_CPULOAD_CRITMONITOR
+  static clock_t threshold = CLOCK_MAX;
+
+  if (threshold == CLOCK_MAX)
+    {
+      threshold = (clock_t)CPULOAD_TIMECONSTANT * perf_getfreq() /
+                  CPULOAD_TICKSPERSEC;
+    }
+#else
+  static clock_t threshold = CPULOAD_TIMECONSTANT;
+#endif
+
   tcb->ticks += ticks;
   g_cpuload_total += ticks;
 
-  if (g_cpuload_total > CPULOAD_TIMECONSTANT)
+  if (g_cpuload_total > threshold)
     {
-      uint32_t total = 0;
+      clock_t total = 0;
       int i;
 
       /* Divide the tick count for every task by two and recalculate the
@@ -254,9 +266,9 @@ int clock_cpuload(int pid, FAR struct cpuload_s *cpuload)
   if (g_pidhash[hash_index] && g_pidhash[hash_index]->pid == pid)
     {
 #ifdef CONFIG_SCHED_CPULOAD_CRITMONITOR
-      /* Update critmon in case of the target thread busyloop */
+      /* Update critmon in case of a running thread busyloop */
 
-      nxsched_update_critmon(g_pidhash[hash_index]);
+      nxsched_update_critmon();
 #endif
 
       cpuload->total  = g_cpuload_total;

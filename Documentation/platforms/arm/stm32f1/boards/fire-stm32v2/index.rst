@@ -1,8 +1,8 @@
-===========
-fire-stm2v2
-===========
+================
+Wildfire STM32v2
+================
 
-.. tags:: chip:stm32, chip:stm32f1, chip:stm32f103
+.. tags:: arch:arm, chip:stm32f1, part:stm32f103, vendor:st
 
 This page discusses issues unique to NuttX configurations for the M3
 Wildfire development board (STM32F103VET6).  See http://firestm32.taobao.com

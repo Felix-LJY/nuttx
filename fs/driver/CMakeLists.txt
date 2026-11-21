@@ -21,7 +21,7 @@
 # ##############################################################################
 
 set(SRCS fs_registerdriver.c fs_unregisterdriver.c fs_registerpipedriver.c
-         fs_unregisterpipedriver.c)
+         fs_unregisterpipedriver.c fs_registerpseudodir.c)
 
 # Don't built-in block driver support if there are no mountpoints
 
@@ -41,8 +41,11 @@ if(NOT CONFIG_DISABLE_MOUNTPOINT)
     fs_closemtddriver.c)
 
   if(CONFIG_MTD)
-    list(APPEND SRCS fs_registermtddriver.c fs_unregistermtddriver.c
-         fs_mtdproxy.c)
+    list(APPEND SRCS fs_registermtddriver.c fs_unregistermtddriver.c)
+
+    if(CONFIG_FS_MTD_PROXY)
+      list(APPEND SRCS fs_mtdproxy.c)
+    endif()
 
     if(CONFIG_MTD_PARTITION)
       list(APPEND SRCS fs_mtdpartition.c)
@@ -53,6 +56,11 @@ if(NOT CONFIG_DISABLE_MOUNTPOINT)
     if(NOT CONFIG_DISABLE_PSEUDOFS_OPERATIONS)
       list(APPEND SRCS fs_blockproxy.c)
     endif()
+  endif()
+
+  if(CONFIG_FS_MTD_PROXY OR (CONFIG_BCH AND NOT
+                                            CONFIG_DISABLE_PSEUDOFS_OPERATIONS))
+    list(APPEND SRCS fs_uniquedevname.c)
   endif()
 endif()
 

@@ -1,3 +1,24 @@
+############################################################################
+# drivers/usbdev/Kconfig
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.  The
+# ASF licenses this file to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance with the
+# License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
+############################################################################
 #
 # For a description of the syntax of this configuration file,
 # see the file kconfig-language.txt in the NuttX tools repository.
@@ -1083,6 +1104,8 @@ config USBMSC_BULKINREQLEN
 	int "Bulk IN request size"
 	default 512 if USBDEV_DUALSPEED
 	default 64  if !USBDEV_DUALSPEED
+	range 512 65536 if USBDEV_DUALSPEED
+	range 64 65536 if !USBDEV_DUALSPEED
 	---help---
 		The size of the buffer in each WRITE request.  This value should to be
 		at least as large as the endpoint maxpacket size .  Most DCDs can divide
@@ -1096,6 +1119,8 @@ config USBMSC_BULKOUTREQLEN
 	int "Bulk OUT request size"
 	default 512 if USBDEV_DUALSPEED
 	default 64  if !USBDEV_DUALSPEED
+	range 512 65536 if USBDEV_DUALSPEED
+	range 64 65536 if !USBDEV_DUALSPEED
 	---help---
 		The size of the buffer in each READ request.  This value should to be
 		at least as large as the endpoint maxpacket size.  Most DCDs will return
@@ -1832,6 +1857,16 @@ config USBDEV_FS_NEP0REQS
 	default 4
 	---help---
 		The number of ep0 requests that can be in flight
+
+config USBDEV_FS_BULK_REQLEN
+	int "Request buffer size per endpoint"
+	default 0
+	range 0 32768
+	---help---
+		Request buffer size of each endpoint, rounded up to a multiple
+		of the default request size.  Reads and writes use up to this
+		many bytes per request.  0 keeps the default size (the
+		configuration descriptor size on ep0).
 
 endif #USBDEV_FS
 

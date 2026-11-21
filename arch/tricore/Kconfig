@@ -1,3 +1,24 @@
+############################################################################
+# arch/tricore/Kconfig
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.  The
+# ASF licenses this file to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance with the
+# License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
+############################################################################
 #
 # For a description of the syntax of this configuration file,
 # see the file kconfig-language.txt in the NuttX tools repository.
@@ -16,7 +37,7 @@ config TRICORE_TOOLCHAIN_TASKING
 
 config TRICORE_TOOLCHAIN_GNU
 	bool "Generic GNU toolchain"
-	select ARCH_TOOLCHAIN_GNU
+	select ARCH_TOOLCHAIN_GCC
 	---help---
 		This option should work for any modern GNU toolchain (GCC 4.5 or newer)
 
@@ -26,6 +47,8 @@ config ARCH_TC1V6
 	bool
 	select ARCH_HAVE_DEBUG
 	select ARCH_HAVE_MPU
+	select ARCH_HAVE_HIPRI_INTERRUPT
+	select ARCH_HAVE_IRQPRIO
 	select ARCH_HAVE_IRQTRIGGER
 	select ARCH_HAVE_PERF_EVENTS
 	select ARCH_HAVE_POWEROFF
@@ -41,10 +64,13 @@ config ARCH_TC1V8
 	select ARCH_HAVE_DEBUG
 	select ARCH_ICACHE
 	select ARCH_HAVE_MPU
+	select ARCH_HAVE_HIPRI_INTERRUPT
+	select ARCH_HAVE_IRQPRIO
 	select ARCH_HAVE_IRQTRIGGER
 	select ARCH_HAVE_PERF_EVENTS
 	select ARCH_HAVE_PERF_EVENTS_USER_ACCESS
 	select ARCH_HAVE_POWEROFF
+	select ARCH_HAVE_PPRS
 	select ARCH_HAVE_SETJMP
 	select ARCH_HAVE_RESET
 	select ARCH_SETJMP_H
@@ -56,7 +82,7 @@ config ARCH_FAMILY
 	default "tc1v8"		if ARCH_TC1V8
 
 config ARCH_CHIP_TC3XX
-	bool
+	bool "infineon aurix tc3xx"
 	select ARCH_TC1V6
 	select ARCH_HAVE_ADDRENV
 	select ARCH_HAVE_I2CRESET
@@ -69,7 +95,7 @@ config ARCH_CHIP_TC3XX
 		Infineon aurix tc3xx (six cores)
 
 config ARCH_CHIP_TC4XX
-	bool
+	bool "infineon aurix tc4xx"
 	select ARCH_TC1V8
 	select ARCH_HAVE_ADDRENV
 	select ARCH_HAVE_FPU if !TRICORE_CSRM
@@ -83,18 +109,19 @@ config ARCH_CHIP_TC4XX
 	---help---
 		Infineon aurix tc4xx (six cores and one security core)
 
-config ARCH_CHIP_TC397
-	bool "AURIX CHIP TC397"
-	select ARCH_CHIP_TC3XX
-
-config ARCH_CHIP_TC4DA
-	bool "AURIX CHIP TC4DA"
-	select ARCH_CHIP_TC4XX
-
 config ARCH_CHIP
 	string
-	default "tc397"		if ARCH_CHIP_TC397
-	default "tc4da"		if ARCH_CHIP_TC4DA
+	default "tc3xx"		if ARCH_CHIP_TC3XX
+	default "tc4xx"		if ARCH_CHIP_TC4XX
+
+config ARCH_IRQ_DISABLE_PRIORITY
+	int "IRQ disable priority threshold"
+	default 250
+	range 1 255
+	depends on ARCH_HIPRI_INTERRUPT
+	---help---
+		Interrupts with SRPN > this value are treated as
+		high-priority and will not be masked.
 
 config ARCH_DCACHE_ADDR
 	hex "AURIX Dcache base address"
@@ -121,6 +148,12 @@ config ARCH_MPU_CODE_NREGIONS
 	---help---
 		The code regions count
 
+config ARCH_HAVE_PPRS
+	bool
+	---help---
+		The saving process for MPU PRS differs between TC1V6 and TC1V8.TC1V6
+		saves PRS in the PSW, while TC1V8 saves PRS in the PPRS register.
+
 config HAVE_SECURITY_CORE
 	bool
 	---help---
@@ -131,16 +164,30 @@ config CPU_COREID
 	default 0
 	range 0 6
 
+config TRICORE_TRAP_ALERT
+	bool "Describe traps in the alert output"
+	default !DEFAULT_SMALL
+	depends on DEBUG_ALERT
+	---help---
+		Print the trap name and reason before the trap panics.  The
+		panic message has the trap class and TIN in any case.
+
+config TRICORE_FCU_CSA_NUM
+	int "Context save areas for the FCU trap"
+	default 0
+	---help---
+		Context save areas reserved for a free context list underflow
+		(FCU) trap, so that the trap can still be reported when no free
+		context save area is left.  0 reserves none, then the core stops
+		in the trap unless the board passes its own pool to
+		tricore_fcu_register_pool.  At least 20 are needed.
+
 if ARCH_CHIP_TC3XX
 source "arch/tricore/src/tc3xx/Kconfig"
 endif
+
 if ARCH_CHIP_TC4XX
 source "arch/tricore/src/tc4xx/Kconfig"
 endif
-if ARCH_CHIP_TC397
-source "arch/tricore/src/tc397/Kconfig"
-endif
-if ARCH_CHIP_TC4DA
-source "arch/tricore/src/tc4da/Kconfig"
-endif
+
 endif # ARCH_TRICORE

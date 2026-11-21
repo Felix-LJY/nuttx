@@ -26,11 +26,15 @@
 
 #include <nuttx/config.h>
 
+#include <limits.h>
+#include <stdlib.h>
 #include <string.h>
 #include <nuttx/debug.h>
 #include <errno.h>
 
+#include <nuttx/addrenv.h>
 #include <nuttx/kmalloc.h>
+#include <nuttx/sched.h>
 #include <nuttx/binfmt/binfmt.h>
 
 #include "binfmt.h"
@@ -40,6 +44,35 @@
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
+
+/****************************************************************************
+ * Name: exec_argsize
+ *
+ * Description:
+ *   Return the size of a list of strings: the bytes of the strings, with
+ *   their NUL terminators, and of the pointers to them.
+ *
+ ****************************************************************************/
+
+static size_t exec_argsize(FAR char * const *list1, FAR char * const *list2)
+{
+  FAR char * const *lists[2];
+  size_t size = 0;
+  int i;
+  int j;
+
+  lists[0] = list1;
+  lists[1] = list2;
+  for (i = 0; i < 2; i++)
+    {
+      for (j = 0; lists[i] != NULL && lists[i][j] != NULL; j++)
+        {
+          size += strlen(lists[i][j]) + 1 + sizeof(FAR char *);
+        }
+    }
+
+  return size;
+}
 
 /****************************************************************************
  * Name: exec_internal
@@ -85,6 +118,18 @@ static int exec_internal(FAR const char *filename,
 #endif
   int pid;
   int ret;
+
+  if (!nxsched_capable(PR_CAP_SPAWN))
+    {
+      return -EPERM;
+    }
+
+  /* The arguments and the environment may have at most ARG_MAX bytes */
+
+  if (exec_argsize(argv, envp != NULL ? envp : environ) > ARG_MAX)
+    {
+      return -E2BIG;
+    }
 
 #ifndef CONFIG_BINFMT_LOADABLE
   bin = &sbin;
@@ -148,6 +193,11 @@ static int exec_internal(FAR const char *filename,
 
 errout_with_lock:
   unload_module(bin);
+#ifdef CONFIG_ARCH_ADDRENV
+  /* No task got the address environment of the program: release it */
+
+  addrenv_drop(bin->addrenv, false);
+#endif
 errout_with_bin:
 #ifdef CONFIG_BINFMT_LOADABLE
   kmm_free(bin);

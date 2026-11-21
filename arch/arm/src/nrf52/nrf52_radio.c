@@ -340,11 +340,12 @@ static int nrf52_radio_rssi_get(struct nrf52_radio_dev_s *dev,
 
   /* Start the RSSI measurement */
 
+  nrf52_radio_putreg(dev, NRF52_RADIO_EVENTS_RSSIEND_OFFSET, 0);
   nrf52_radio_putreg(dev, NRF52_RADIO_TASKS_RSSISTART_OFFSET, 1);
 
   /* Wait for the RSSI sample */
 
-  while (nrf52_radio_getreg(dev, NRF52_RADIO_EVENTS_RSSIEND_OFFSET));
+  while (!nrf52_radio_getreg(dev, NRF52_RADIO_EVENTS_RSSIEND_OFFSET));
 
   /* Get the RSSI sample */
 
@@ -832,7 +833,7 @@ static void nrf52_radio_dumpregs(struct nrf52_radio_dev_s *dev)
   printf("DAB6         0x%08" PRIx32 "\n",
          nrf52_radio_getreg(dev, NRF52_RADIO_DAB_OFFSET(6)));
   printf("DAB7         0x%08" PRIx32 "\n",
-         nrf52_radio_getreg(dev, NRF52_RADIO_DAB_OFFSET(6)));
+         nrf52_radio_getreg(dev, NRF52_RADIO_DAB_OFFSET(7)));
   printf("DAP0         0x%08" PRIx32 "\n",
          nrf52_radio_getreg(dev, NRF52_RADIO_DAP_OFFSET(0)));
   printf("DAP1         0x%08" PRIx32 "\n",
@@ -848,7 +849,7 @@ static void nrf52_radio_dumpregs(struct nrf52_radio_dev_s *dev)
   printf("DAP6         0x%08" PRIx32 "\n",
          nrf52_radio_getreg(dev, NRF52_RADIO_DAP_OFFSET(6)));
   printf("DAP7         0x%08" PRIx32 "\n",
-         nrf52_radio_getreg(dev, NRF52_RADIO_DAP_OFFSET(6)));
+         nrf52_radio_getreg(dev, NRF52_RADIO_DAP_OFFSET(7)));
   printf("DACNF        0x%08" PRIx32 "\n",
          nrf52_radio_getreg(dev, NRF52_RADIO_DACNF_OFFSET));
   printf("MHRMATCHCONF 0x%08" PRIx32 "\n",

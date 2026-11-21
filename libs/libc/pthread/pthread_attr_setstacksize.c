@@ -24,8 +24,14 @@
  * Included Files
  ****************************************************************************/
 
+#include <nuttx/config.h>
+
 #include <pthread.h>
 #include <errno.h>
+
+#include <nuttx/tls.h>
+
+#include "pthread.h"
 
 /****************************************************************************
  * Public Functions
@@ -53,10 +59,21 @@ int pthread_attr_setstacksize(FAR pthread_attr_t *attr, size_t stacksize)
 {
   int ret;
 
-  if (!attr || stacksize < PTHREAD_STACK_MIN)
+  /* When the attribute object specified by attr is invalid,
+   * then a call to pthread_attr_setstacksize(attr, stacksize)
+   * returns EINVAL.
+   */
+
+  if (!PTHREAD_ATTR_IS_VALID(attr) || stacksize < PTHREAD_STACK_MIN)
     {
       ret = EINVAL;
     }
+#ifdef CONFIG_TLS_ALIGNED
+  else if (stacksize > TLS_MAXSTACK)
+    {
+      ret = EINVAL;
+    }
+#endif
   else
     {
       attr->stacksize = stacksize;

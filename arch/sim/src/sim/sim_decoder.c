@@ -162,6 +162,7 @@ static int sim_decoder_close(void *priv)
 {
   sim_decoder_t *sim_decoder = priv;
 
+  work_cancel_sync(HPWORK, &sim_decoder->work);
   openh264_decoder_close(sim_decoder->decoder);
   kmm_free(sim_decoder);
 
@@ -404,7 +405,7 @@ static int sim_decoder_process(sim_decoder_t *sim_decoder,
 
   if (src_buf != NULL)
     {
-      src_data = (uint8_t *)src_buf->m.userptr;
+      src_data = (uint8_t *)src_buf->m.vaddr;
       src_size = src_buf->bytesused;
       src_pts  = src_buf->timestamp.tv_sec * 1000000 +
                  src_buf->timestamp.tv_usec;
@@ -419,11 +420,12 @@ static int sim_decoder_process(sim_decoder_t *sim_decoder,
 
   if (ret < 1)
     {
+      codec_capture_put_buf(sim_decoder->cookie, dst_buf);
       return ret;
     }
 
   ret = openh264_decoder_dequeue(sim_decoder->decoder,
-                                 (uint8_t *)dst_buf->m.userptr,
+                                 (uint8_t *)dst_buf->m.vaddr,
                                  &dst_pts,
                                  &dst_buf->bytesused);
   if (ret == 0 && src_buf == NULL)

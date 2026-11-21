@@ -24,6 +24,12 @@
 #define __INCLUDE_NUTTX_MATH_FFT_H
 
 /****************************************************************************
+ * Included Files
+ ****************************************************************************/
+
+#include <stdbool.h>
+
+/****************************************************************************
  * Public Types
  ****************************************************************************/
 
@@ -111,13 +117,9 @@ struct fft_lowerhalf_s
  * Public Function Prototypes
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -131,7 +133,6 @@ extern "C"
 int fft_register(FAR const char *path,
                  FAR struct fft_lowerhalf_s *lower);
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

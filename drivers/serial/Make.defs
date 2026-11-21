@@ -22,7 +22,9 @@
 
 # Include serial drivers
 
-CSRCS += serial.c serial_io.c
+ifeq ($(CONFIG_SERIAL),y)
+  CSRCS += serial.c serial_io.c serial_termios.c
+endif
 
 ifeq ($(CONFIG_SERIAL_GDBSTUB),y)
   CSRCS += serial_gdbstub.c
@@ -93,6 +95,12 @@ endif
 
 ifeq ($(CONFIG_16550_PCI_UART),y)
   CSRCS += uart_pci_16550.c
+endif
+
+# Netdev console
+
+ifeq ($(CONFIG_CONSOLE_NETDEV),y)
+  CSRCS += netdev_console.c
 endif
 
 # Include serial build support

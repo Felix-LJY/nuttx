@@ -47,6 +47,7 @@
 #include <nuttx/semaphore.h>
 #include <nuttx/fs/fs.h>
 #include <nuttx/serial/pty.h>
+#include <nuttx/serial/serial.h>
 #include <nuttx/signal.h>
 
 #include "pty.h"
@@ -101,9 +102,7 @@ struct pty_dev_s
 #if defined(CONFIG_TTY_SIGINT) || defined(CONFIG_TTY_SIGTSTP)
   pid_t pd_pid;                 /* Thread PID to receive signals (-1 if none) */
 #endif
-  tcflag_t pd_iflag;            /* Terminal input modes */
-  tcflag_t pd_lflag;            /* Terminal local modes */
-  tcflag_t pd_oflag;            /* Terminal output modes */
+  struct uart_termios_s pd_termios;
   struct pty_poll_s pd_poll[CONFIG_DEV_PTY_NPOLLWAITERS];
 };
 
@@ -119,6 +118,7 @@ struct pty_devpair_s
   bool pp_unlinked;             /* File has been unlinked */
   uint8_t pp_minor;             /* Minor device number */
   uint16_t pp_nopen;            /* Open file count */
+  struct winsize pp_winsize;    /* Window size, same for both ends */
   sem_t pp_slavesem;            /* Slave lock semaphore */
   mutex_t pp_lock;              /* Mutual exclusion */
 };
@@ -136,7 +136,7 @@ static ssize_t pty_read(FAR struct file *filep, FAR char *buffer,
 static ssize_t pty_write(FAR struct file *filep, FAR const char *buffer,
                          size_t buflen);
 static int     pty_ioctl(FAR struct file *filep, int cmd, unsigned long arg);
-static int     pty_poll(FAR struct file *filep, FAR struct pollfd *fds,
+static int     pty_poll(FAR struct file *filep, FAR struct pollfd_s *fds,
                         bool setup);
 #ifndef CONFIG_DISABLE_PSEUDOFS_OPERATIONS
 static int     pty_unlink(FAR struct inode *inode);
@@ -178,13 +178,14 @@ static void pty_destroy(FAR struct pty_devpair_s *devpair)
 
   if (devpair->pp_susv1)
     {
-      /* Free this minor number so that it can be reused */
-
-      ptmx_minor_free(devpair->pp_minor);
-
       /* Un-register the slave device */
 
       snprintf(devname, sizeof(devname), "/dev/pts/%u", devpair->pp_minor);
+      unregister_driver(devname);
+
+      /* Free this minor number so that it can be reused */
+
+      ptmx_minor_free(devpair->pp_minor);
     }
   else
     {
@@ -198,9 +199,8 @@ static void pty_destroy(FAR struct pty_devpair_s *devpair)
       /* Un-register the slave device */
 
       snprintf(devname, sizeof(devname), "/dev/ttyp%u", devpair->pp_minor);
+      unregister_driver(devname);
     }
-
-  unregister_driver(devname);
 
   /* And free the device structure */
 
@@ -356,10 +356,15 @@ static int pty_close(FAR struct file *filep)
       return ret;
     }
 
-  /* Check if the decremented inode reference count would go to zero */
+  /* Check if the decremented inode reference count would go to zero.  A
+   * device still in the VFS namespace holds one reference for its
+   * registration, so its last open reference is the second one.  The master
+   * of a SUSv1 pair is the exception: ptmx_open() unlinks it as soon as it
+   * has opened it, leaving the open itself as the only reference.
+   */
 
-  if ((!dev->pd_master && atomic_read(&inode->i_crefs) == 2) ||
-       (dev->pd_master && atomic_read(&inode->i_crefs) == 1))
+  if (atomic_read(&inode->i_crefs) ==
+      ((dev->pd_master && devpair->pp_susv1) ? 1 : 2))
     {
       /* Did the (single) master just close its reference? */
 
@@ -431,44 +436,16 @@ static ssize_t pty_read(FAR struct file *filep, FAR char *buffer, size_t len)
    *   IXON/OXOFF - No xon/xoff flow control.
    */
 
-  if (dev->pd_iflag & (INLCR | IGNCR | ICRNL))
+  if (dev->pd_termios.iflag & (INLCR | IGNCR | ICRNL))
     {
       while ((ntotal = file_read(&dev->pd_src, buffer, len)) > 0)
         {
-          for (i = j = 0; i < ntotal; i++)
+          /* Read again if every byte was an ignored CR */
+
+          ntotal = uart_termios_in_copy(&dev->pd_termios, buffer, buffer,
+                                        ntotal);
+          if (ntotal != 0)
             {
-              /* Perform input processing */
-
-              ch = buffer[i];
-
-              /* \n -> \r or \r -> \n translation? */
-
-              if (ch == '\n' && (dev->pd_iflag & INLCR) != 0)
-                {
-                  ch = '\r';
-                }
-              else if (ch == '\r' && (dev->pd_iflag & ICRNL) != 0)
-                {
-                  ch = '\n';
-                }
-
-              /* Discarding \r ?  Print character if (1) character is not \r
-               * or if (2) we were not asked to ignore \r.
-               */
-
-              if (ch != '\r' || (dev->pd_iflag & IGNCR) == 0)
-                {
-                  buffer[j++] = ch;
-                }
-            }
-
-          /* Is the buffer not empty after process? */
-
-          if (j != 0)
-            {
-              /* Yes, we are done. */
-
-              ntotal = j;
               break;
             }
         }
@@ -489,7 +466,7 @@ static ssize_t pty_read(FAR struct file *filep, FAR char *buffer, size_t len)
       ntotal = file_read(&dev->pd_src, buffer, len);
     }
 
-  if ((dev->pd_lflag & ECHO) && (ntotal > 0))
+  if ((dev->pd_termios.lflag & ECHO) && (ntotal > 0))
     {
       size_t n = 0;
 
@@ -570,7 +547,7 @@ static ssize_t pty_read(FAR struct file *filep, FAR char *buffer, size_t len)
 
           /* Record the character can be echo */
 
-          if (!iscntrl(ch & 0xff) && n++ == 0)
+          if (!iscntrl((unsigned char)ch) && n++ == 0)
             {
               j = i;
             }
@@ -594,13 +571,12 @@ static ssize_t pty_write(FAR struct file *filep,
 {
   FAR struct inode *inode;
   FAR struct pty_dev_s *dev;
-  ssize_t ntotal;
+  ssize_t ntotal = 0;
   ssize_t nwritten;
 #if defined(CONFIG_TTY_SIGINT) || defined(CONFIG_TTY_SIGTSTP)
+  FAR const struct uart_termios_s *tc;
   pid_t pid;
 #endif
-  size_t i;
-  char ch;
 
   inode = filep->f_inode;
   dev   = inode->i_private;
@@ -612,89 +588,134 @@ static ssize_t pty_write(FAR struct file *filep,
     {
       pid = dev->pd_devpair->pp_slave.pd_pid;
     }
+
+  /* The terminal settings of the pair are kept in the slave (TCSETS sets
+   * them there also through the master), so ISIG and the INTR and SUSP
+   * characters are taken from the slave for both ends.
+   */
+
+  tc = &dev->pd_devpair->pp_slave.pd_termios;
 #endif
 
   /* Do output post-processing */
 
-  if ((dev->pd_oflag & OPOST) != 0)
+  if ((dev->pd_termios.oflag & OPOST) != 0)
     {
-      /* We will transfer one byte at a time, making the appropriae
-       * translations.  Specifically not handled:
+      /* Output post-processing is enabled.  Locate the next byte that needs
+       * translation (CR under OCRNL, NL under ONLCR) or that is a tty
+       * control character (SIGINT/SIGTSTP), write the run of ordinary bytes
+       * before it to the sink in a single call, then handle that byte.
        *
+       * Specifically not handled:
        *   OXTABS - primarily a full-screen terminal optimisation
        *   ONOEOT - Unix interoperability hack
        *   OLCUC  - Not specified by POSIX
        *   ONOCR  - low-speed interactive optimisation
        */
 
-      ntotal = 0;
-      for (i = 0; i < len; i++)
+      FAR const char *special;
+#if defined(CONFIG_TTY_SIGINT) || defined(CONFIG_TTY_SIGTSTP)
+      FAR const char *sig;
+      int signo = 0;
+#endif
+      size_t nbulk;
+      size_t nout;
+      size_t i;
+      char out[2];
+
+      while (ntotal < len)
         {
-          ch = *buffer++;
+          special = NULL;
 
-          /* Mapping CR to NL? */
-
-          if (ch == '\r' && (dev->pd_oflag & OCRNL) != 0)
+          if ((dev->pd_termios.oflag & OCRNL) != 0)
             {
-              ch = '\n';
+              special = memchr(&buffer[ntotal], '\r', len - ntotal);
             }
 
-          /* Are we interested in newline processing? */
-
-          if ((ch == '\n') && (dev->pd_oflag & (ONLCR | ONLRET)) != 0)
+          if ((dev->pd_termios.oflag & ONLCR) != 0)
             {
-              char cr = '\r';
+              FAR const char *nl;
 
-              /* Transfer the carriage return.  This will block if the
-               * sink pipe is full.
-               *
-               * REVISIT: Should not block if the oflags include O_NONBLOCK.
-               * How would we ripple the O_NONBLOCK characteristic to the
-               * contained sink pipe?  file_fcntl()?  Or FIONSPACE?  See the
-               * TODO comment at the top of this file.
-               *
-               * NOTE: The newline is not included in total number of bytes
-               * written.  Otherwise, we would return more than the
-               * requested number of bytes.
-               */
+              nl = memchr(&buffer[ntotal], '\n', len - ntotal);
+              if (nl != NULL && (special == NULL || nl < special))
+                {
+                  special = nl;
+                }
+            }
 
-              nwritten = file_write(&dev->pd_sink, &cr, 1);
+#if defined(CONFIG_TTY_SIGINT) || defined(CONFIG_TTY_SIGTSTP)
+          sig = NULL;
+          if (pid > 0)
+            {
+              sig = uart_termios_isig_find(tc, &buffer[ntotal],
+                                           len - ntotal, &signo);
+              if (sig != NULL && (special == NULL || sig < special))
+                {
+                  special = sig;
+                }
+              else
+                {
+                  sig = NULL;
+                }
+            }
+#endif
+
+          /* Write the run of ordinary bytes before the special byte (or the
+           * rest of the buffer when there is none).  The sink pipe write
+           * blocks until all bytes have been written.
+           */
+
+          nbulk = special != NULL ? special - &buffer[ntotal] : len - ntotal;
+          if (nbulk > 0)
+            {
+              nwritten = file_write(&dev->pd_sink, &buffer[ntotal], nbulk);
               if (nwritten < 0)
                 {
-                  ntotal = nwritten;
+                  ntotal = ntotal ? ntotal : nwritten;
+                  break;
+                }
+
+              ntotal += nwritten;
+              if (nwritten < nbulk)
+                {
+                  continue;
+                }
+            }
+
+          if (special == NULL)
+            {
+              break;
+            }
+
+#if defined(CONFIG_TTY_SIGINT) || defined(CONFIG_TTY_SIGTSTP)
+          if (sig != NULL)
+            {
+              nxsig_kill_foreground(pid, signo);
+              return ntotal + 1;
+            }
+#endif
+
+          /* The inserted CR is not counted, or we would return more than
+           * len.  Write a byte at a time: a non-blocking sink pipe would
+           * accept a CR NL pair only in part and the NL would be lost.
+           *
+           * REVISIT: Should not block if the oflags include O_NONBLOCK.
+           */
+
+          nout = uart_termios_out_char(&dev->pd_termios, buffer[ntotal],
+                                       out, sizeof(out));
+          for (i = 0; i < nout; i++)
+            {
+              nwritten = file_write(&dev->pd_sink, &out[i], 1);
+              if (nwritten < 0)
+                {
                   break;
                 }
             }
 
-#ifdef CONFIG_TTY_SIGINT
-          if (pid > 0 && ch == CONFIG_TTY_SIGINT_CHAR)
-            {
-              nxsig_kill(pid, SIGINT);
-              return 1;
-            }
-#endif
-
-#ifdef CONFIG_TTY_SIGTSTP
-          if (pid > 0 && ch == CONFIG_TTY_SIGTSTP_CHAR)
-            {
-              nxsig_kill(pid, SIGTSTP);
-              return 1;
-            }
-#endif
-
-          /* Transfer the (possibly translated) character..  This will block
-           * if the sink pipe is full
-           *
-           * REVISIT: Should not block if the oflags include O_NONBLOCK.
-           * How would we ripple the O_NONBLOCK characteristic to the
-           * contained sink pipe?  file_fcntl()?  Or FIONSPACe?  See the
-           * TODO comment at the top of this file.
-           */
-
-          nwritten = file_write(&dev->pd_sink, &ch, 1);
           if (nwritten < 0)
             {
-              ntotal = nwritten;
+              ntotal = ntotal ? ntotal : nwritten;
               break;
             }
 
@@ -717,6 +738,13 @@ static ssize_t pty_write(FAR struct file *filep,
       ntotal = file_write(&dev->pd_sink, buffer, len);
     }
 
+  /* The master is closed: POSIX wants EIO after a hang-up, not EPIPE */
+
+  if (ntotal == -EPIPE && !dev->pd_master)
+    {
+      ntotal = -EIO;
+    }
+
   return ntotal;
 }
 
@@ -733,6 +761,9 @@ static int pty_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
   FAR struct inode *inode;
   FAR struct pty_dev_s *dev;
   FAR struct pty_devpair_s *devpair;
+#if defined(CONFIG_TTY_SIGINT) || defined(CONFIG_TTY_SIGTSTP)
+  pid_t winchpid = INVALID_PROCESS_ID;
+#endif
   int ret;
 
   inode   = filep->f_inode;
@@ -757,6 +788,7 @@ static int pty_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
       case TIOCGPTN:    /* Get Pty Number (of pty-mux device): FAR int* */
         {
           FAR int *ptyno = (FAR int *)((uintptr_t)arg);
+
           if (ptyno == NULL)
             {
               ret = -EINVAL;
@@ -800,6 +832,7 @@ static int pty_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
       case TIOCGPTLCK:  /* Get Pty lock state: FAR int* */
         {
           FAR int *ptr = (FAR int *)((uintptr_t)arg);
+
           if (ptr == NULL)
             {
               ret = -EINVAL;
@@ -822,11 +855,11 @@ static int pty_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
               break;
             }
 
-          /* And update with flags from this layer */
+          /* The settings of the terminal are the ones of the slave, also
+           * through the master, as on other systems.
+           */
 
-          termiosp->c_iflag = dev->pd_iflag;
-          termiosp->c_oflag = dev->pd_oflag;
-          termiosp->c_lflag = dev->pd_lflag;
+          uart_termios_getattr(&devpair->pp_slave.pd_termios, termiosp);
           ret = OK;
         }
         break;
@@ -841,11 +874,11 @@ static int pty_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
               break;
             }
 
-          /* Update the flags we keep at this layer */
+          /* Set the terminal, the slave, also through the master.  The
+           * master keeps its own flags: it never echoes what it reads.
+           */
 
-          dev->pd_iflag = termiosp->c_iflag;
-          dev->pd_oflag = termiosp->c_oflag;
-          dev->pd_lflag = termiosp->c_lflag;
+          uart_termios_setattr(&devpair->pp_slave.pd_termios, termiosp);
           ret = OK;
         }
         break;
@@ -871,6 +904,24 @@ static int pty_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
         }
         break;
 
+      /* Resize (PIPEIOC_SETSIZE) or query the size of (PIPEIOC_GETSIZE) the
+       * sink pipe, following the same rule as FIONWRITE and FIONSPACE above.
+       * A file writing more than the pipe holds is split into that many
+       * partial writes, which a protocol carried over the PTY may not
+       * tolerate, so let it size the pipe it writes into rather than making
+       * every PTY in the system pay for the largest consumer through
+       * CONFIG_PSEUDOTERM_RXBUFSIZE and CONFIG_PSEUDOTERM_TXBUFSIZE.  Both
+       * ends of a pair have to ask for themselves, which is what keeps the
+       * two directions independent.
+       */
+
+      case PIPEIOC_SETSIZE:
+      case PIPEIOC_GETSIZE:
+        {
+          ret = file_ioctl(&dev->pd_sink, cmd, arg);
+        }
+        break;
+
       case FIONBIO:
         {
           ret = file_ioctl(&dev->pd_src, cmd, arg);
@@ -881,11 +932,50 @@ static int pty_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
         }
         break;
 
+      case TIOCGWINSZ:
+        {
+          FAR struct winsize *ws = (FAR struct winsize *)arg;
+
+          if (ws == NULL)
+            {
+              ret = -EINVAL;
+              break;
+            }
+
+          *ws = devpair->pp_winsize;
+          ret = OK;
+        }
+        break;
+
+      /* A new size from either end sends SIGWINCH to the foreground
+       * process of the slave, after the lock is released.
+       */
+
+      case TIOCSWINSZ:
+        {
+          FAR const struct winsize *ws = (FAR const struct winsize *)arg;
+
+          if (ws == NULL)
+            {
+              ret = -EINVAL;
+              break;
+            }
+
+          ret = OK;
+          if (memcmp(&devpair->pp_winsize, ws, sizeof(*ws)) != 0)
+            {
+              devpair->pp_winsize = *ws;
+#if defined(CONFIG_TTY_SIGINT) || defined(CONFIG_TTY_SIGTSTP)
+              winchpid = devpair->pp_slave.pd_pid;
+#endif
+            }
+        }
+        break;
+
 #if defined(CONFIG_TTY_SIGINT) || defined(CONFIG_TTY_SIGTSTP)
       /* Make the controlling terminal of the calling process */
 
       case TIOCSCTTY:
-      case TIOCSPGRP:
         {
           /* Save the PID of the foreground process group that is to receive
            * tty-generated signals.  A zero 'arg' selects the calling task
@@ -900,6 +990,26 @@ static int pty_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
           else
             {
               dev->pd_pid = arg > 0 ? (pid_t)arg : nxsched_getpid();
+              ret = 0;
+            }
+        }
+        break;
+
+      /* Set the foreground process group: as tcsetpgrp() passes it, 'arg'
+       * points to the process group ID.
+       */
+
+      case TIOCSPGRP:
+        {
+          FAR const pid_t *pgrp = (FAR const pid_t *)((uintptr_t)arg);
+
+          if (pgrp == NULL || *pgrp <= 0)
+            {
+              ret = -EINVAL;
+            }
+          else
+            {
+              dev->pd_pid = *pgrp;
               ret = 0;
             }
         }
@@ -933,10 +1043,10 @@ static int pty_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
       /* Any unrecognized IOCTL commands will be passed to the contained
        * pipe driver.
        *
-       * REVISIT:  We know for a fact that the pipe driver only supports
-       * FIONREAD, FIONWRITE, FIONSPACE and PIPEIOC_POLICY.  The first two
-       * are handled above and PIPEIOC_POLICY should not be managed by
-       * applications -- it can break the PTY!
+       * REVISIT:  The pipe driver supports FIONREAD, FIONWRITE, FIONSPACE,
+       * PIPEIOC_PEEK, PIPEIOC_SETSIZE, PIPEIOC_GETSIZE and PIPEIOC_POLICY.
+       * All but the last are handled above; PIPEIOC_POLICY should not be
+       * managed by applications -- it can break the PTY!
        */
 
       default:
@@ -955,6 +1065,18 @@ static int pty_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
     }
 
   nxmutex_unlock(&devpair->pp_lock);
+
+#if defined(CONFIG_TTY_SIGINT) || defined(CONFIG_TTY_SIGTSTP)
+  /* In a flat build, the signal handler of the caller runs in nxsig_kill()
+   * and can use this PTY.
+   */
+
+  if (winchpid > 0)
+    {
+      nxsig_kill_foreground(winchpid, SIGWINCH);
+    }
+#endif
+
   return ret;
 }
 
@@ -962,7 +1084,7 @@ static int pty_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
  * Name: pty_poll
  ****************************************************************************/
 
-static int pty_poll(FAR struct file *filep, FAR struct pollfd *fds,
+static int pty_poll(FAR struct file *filep, FAR struct pollfd_s *fds,
                     bool setup)
 {
   FAR struct inode *inode;
@@ -1002,6 +1124,11 @@ static int pty_poll(FAR struct file *filep, FAR struct pollfd *fds,
   else
     {
       pollp = (FAR struct pty_poll_s *)fds->priv;
+      if (pollp == NULL)
+        {
+          ret = -EINVAL;
+          goto errout;
+        }
     }
 
   /* POLLIN: Data may be read without blocking. */
@@ -1145,10 +1272,10 @@ int pty_register2(int minor, bool susv1)
   devpair->pp_locked            = true;
   devpair->pp_master.pd_devpair = devpair;
   devpair->pp_master.pd_master  = true;
-  devpair->pp_master.pd_oflag   = OPOST | OCRNL;
   devpair->pp_slave.pd_devpair  = devpair;
-  devpair->pp_slave.pd_oflag    = OPOST | ONLCR;
-  devpair->pp_slave.pd_lflag    = ECHO | ICANON;
+  uart_termios_init(&devpair->pp_master.pd_termios, 0, OPOST | OCRNL, 0);
+  uart_termios_init(&devpair->pp_slave.pd_termios, 0, OPOST | ONLCR,
+                    ECHO | ICANON | ISIG);
 #if defined(CONFIG_TTY_SIGINT) || defined(CONFIG_TTY_SIGTSTP)
   /* Initialize  of the task that will receive SIGINT signals. */
 
@@ -1198,6 +1325,10 @@ int pty_register2(int minor, bool susv1)
   return OK;
 
 errout_with_master:
+
+  /* Hold a reference so that pty_unlink() does not destroy devpair */
+
+  devpair->pp_nopen++;
   snprintf(devname, sizeof(devname), "/dev/pty%d", minor);
   unregister_driver(devname);
 

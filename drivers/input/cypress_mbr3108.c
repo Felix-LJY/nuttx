@@ -36,6 +36,7 @@
 
 #include <nuttx/arch.h>
 #include <nuttx/kmalloc.h>
+#include <nuttx/poll.h>
 #include <nuttx/signal.h>
 #include <nuttx/i2c/i2c_master.h>
 
@@ -198,7 +199,7 @@ struct mbr3108_dev_s
   struct mbr3108_debug_conf_s debug_conf;
   bool int_pending;
 
-  FAR struct pollfd *fds[CONFIG_INPUT_CYPRESS_MBR3108_NPOLLWAITERS];
+  FAR struct pollfd_s *fds[CONFIG_INPUT_CYPRESS_MBR3108_NPOLLWAITERS];
 };
 
 /****************************************************************************
@@ -211,7 +212,7 @@ static ssize_t mbr3108_read(FAR struct file *filep, FAR char *buffer,
                             size_t buflen);
 static ssize_t mbr3108_write(FAR struct file *filep, FAR const char *buffer,
                              size_t buflen);
-static int mbr3108_poll(FAR struct file *filep, FAR struct pollfd *fds,
+static int mbr3108_poll(FAR struct file *filep, FAR struct pollfd_s *fds,
                         bool setup);
 
 /****************************************************************************
@@ -804,51 +805,51 @@ static ssize_t mbr3108_write(FAR struct file *filep, FAR const char *buffer,
 
   switch (type)
     {
-    case CYPRESS_MBR3108_CMD_SENSOR_CONF:
-      {
-        FAR const struct mbr3108_cmd_sensor_conf_s *conf =
-            (FAR const struct mbr3108_cmd_sensor_conf_s *)buffer;
+      case CYPRESS_MBR3108_CMD_SENSOR_CONF:
+        {
+          FAR const struct mbr3108_cmd_sensor_conf_s *conf =
+              (FAR const struct mbr3108_cmd_sensor_conf_s *)buffer;
 
-        if (buflen != sizeof(*conf))
-          {
-            ret = -EINVAL;
-            goto out;
-          }
+          if (buflen != sizeof(*conf))
+            {
+              ret = -EINVAL;
+              goto out;
+            }
 
-        ret = mbr3108_device_configuration(priv, &conf->conf);
+          ret = mbr3108_device_configuration(priv, &conf->conf);
+          break;
+        }
+
+      case CYPRESS_MBR3108_CMD_DEBUG_CONF:
+        {
+          FAR const struct mbr3108_cmd_debug_conf_s *conf =
+              (FAR const struct mbr3108_cmd_debug_conf_s *)buffer;
+
+          if (buflen != sizeof(*conf))
+            {
+              ret = -EINVAL;
+              goto out;
+            }
+
+          ret = mbr3108_debug_setup(priv, &conf->conf);
+          break;
+        }
+
+      case CYPRESS_MBR3108_CMD_CLEAR_LATCHED:
+        {
+          if (buflen != sizeof(type))
+            {
+              ret = -EINVAL;
+              goto out;
+            }
+
+          ret = mbr3108_clear_latched(priv);
+          break;
+        }
+
+      default:
+        ret = -EINVAL;
         break;
-      }
-
-    case CYPRESS_MBR3108_CMD_DEBUG_CONF:
-      {
-        FAR const struct mbr3108_cmd_debug_conf_s *conf =
-            (FAR const struct mbr3108_cmd_debug_conf_s *)buffer;
-
-        if (buflen != sizeof(*conf))
-          {
-            ret = -EINVAL;
-            goto out;
-          }
-
-        ret = mbr3108_debug_setup(priv, &conf->conf);
-        break;
-      }
-
-    case CYPRESS_MBR3108_CMD_CLEAR_LATCHED:
-      {
-        if (buflen != sizeof(type))
-          {
-            ret = -EINVAL;
-            goto out;
-          }
-
-        ret = mbr3108_clear_latched(priv);
-        break;
-      }
-
-    default:
-      ret = -EINVAL;
-      break;
     }
 
 out:
@@ -977,7 +978,7 @@ static int mbr3108_close(FAR struct file *filep)
   return 0;
 }
 
-static int mbr3108_poll(FAR struct file *filep, FAR struct pollfd *fds,
+static int mbr3108_poll(FAR struct file *filep, FAR struct pollfd_s *fds,
                         bool setup)
 {
   FAR struct mbr3108_dev_s *priv;
@@ -1044,7 +1045,8 @@ static int mbr3108_poll(FAR struct file *filep, FAR struct pollfd *fds,
     {
       /* This is a request to tear down the poll. */
 
-      FAR struct pollfd **slot = (FAR struct pollfd **)fds->priv;
+      FAR struct pollfd_s **slot = (FAR struct pollfd_s **)fds->priv;
+
       DEBUGASSERT(slot != NULL);
 
       /* Remove all memory of the poll setup */

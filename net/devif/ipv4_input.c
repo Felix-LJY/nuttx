@@ -105,7 +105,7 @@
 #include "icmp/icmp.h"
 #include "igmp/igmp.h"
 
-#include "ipforward/ipforward.h"
+#include "netforward/netforward.h"
 #include "devif/devif.h"
 #include "nat/nat.h"
 #include "ipfilter/ipfilter.h"
@@ -149,6 +149,7 @@ static int ipv4_check_opt(FAR struct ipv4_hdr_s *ipv4)
       else if (optlen > 1)
         {
           int len = opt[1];
+
           if (len > optlen)
             {
               return -EINVAL;
@@ -230,6 +231,17 @@ static int ipv4_in(FAR struct net_driver_s *dev)
   uint16_t totlen;
   bool isfrag;
   int ret = OK;
+
+  /* Storing reception timestamp provided by realtime
+   * if timestamp no provided by hardware.
+   */
+
+#ifdef CONFIG_NET_TIMESTAMP
+  if ((dev->d_features & NETDEV_RX_STAMP) == 0)
+    {
+      clock_gettime(CLOCK_REALTIME, &dev->d_iob->io_time);
+    }
+#endif /* CONFIG_NET_TIMESTAMP */
 
   /* Handle ARP on input then give the IPv4 packet to the network layer */
 
@@ -395,9 +407,10 @@ static int ipv4_in(FAR struct net_driver_s *dev)
   else
     {
 #ifdef CONFIG_NET_IPFORWARD
-      /* Try to forward the unicast packet. */
+      /* Try to forward the packet if device has a configured IP */
 
-      if (ipv4_forward(dev, ipv4) >= 0)
+      if (!net_ipv4addr_cmp(dev->d_ipaddr, INADDR_ANY) &&
+          ipv4_forward(dev, ipv4) >= 0)
         {
           /* The packet was forwarded.  Return success; d_len will
            * be set appropriately by the forwarding logic:  Cleared
@@ -483,7 +496,7 @@ static int ipv4_in(FAR struct net_driver_s *dev)
 #endif
 
 #ifdef NET_ICMP_HAVE_STACK
-  /* Check for ICMP input */
+      /* Check for ICMP input */
 
       case IP_PROTO_ICMP:  /* ICMP input */
         icmp_input(dev);
@@ -491,7 +504,7 @@ static int ipv4_in(FAR struct net_driver_s *dev)
 #endif
 
 #ifdef CONFIG_NET_IGMP
-  /* Check for IGMP input */
+      /* Check for IGMP input */
 
       case IP_PROTO_IGMP:  /* IGMP input */
         igmp_input(dev);
@@ -572,12 +585,6 @@ int ipv4_input(FAR struct net_driver_s *dev)
   int ret;
 
   netdev_lock(dev);
-
-  /* Store reception timestamp if enabled and not provided by hardware. */
-
-#if defined(CONFIG_NET_TIMESTAMP) && !defined(CONFIG_ARCH_HAVE_NETDEV_TIMESTAMP)
-  clock_gettime(CLOCK_REALTIME, &dev->d_rxtime);
-#endif
 
   if (dev->d_iob != NULL)
     {

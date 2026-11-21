@@ -30,6 +30,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/mount.h>
+#include <limits.h>
 #include <stdint.h>
 #include <fcntl.h>
 #include <string.h>
@@ -194,6 +195,8 @@ static ssize_t filemtd_write(FAR struct file_dev_s *priv, size_t offset,
   uint8_t            srcvalue;
   uint8_t            newvalue;
   size_t             seekpos;
+  size_t             total = len;
+  ssize_t            ret;
 
   /* Set the starting location in the file */
 
@@ -205,8 +208,18 @@ static ssize_t filemtd_write(FAR struct file_dev_s *priv, size_t offset,
         {
           /* Read more data from the file */
 
-          file_seek(&priv->mtdfile, seekpos, SEEK_SET);
-          buflen = file_read(&priv->mtdfile, buf, MIN(len, sizeof(buf)));
+          buflen = file_pread(&priv->mtdfile, buf, MIN(len, sizeof(buf)),
+                              seekpos);
+
+          /* A negative errno or EOF must not reach the guards below,
+           * which would let pout run past buf[] and corrupt the stack.
+           */
+
+          if (buflen <= 0)
+            {
+              return buflen < 0 ? buflen : -EIO;
+            }
+
           pout   = (FAR uint8_t *)buf;
           remain = buflen;
         }
@@ -249,8 +262,12 @@ static ssize_t filemtd_write(FAR struct file_dev_s *priv, size_t offset,
 
       if (remain == 0)
         {
-          file_seek(&priv->mtdfile, seekpos, SEEK_SET);
-          file_write(&priv->mtdfile, buf, buflen);
+          ret = file_pwrite(&priv->mtdfile, buf, buflen, seekpos);
+          if (ret != buflen)
+            {
+              return ret < 0 ? ret : -EIO;
+            }
+
           seekpos += buflen;
           buflen = 0;
         }
@@ -260,11 +277,14 @@ static ssize_t filemtd_write(FAR struct file_dev_s *priv, size_t offset,
 
   if (buflen != 0)
     {
-      file_seek(&priv->mtdfile, seekpos, SEEK_SET);
-      file_write(&priv->mtdfile, buf, buflen);
+      ret = file_pwrite(&priv->mtdfile, buf, buflen, seekpos);
+      if (ret != buflen)
+        {
+          return ret < 0 ? ret : -EIO;
+        }
     }
 
-  return len;
+  return total;
 }
 
 /****************************************************************************
@@ -275,11 +295,18 @@ static ssize_t filemtd_read(FAR struct file_dev_s *priv,
                             FAR unsigned char *buffer, size_t offsetbytes,
                             unsigned int nbytes)
 {
-  /* Set the starting location in the file */
+  ssize_t ret;
 
-  file_seek(&priv->mtdfile, priv->offset + offsetbytes, SEEK_SET);
+  ret = file_pread(&priv->mtdfile, buffer, nbytes,
+                   priv->offset + offsetbytes);
+  if (ret >= 0 && ret != nbytes)
+    {
+      /* The file is sized to the whole device, a short read is an error */
 
-  return file_read(&priv->mtdfile, buffer, nbytes);
+      ret = -EIO;
+    }
+
+  return ret;
 }
 
 /****************************************************************************
@@ -317,12 +344,21 @@ static int filemtd_erase(FAR struct mtd_dev_s *dev, off_t startblock,
 
   /* Then erase the data in the file */
 
-  file_seek(&priv->mtdfile, priv->offset + offset, SEEK_SET);
   memset(buffer, CONFIG_FILEMTD_ERASESTATE, sizeof(buffer));
+  offset += priv->offset;
   while (nbytes > 0)
     {
-      file_write(&priv->mtdfile, buffer, MIN(nbytes, sizeof(buffer)));
-      nbytes -= MIN(nbytes, sizeof(buffer));
+      size_t len = MIN(nbytes, sizeof(buffer));
+      ssize_t ret;
+
+      ret = file_pwrite(&priv->mtdfile, buffer, len, offset);
+      if (ret != len)
+        {
+          return ret < 0 ? ret : -EIO;
+        }
+
+      offset += len;
+      nbytes -= len;
     }
 
   return nblocks;
@@ -339,6 +375,7 @@ static ssize_t filemtd_bread(FAR struct mtd_dev_s *dev, off_t startblock,
   off_t offset;
   off_t maxblock;
   size_t nbytes;
+  ssize_t ret;
 
   DEBUGASSERT(dev && buf);
 
@@ -364,8 +401,8 @@ static ssize_t filemtd_bread(FAR struct mtd_dev_s *dev, off_t startblock,
 
   /* Then read the data from the file */
 
-  filemtd_read(priv, buf, offset, nbytes);
-  return nblocks;
+  ret = filemtd_read(priv, buf, offset, nbytes);
+  return ret < 0 ? ret : nblocks;
 }
 
 /****************************************************************************
@@ -379,6 +416,7 @@ static ssize_t filemtd_bwrite(FAR struct mtd_dev_s *dev, off_t startblock,
   off_t offset;
   off_t maxblock;
   size_t nbytes;
+  ssize_t ret;
 
   DEBUGASSERT(dev && buf);
 
@@ -404,8 +442,8 @@ static ssize_t filemtd_bwrite(FAR struct mtd_dev_s *dev, off_t startblock,
 
   /* Then write the data to the file */
 
-  filemtd_write(priv, offset, buf, nbytes);
-  return nblocks;
+  ret = filemtd_write(priv, offset, buf, nbytes);
+  return ret < 0 ? ret : nblocks;
 }
 
 /****************************************************************************
@@ -433,8 +471,7 @@ static ssize_t filemtd_byteread(FAR struct mtd_dev_s *dev, off_t offset,
       nbytes = maxoffset - offset;
     }
 
-  filemtd_read(priv, buf, offset, nbytes);
-  return nbytes;
+  return filemtd_read(priv, buf, offset, nbytes);
 }
 
 /****************************************************************************
@@ -465,8 +502,7 @@ static ssize_t file_bytewrite(FAR struct mtd_dev_s *dev, off_t offset,
 
   /* Then write the data to the file */
 
-  filemtd_write(priv, offset, buf, nbytes);
-  return nbytes;
+  return filemtd_write(priv, offset, buf, nbytes);
 }
 #endif
 
@@ -690,6 +726,30 @@ static ssize_t mtd_loop_write(FAR struct file *filep,
 #endif /* CONFIG_MTD_LOOP */
 
 /****************************************************************************
+ * Name: mtd_loop_copyname
+ *
+ * Description:
+ *   Read a name in user memory once, into copy (PATH_MAX + 1 bytes): the
+ *   inode tree lock is held when the name is used.  NULL stays NULL.
+ *
+ ****************************************************************************/
+
+#if defined(CONFIG_MTD_LOOP) && defined(CONFIG_BUILD_KERNEL)
+static FAR const char *mtd_loop_copyname(FAR char *copy,
+                                         FAR const char *name)
+{
+  if (name == NULL)
+    {
+      return NULL;
+    }
+
+  memccpy(copy, name, '\0', PATH_MAX);
+  copy[PATH_MAX] = '\0';
+  return copy;
+}
+#endif
+
+/****************************************************************************
  * Name: mtd_loop_ioctl
  ****************************************************************************/
 
@@ -718,12 +778,22 @@ static int mtd_loop_ioctl(FAR struct file *filep, int cmd,
             }
           else
             {
+              FAR const char *devname = setup->devname;
+              FAR const char *filename = setup->filename;
+#ifdef CONFIG_BUILD_KERNEL
+              char name[PATH_MAX + 1];
+              char file[PATH_MAX + 1];
+
+              devname = mtd_loop_copyname(name, devname);
+              filename = mtd_loop_copyname(file, filename);
+#endif
+
 #  ifndef CONFIG_MTD_CONFIG_NONE
-              ret = mtd_loop_setup(setup->devname, setup->filename,
+              ret = mtd_loop_setup(devname, filename,
                                    setup->sectsize, setup->erasesize,
                                    setup->offset, setup->configdata);
 #  else
-              ret = mtd_loop_setup(setup->devname, setup->filename,
+              ret = mtd_loop_setup(devname, filename,
                                    setup->sectsize, setup->erasesize,
                                    setup->offset);
 #  endif
@@ -749,6 +819,12 @@ static int mtd_loop_ioctl(FAR struct file *filep, int cmd,
             }
           else
             {
+#ifdef CONFIG_BUILD_KERNEL
+              char name[PATH_MAX + 1];
+
+              devname = mtd_loop_copyname(name, devname);
+#endif
+
               ret = mtd_loop_teardown(devname);
             }
         }

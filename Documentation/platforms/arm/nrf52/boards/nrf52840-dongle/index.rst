@@ -1,8 +1,8 @@
-===============
-nRF52840-dongle
-===============
+======================
+Nordic nRF52840 Dongle
+======================
 
-.. tags:: chip:nrf52, chip:nrf52840
+.. tags:: arch:arm, chip:nrf52, part:nrf52840, vendor:nordic
 
 The `nRF52840-dongle (PCA10059) <https://www.nordicsemi.com/Products/Development-hardware/nrf52840-dongle>`_
 is a a small, low-cost USB dongle based on nRF52840 from Nordic.

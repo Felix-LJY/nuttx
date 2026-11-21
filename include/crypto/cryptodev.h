@@ -143,7 +143,10 @@
 #define CRYPTO_CHACHA20         42
 #define CRYPTO_CHACHA20_DJB     43
 #define CRYPTO_AES_CTR_SSH      44
-#define CRYPTO_ALGORITHM_MAX    44 /* Keep updated */
+#define CRYPTO_AES_256_CMAC     45
+#define CRYPTO_CRC8             46
+#define CRYPTO_CRC16            47
+#define CRYPTO_ALGORITHM_MAX    47 /* Keep updated */
 
 /* Algorithm flags */
 
@@ -205,6 +208,7 @@ struct cryptodesc
 
 struct cryptop
 {
+  TAILQ_ENTRY(cryptop) crp_next;
   uint64_t crp_sid;  /* Session ID */
   int crp_ilen;      /* Input data total length */
   int crp_olen;      /* Result total length */
@@ -242,14 +246,42 @@ struct cryptop
   caddr_t crp_dst;
   caddr_t crp_iv;
   caddr_t crp_aad;
+  uint32_t crp_reqid;
   int crp_iter;
 };
 
-#define CRYPTO_BUF_IOV 0x1
-#define CRYPTO_BUF_MBUF 0x2
+#define CRYPTO_BUF_IOV            0x1
+#define CRYPTO_BUF_MBUF           0x2
 
-#define CRYPTO_OP_DECRYPT 0x0
-#define CRYPTO_OP_ENCRYPT 0x1
+/* Asymmetric operation type, key type, RSA padding and RSA hash passed
+ * with a key operation (crk_optype / crk_keytype / crk_padding /
+ * crk_hash), for backends that need them to select the algorithm.
+ */
+
+#define CRYPTO_OP_DECRYPT         0x0
+#define CRYPTO_OP_ENCRYPT         0x1
+#define CRYPTO_OP_SIGN            0x2
+#define CRYPTO_OP_VERIFY          0x3
+#define CRYPTO_OP_GENKEY          0x4
+
+#define CRYPTO_KEY_TYPE_NONE      0x0
+#define CRYPTO_KEY_TYPE_PUBLIC    0x1
+#define CRYPTO_KEY_TYPE_PRIVATE   0x2
+
+#define CRYPTO_RSA_RAW_PADDING    0x0
+#define CRYPTO_RSA_PKCS1_PADDING  0x1
+#define CRYPTO_RSA_OAEP_PADDING   0x2
+
+#define CRYPTO_RSA_NO_HASH        0x0
+#define CRYPTO_RSA_MD2            0x1
+#define CRYPTO_RSA_MD3            0x2
+#define CRYPTO_RSA_MD4            0x3
+#define CRYPTO_RSA_MD5            0x4
+#define CRYPTO_RSA_SHA1           0x5
+#define CRYPTO_RSA_SHA256         0x6
+#define CRYPTO_RSA_SHA384         0x7
+#define CRYPTO_RSA_SHA512         0x8
+#define CRYPTO_RSA_SHA224         0x9
 
 /* bignum parameter, in packed bytes, ... */
 
@@ -267,6 +299,10 @@ struct crypt_kop
   u_int crk_status;    /* return status */
   u_short crk_iparams; /* # of input parameters */
   u_short crk_oparams; /* # of output parameters */
+  u_short crk_optype;  /* ie. CRYPTO_OP_VERIFY or other */
+  u_short crk_keytype; /* ie. CRYPTO_KEY_TYPE_PUBLIC or other */
+  u_short crk_padding; /* ie. CRYPTO_RSA_PKCS1_PADDING or other in RSA */
+  u_short crk_hash;    /* ie. CRYPTO_RSA_SHA256 or other in RSA */
   u_int crk_flags;
   struct crparam crk_param[CRK_MAXPARAM];
   uint32_t crk_reqid;
@@ -301,7 +337,9 @@ struct crypt_kop
 #define CRK_SAVE_KEY               23 /* Save key data into FLASH */
 #define CRK_LOAD_KEY               24 /* Load key data from FLASH into RAM */
 #define CRK_UNLOAD_KEY             25 /* Unload key data from RAM */
-#define CRK_ALGORITHM_MAX          25 /* Keep updated */
+#define CRK_ECDH_GEN_PUBLIC        26 /* Generate an ephemeral ECDH keypair */
+#define CRK_ECDH_COMPUTE_SHARED    27 /* Compute ECDH shared secret */
+#define CRK_ALGORITHM_MAX          27 /* Keep updated */
 
 #define CRF_MOD_EXP                (1 << CRK_MOD_EXP)
 #define CRF_MOD_EXP_CRT            (1 << CRK_MOD_EXP_CRT)
@@ -315,6 +353,8 @@ struct crypt_kop
 #define CRF_ECDSA_SECP256R1_SIGN   (1 << CRK_ECDSA_SECP256R1_SIGN)
 #define CRF_ECDSA_SECP256R1_VERIFY (1 << CRK_ECDSA_SECP256R1_VERIFY)
 #define CRF_ECDSA_SECP256R1_GENKEY (1 << CRK_ECDSA_SECP256R1_GENKEY)
+#define CRF_ECDH_GEN_PUBLIC        (1 << CRK_ECDH_GEN_PUBLIC)
+#define CRF_ECDH_COMPUTE_SHARED    (1 << CRK_ECDH_COMPUTE_SHARED)
 #define CRF_ALLOCATE_KEY           (1 << CRK_ALLOCATE_KEY)
 #define CRF_VALIDATE_KEYID         (1 << CRK_VALIDATE_KEYID)
 #define CRF_IMPORT_KEY             (1 << CRK_IMPORT_KEY)
@@ -335,6 +375,10 @@ struct cryptkop
   u_int krp_status;    /* return status */
   u_short krp_iparams; /* # of input parameters */
   u_short krp_oparams; /* # of output parameters */
+  u_short krp_optype;  /* ie. CRYPTO_OP_VERIFY or other */
+  u_short krp_keytype; /* ie. CRYPTO_KEY_TYPE_PUBLIC or other */
+  u_short krp_padding; /* ie. CRYPTO_RSA_PKCS1_PADDING or other in RSA */
+  u_short krp_hash;    /* ie. CRYPTO_RSA_SHA256 or other in RSA */
   uint32_t krp_hid;
   struct crparam krp_param[CRK_MAXPARAM]; /* kvm */
   CODE int (*krp_callback)(FAR struct cryptkop *);
@@ -374,6 +418,7 @@ struct cryptocap
   CODE int (*cc_newsession)(FAR uint32_t *, FAR struct cryptoini *);
   CODE int (*cc_process)(FAR struct cryptop *);
   CODE int (*cc_freesession)(uint64_t);
+  CODE int (*cc_clone)(uint64_t, FAR uint32_t *);
   CODE int (*cc_kprocess)(FAR struct cryptkop *);
   FAR void *priv;
 };
@@ -415,16 +460,21 @@ struct crypt_op
  * in the authentication algorithm.
  */
 
+#define COP_FLAG_CBIMM  (1 << 2) /* Request asynchronous processing. */
+#define COP_FLAG_CANCEL (1 << 4) /* Cancel a pending async op by reqid. */
+
   uint16_t flags;
   uint32_t iterations;
   unsigned len;
   unsigned olen;
   unsigned ivlen;
   unsigned aadlen;
-  caddr_t src, dst;   /* become iov[] inside kernel */
+  caddr_t src;        /* become iov[] inside kernel */
+  caddr_t dst;
   caddr_t mac;        /* must be big enough for chosen MAC */
   caddr_t iv;
   caddr_t aad;
+  uint32_t reqid;     /* distinguishes tasks in asynchronous calling */
 };
 
 /* hamc buffer, software & hardware need it */
@@ -448,13 +498,21 @@ extern const uint8_t hmac_opad_buffer[HMAC_MAX_BLOCK_LEN];
 #define CIOCKEY                 104
 #define CIOCKEYRET              105
 #define CIOCASYMFEAT            106
+#define CIOCCLONE               107
+#define CIOCCRYPTRET            108
 
 int crypto_newsession(FAR uint64_t *, FAR struct cryptoini *, int);
+int crypto_clonesession(uint64_t, FAR uint64_t *);
 int crypto_freesession(uint64_t);
 int crypto_register(uint32_t, FAR int *,
                     CODE int (*)(FAR uint32_t *, FAR struct cryptoini *),
                     CODE int (*)(uint64_t),
                     CODE int (*)(FAR struct cryptop *));
+int crypto_register2(uint32_t, FAR int *,
+                     CODE int (*)(FAR uint32_t *, FAR struct cryptoini *),
+                     CODE int (*)(uint64_t),
+                     CODE int (*)(FAR struct cryptop *),
+                     CODE int (*)(uint64_t, FAR uint32_t *));
 int crypto_kregister(uint32_t, FAR int *,
                      CODE int (*)(FAR struct cryptkop *));
 int crypto_unregister(uint32_t, int);

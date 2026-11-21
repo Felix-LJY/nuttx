@@ -35,7 +35,7 @@
 #include <nuttx/arch.h>
 
 #include <arch/irq.h>
-#include <arch/armv7-m/nvicpri.h>
+#include <arch/arm_m/nvicpri.h>
 
 #include "nvic.h"
 #include "ram_vectors.h"
@@ -200,12 +200,20 @@ static void imxrt_dumpnvic(const char *msg, int irq)
           getreg32(NVIC_IRQ204_207_PRIORITY));
 #endif
 #if IMXRT_IRQ_NEXTINT > 208
-  irqinfo("              %08x %08x %08x\n",
+  irqinfo("              %08x %08x %08x %08x\n",
           getreg32(NVIC_IRQ208_211_PRIORITY),
           getreg32(NVIC_IRQ212_215_PRIORITY),
-          getreg32(NVIC_IRQ216_219_PRIORITY));
+          getreg32(NVIC_IRQ216_219_PRIORITY),
+          getreg32(NVIC_IRQ220_223_PRIORITY));
 #endif
-#if IMXRT_IRQ_NEXTINT > 218
+#if IMXRT_IRQ_NEXTINT > 224
+  irqinfo("              %08x %08x %08x %08x\n",
+          getreg32(NVIC_IRQ224_227_PRIORITY),
+          getreg32(NVIC_IRQ228_231_PRIORITY),
+          getreg32(NVIC_IRQ232_235_PRIORITY),
+          getreg32(NVIC_IRQ236_239_PRIORITY));
+#endif
+#if IMXRT_IRQ_NEXTINT > 240
 #  warning Missing logic
 #endif
 
@@ -234,6 +242,7 @@ static int imxrt_nmi(int irq, void *context, void *arg)
   return 0;
 }
 
+#ifndef CONFIG_ARCH_HIPRI_INTERRUPT
 static int imxrt_pendsv(int irq, void *context, void *arg)
 {
   up_irq_save();
@@ -241,6 +250,7 @@ static int imxrt_pendsv(int irq, void *context, void *arg)
   PANIC();
   return 0;
 }
+#endif
 
 static int imxrt_reserved(int irq, void *context, void *arg)
 {
@@ -339,14 +349,22 @@ static int imxrt_irqinfo(int irq, uintptr_t *regaddr, uint32_t *bit,
       else
 #endif
 #if IMXRT_IRQ_NEXTINT > 192
-      if (extint < 219)
+      if (extint < 224)
         {
           *regaddr = (NVIC_IRQ192_223_ENABLE + offset);
           *bit = 1 << (extint - 192);
         }
       else
 #endif
-#if IMXRT_IRQ_NEXTINT > 218
+#if IMXRT_IRQ_NEXTINT > 224
+      if (extint < 240)
+        {
+          *regaddr = (NVIC_IRQ224_239_ENABLE + offset);
+          *bit     = 1 << (extint - 224);
+        }
+      else
+#endif
+#if IMXRT_IRQ_NEXTINT > 240
 #  error Missing logic
 #endif
         {
@@ -491,7 +509,13 @@ void up_irqinitialize(void)
 #endif
   irq_attach(IMXRT_IRQ_BUSFAULT, arm_busfault, NULL);
   irq_attach(IMXRT_IRQ_USAGEFAULT, arm_usagefault, NULL);
+  /* With high priority interrupts PendSV is not an error: the OS pends it
+   * (signal delivery) and a high priority interrupt may use it.
+   */
+
+#ifndef CONFIG_ARCH_HIPRI_INTERRUPT
   irq_attach(IMXRT_IRQ_PENDSV, imxrt_pendsv, NULL);
+#endif
   arm_enable_dbgmonitor();
   irq_attach(IMXRT_IRQ_DBGMONITOR, arm_dbgmonitor, NULL);
   irq_attach(IMXRT_IRQ_RESERVED, imxrt_reserved, NULL);

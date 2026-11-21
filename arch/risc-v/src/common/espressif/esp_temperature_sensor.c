@@ -25,6 +25,8 @@
  ****************************************************************************/
 
 #include <nuttx/config.h>
+#include <nuttx/fs/fs.h>
+#include <nuttx/kmalloc.h>
 #include <nuttx/nuttx.h>
 
 #ifdef CONFIG_ESPRESSIF_TEMP
@@ -774,7 +776,7 @@ static int esp_temperature_sensor_activate(
     {
       /* Set suspend mode to sensors. */
 
-        esp_temperature_sensor_disable(priv);
+      esp_temperature_sensor_disable(priv);
     }
 
 #ifdef CONFIG_ESPRESSIF_TEMP_UORB_POLL

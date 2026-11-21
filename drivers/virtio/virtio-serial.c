@@ -33,16 +33,13 @@
 #include <nuttx/serial/serial.h>
 #include <nuttx/spinlock.h>
 #include <nuttx/virtio/virtio.h>
+#include <nuttx/virtio/virtio-serial.h>
 
 #include "virtio-serial.h"
 
 /****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
-
-#define VIRTIO_SERIAL_RX           0
-#define VIRTIO_SERIAL_TX           1
-#define VIRTIO_SERIAL_NUM          2
 
 /****************************************************************************
  * Private Types
@@ -90,6 +87,7 @@ static void virtio_serial_txdone(FAR struct virtqueue *vq);
 
 static int  virtio_serial_probe(FAR struct virtio_device *vdev);
 static void virtio_serial_remove(FAR struct virtio_device *vdev);
+static void virtio_serial_dump(FAR struct virtio_device *vdev);
 
 /****************************************************************************
  * Private Data
@@ -97,18 +95,18 @@ static void virtio_serial_remove(FAR struct virtio_device *vdev);
 
 static struct virtio_driver g_virtio_serial_driver =
 {
-  LIST_INITIAL_VALUE(g_virtio_serial_driver.node), /* node */
-  VIRTIO_ID_CONSOLE,                               /* device id */
-  virtio_serial_probe,                             /* probe */
-  virtio_serial_remove,                            /* remove */
+  VIRTIO_ID_CONSOLE,    /* device id */
+  virtio_serial_probe,  /* probe */
+  virtio_serial_remove, /* remove */
+  virtio_serial_dump,   /* dump */
 };
 
 static struct virtio_driver g_virtio_rprocserial_driver =
 {
-  LIST_INITIAL_VALUE(g_virtio_rprocserial_driver.node), /* node */
-  VIRTIO_ID_RPROC_SERIAL,                               /* device id */
-  virtio_serial_probe,                                  /* probe */
-  virtio_serial_remove,                                 /* remove */
+  VIRTIO_ID_RPROC_SERIAL, /* device id */
+  virtio_serial_probe,    /* probe */
+  virtio_serial_remove,   /* remove */
+  virtio_serial_dump,     /* dump */
 };
 
 static const struct uart_ops_s g_virtio_serial_ops =
@@ -480,7 +478,7 @@ static int virtio_serial_init(FAR struct virtio_serial_priv_s *priv,
   udev->priv        = priv;
   udev->ops         = &g_virtio_serial_ops;
   udev->recv.size   = CONFIG_DRIVERS_VIRTIO_SERIAL_BUFSIZE;
-  udev->recv.buffer = virtio_zalloc_buf(vdev, udev->recv.size, 16);
+  udev->recv.buffer = virtio_malloc_buf(vdev, udev->recv.size, 16);
   if (udev->recv.buffer == NULL)
     {
       vrterr("No enough memory\n");
@@ -488,7 +486,7 @@ static int virtio_serial_init(FAR struct virtio_serial_priv_s *priv,
     }
 
   udev->xmit.size   = CONFIG_DRIVERS_VIRTIO_SERIAL_BUFSIZE;
-  udev->xmit.buffer = virtio_zalloc_buf(vdev, udev->xmit.size, 16);
+  udev->xmit.buffer = virtio_malloc_buf(vdev, udev->xmit.size, 16);
   if (udev->xmit.buffer == NULL)
     {
       vrterr("No enough memory\n");
@@ -651,6 +649,31 @@ static void virtio_serial_remove(FAR struct virtio_device *vdev)
 }
 
 /****************************************************************************
+ * Name: virtio_serial_dump
+ ****************************************************************************/
+
+static void virtio_serial_dump(FAR struct virtio_device *vdev)
+{
+  FAR struct virtio_serial_priv_s *priv = vdev->priv;
+  FAR struct uart_dev_s *udev = &priv->udev;
+  sbuf_size_t xmit_used;
+  sbuf_size_t recv_used;
+  irqstate_t flags;
+
+  flags = spin_lock_irqsave(&priv->lock);
+  xmit_used = (udev->xmit.head - udev->xmit.tail +
+               udev->xmit.size) % udev->xmit.size;
+  recv_used = (udev->recv.head - udev->recv.tail +
+               udev->recv.size) % udev->recv.size;
+  spin_unlock_irqrestore(&priv->lock, flags);
+
+  syslog(LOG_EMERG, "    name=%s, console=%d, open_count=%u\n",
+         priv->name, udev->isconsole, udev->open_count);
+  syslog(LOG_EMERG, "    xmit=%u/%u B, recv=%u/%u B\n",
+         xmit_used, udev->xmit.size, recv_used, udev->recv.size);
+}
+
+/****************************************************************************
  * Public Functions
  ****************************************************************************/
 
@@ -662,6 +685,7 @@ int virtio_register_serial_driver(void)
 {
   int ret1 = virtio_register_driver(&g_virtio_serial_driver);
   int ret2 = virtio_register_driver(&g_virtio_rprocserial_driver);
+
   return ret1 < 0 ? ret1 : ret2;
 }
 

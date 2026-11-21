@@ -23,7 +23,7 @@
 # The vector table is the "head" object, i.e., the one that must forced into the
 # link in order to draw in all of the other components
 
-set(SRCS arm_vectortab.S)
+target_sources(nuttx PRIVATE arm_vectortab.S)
 
 # Common assembly language files
 
@@ -44,14 +44,10 @@ list(
   arm_mmu.c
   arm_prefetchabort.c
   arm_syscall.c
-  arm_tcbinfo.c
   arm_undefinedinsn.c
+  arm_userfault.c
   arm_perf.c
   cp15_cacheops.c)
-
-if(CONFIG_ENABLE_ALL_SIGNALS)
-  list(APPEND SRCS arm_schedulesigaction.c arm_sigdeliver.c)
-endif()
 
 if(CONFIG_ARMV7A_GICv2M)
   list(APPEND SRCS arm_gicv2m.c)
@@ -80,6 +76,10 @@ if(CONFIG_LEGACY_PAGING)
     arm_pghead.S)
 else()
   list(APPEND SRCS arm_head.S)
+endif()
+
+if(CONFIG_ARCH_TRUSTZONE_SECURE)
+  list(APPEND SRCS arm_sm_runtime.c arm_sm_vector.S)
 endif()
 
 if(CONFIG_ARCH_ADDRENV)

@@ -1,3 +1,24 @@
+############################################################################
+# drivers/rpmsg/Kconfig
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.  The
+# ASF licenses this file to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance with the
+# License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
+############################################################################
 #
 # For a description of the syntax of this configuration file,
 # see the file kconfig-language.txt in the NuttX tools repository.
@@ -7,8 +28,70 @@ config RPMSG
 	bool
 	default n
 	select OPENAMP
+	select SCHED_WORKQUEUE
 
 if RPMSG
+
+config RPMSG_CHAR
+	bool "rpmsg char support"
+	default n
+	---help---
+		User can use the /dev/rpmsg/<cpuname> to create the
+		endpoint and then use /dev/rpmsg-<name> to communicate with
+		remote processor.
+
+config RPMSG_CHAR_NPOLLWAITERS
+	int "rpmsg char number of the poll waiters"
+	default 2
+	depends on RPMSG_CHAR
+
+config RPMSG_WQUEUE_GLOBAL
+	bool "rpmsg global work queue"
+	default n
+	---help---
+		This is for rpmsg global work queue.
+
+config RPMSG_WQUEUE_PRIORITY
+	int "rpmsg work queue priority"
+	default 224
+
+config RPMSG_WQUEUE_STACKSIZE
+	int "rpmsg work queue stack size"
+	default DEFAULT_TASK_STACKSIZE
+
+config RPMSG_WQUEUE_NUMBER
+	int "rpmsg work queue number"
+	default 1
+	range 1 256
+	---help---
+		This macro sets the number of rpmsg work queue. It can be
+		customized and the minimum value is 1.
+
+config RPMSG_TRACE
+	bool "rpmsg trace"
+	default n
+	depends on SCHED_INSTRUMENTATION_DUMP
+	---help---
+		Record the messages passed through the rpmsg transports in the
+		note stream under NOTE_TAG_RPMSG, so they can be read back with
+		the note drivers (e.g. /dev/note/ram).
+
+config RPMSG_TRACE_BACKTRACE
+	int "rpmsg trace backtrace depth"
+	default 0
+	range 0 16
+	depends on RPMSG_TRACE
+	---help---
+		Number of frames recorded with a trace that asks for a
+		backtrace. 0 disables backtraces.
+
+config RPMSG_PROCFS
+	bool "Include rpmsg info in procfs"
+	depends on FS_PROCFS_REGISTER
+	default !DEFAULT_SMALL
+	---help---
+		Add /proc/rpmsg, which lists the local and the remote CPU of every
+		registered rpmsg device.
 
 config RPMSG_LOCAL_CPUNAME
 	string "Rpmsg Local Cpuname"
@@ -24,6 +107,50 @@ config RPMSG_PING
 config RPMSG_TEST
 	bool "rpmsg test support"
 	default n
+
+config RPMSG_WAKELOCK
+	bool "rpmsg wakelock support"
+	default n
+	depends on PM
+	---help---
+		Let a CPU hold a PM wakelock on the remote CPU through the
+		RPMSGIOC_ACQUIRE_WAKELOCK and RPMSGIOC_RELEASE_WAKELOCK ioctls.
+		Both sides of the link must enable it.
+
+config RPMSG_HEAP
+	bool "rpmsg heap manage support"
+	default n
+	---help---
+		This is for rpmsg heap manage, it can be used to allocate/free
+		shm for slave.
+
+config RPMSG_PANIC_DUMP_LEVEL
+	int "rpmsg panic dump level"
+	default 1 if DEFAULT_SMALL
+	default 2 if !DEFAULT_SMALL
+	---help---
+		Control rpmsg auto dump behavior on panic at
+		PANIC_KERNEL_FINAL stage:
+		  0 - Disable: no dump on panic
+		  1 - Info: brief dump on panic
+		  2 - Verbose: full dump on panic
+		Manual rpmsg dump command is not affected.
+
+config RPMSG_POOL_COUNT
+	int "rpmsg pool buffer count"
+	default 0
+	---help---
+		This macro sets the count of rpmsg pool buffers, each pool
+		can be used to allocate rpmsg buffers. 0 means disable
+		rpmsg pool.
+
+config RPMSG_POOL_SIZE
+	int "rpmsg pool size"
+	depends on RPMSG_POOL_COUNT != 0
+	default 64
+	---help---
+		This macro sets the size of each rpmsg pool, which is used
+		to allocate rpmsg buffers. The default value is 64 bytes.
 
 endif # RPMSG
 
@@ -67,8 +194,12 @@ config RPMSG_PORT_SPI_THREAD_STACKSIZE
 	default 4096
 
 config RPMSG_PORT_SPI_CRC
-	bool "Rpmsg SPI Port Use CRC Check"
+	bool "Rpmsg SPI Port Use Checksum"
 	default n
+	---help---
+		Check every frame with a 16-bit XOR checksum (xorsum16()). It
+		catches corrupted framing at little cost, but it is not a CRC: it
+		misses errors that flip the same bit in two 16-bit words.
 
 config RPMSG_PORT_SPI_RX_THRESHOLD
 	int "Rpmsg SPI Port Rx Buffer Threshold"
@@ -109,8 +240,21 @@ config RPMSG_PORT_UART_TX_THREAD_STACKSIZE
 	default DEFAULT_TASK_STACKSIZE
 
 config RPMSG_PORT_UART_CRC
-	bool "Rpmsg UART Port CRC Enable"
+	bool "Rpmsg UART Port Checksum Enable"
 	default n
+	---help---
+		Check every frame with a 16-bit XOR checksum (xorsum16()). It
+		catches corrupted framing at little cost, but it is not a CRC: it
+		misses errors that flip the same bit in two 16-bit words.
+
+config RPMSG_PORT_UART_COMPRESSION
+	bool "Rpmsg UART Port LZF Compression"
+	default n
+	depends on LIBC_LZF
+	---help---
+		Enable LZF compression for rpmsg port uart data frames.
+		Compresses payload before byte-escaping to reduce UART
+		bandwidth usage. Both TX and RX sides must enable this.
 
 config RPMSG_PORT_UART_DEBUG
 	bool "Rpmsg UART DEBUG Enable"
@@ -127,14 +271,6 @@ config RPMSG_VIRTIO
 		part.
 
 if RPMSG_VIRTIO
-
-config RPMSG_VIRTIO_PRIORITY
-	int "rpmsg virtio priority"
-	default 224
-
-config RPMSG_VIRTIO_STACKSIZE
-	int "rpmsg virtio stack size"
-	default DEFAULT_TASK_STACKSIZE
 
 config RPMSG_VIRTIO_PM
 	bool "RPMsg VirtIO power management"
@@ -166,71 +302,3 @@ config RPMSG_VIRTIO_PM_AUTORELAX
 
 endif # RPMSG_VIRTIO
 
-config RPMSG_VIRTIO_LITE
-	bool "rpmsg virtio transport support"
-	default n
-	select RPMSG
-
-if RPMSG_VIRTIO_LITE
-
-config RPMSG_VIRTIO_LITE_PRIORITY
-	int "rpmsg virtio lite rx thread priority"
-	default 224
-
-config RPMSG_VIRTIO_LITE_STACKSIZE
-	int "rpmsg virtio lite rx thread stack size"
-	default DEFAULT_TASK_STACKSIZE
-
-config RPMSG_VIRTIO_IVSHMEM
-	bool "rpmsg virtio lite ivshmem support"
-	default n
-	depends on PCI_IVSHMEM
-	---help---
-		This is rpmsg virtio driver based on pci ivshmem.
-
-config RPMSG_VIRTIO_LITE_PM
-	bool "rpmsg virtio lite power management"
-	depends on PM
-	default n
-	---help---
-		If TX/RX buffer is supplied and powered by each CPU.
-		And when one CPU in DEEP sleep, then it's buffer will
-		goto RAM-retention mode, can't access from another CPU.
-		So, we provide this method to resolve this.
-
-config RPMSG_VIRTIO_LITE_PM_AUTORELAX
-	bool "rpmsg virtio lite pm autorelax"
-	depends on RPMSG_VIRTIO_LITE_PM
-	default y
-	---help---
-		use wd_timer to auto relax pm
-
-
-if RPMSG_VIRTIO_IVSHMEM
-
-config RPMSG_VIRTIO_IVSHMEM_NAME
-	string "rpmsg virtio lite ivshmem name"
-	---help---
-		Using this config to custom the rpmsg virtio ivshmem id, cpuname and role,
-		using ";" to split the names.
-		For example, if RPMSG_VIRTIO_IVSHMEM_CPUNAME = "0:cpu1:m;1:cpu2:s" and pass
-		two ivshmem devices to the qemu, we will get two rpmsg virtio ivshmem drivers
-		with remote cpu ids: "0","1", names: "cpu1", "cpu2", and roles: "master", "slave"
-
-config RPMSG_VIRTIO_IVSHMEM_BUFFSIZE
-	int "rpmsg virtio lite ivshmem rpmsg buffer size"
-	default 2048
-	---help---
-		The rpmsg buffer size in share memory, the RX and TX buffer size
-		are same for now.
-
-config RPMSG_VIRTIO_IVSHMEM_BUFFNUM
-	int "rpmsg virtio lite ivshmem rpmsg buffer number"
-	default 8
-	---help---
-		The rpmsg virtio buffer number in share memory, the RX and TX buffer number
-		are same for now.
-
-endif
-
-endif

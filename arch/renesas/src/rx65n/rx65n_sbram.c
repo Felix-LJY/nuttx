@@ -112,7 +112,7 @@ static ssize_t rx65n_sbram_read(struct file *filep, char *buffer,
 static ssize_t rx65n_sbram_write(struct file *filep, const char *buffer,
                                  size_t len);
 static int rx65n_sbram_ioctl(struct file *filep, int cmd, unsigned long arg);
-static int     rx65n_sbram_poll(struct file *filep, struct pollfd *fds,
+static int     rx65n_sbram_poll(struct file *filep, struct pollfd_s *fds,
                                 bool setup);
 #ifndef CONFIG_DISABLE_PSEUDOFS_OPERATIONS
 static int     rx65n_sbram_unlink(struct inode *inode);
@@ -312,24 +312,24 @@ static off_t rx65n_sbram_seek(struct file *filep, off_t offset,
 
   switch (whence)
     {
-    case SEEK_CUR:
-      newpos = filep->f_pos + offset;
-      break;
+      case SEEK_CUR:
+        newpos = filep->f_pos + offset;
+        break;
 
-    case SEEK_SET:
-      newpos = offset;
-      break;
+      case SEEK_SET:
+        newpos = offset;
+        break;
 
-    case SEEK_END:
-      newpos = bbr->bbf->len + offset;
-      break;
+      case SEEK_END:
+        newpos = bbr->bbf->len + offset;
+        break;
 
-    default:
+      default:
 
-      /* Return EINVAL if the whence argument is invalid */
+        /* Return EINVAL if the whence argument is invalid */
 
-      nxmutex_unlock(&bbr->lock);
-      return -EINVAL;
+        nxmutex_unlock(&bbr->lock);
+        return -EINVAL;
     }
 
   /* Opengroup.org:
@@ -446,7 +446,7 @@ static ssize_t rx65n_sbram_write(struct file *filep, const char *buffer,
  * Name: rx65n_sbram_poll
  ****************************************************************************/
 
-static int rx65n_sbram_poll(struct file *filep, struct pollfd *fds,
+static int rx65n_sbram_poll(struct file *filep, struct pollfd_s *fds,
                             bool setup)
 {
   if (setup)

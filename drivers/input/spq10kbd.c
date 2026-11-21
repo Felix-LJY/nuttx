@@ -190,11 +190,11 @@ struct spq10kbd_dev_s
   struct work_s work;   /* Supports the interrupt handling "bottom half" */
 
   /* The following is a list if poll structures of threads waiting for
-   * driver events. The 'struct pollfd' reference for each open is also
+   * driver events. The 'struct pollfd_s' reference for each open is also
    * retained in the f_priv field of the 'struct file'.
    */
 
-  FAR struct pollfd *fds[CONFIG_SPQ10KBD_NPOLLWAITERS];
+  FAR struct pollfd_s *fds[CONFIG_SPQ10KBD_NPOLLWAITERS];
 
   /* Buffer used to collect and buffer incoming keyboard characters */
 
@@ -242,7 +242,7 @@ static ssize_t spq10kbd_read(FAR struct file *filep,
                              FAR char *buffer, size_t len);
 static ssize_t spq10kbd_write(FAR struct file *filep,
                               FAR const char *buffer, size_t len);
-static int  spq10kbd_poll(FAR struct file *filep, FAR struct pollfd *fds,
+static int  spq10kbd_poll(FAR struct file *filep, FAR struct pollfd_s *fds,
                           bool setup);
 
 /****************************************************************************
@@ -296,6 +296,7 @@ static djoy_buttonset_t djoy_sample(
 {
   FAR struct spq10kbd_dev_s *priv =
     (FAR struct spq10kbd_dev_s *)(lower->config);
+
   return priv->djoystate;
 }
 
@@ -314,6 +315,7 @@ static void djoy_enable(FAR const struct djoy_lowerhalf_s *lower,
 {
   FAR struct spq10kbd_dev_s *priv =
     (FAR struct spq10kbd_dev_s *)(lower->config);
+
   priv->djoypressmask    = press;
   priv->djoyreleasemask  = release;
   priv->djoyhandle       = handler;
@@ -599,7 +601,7 @@ static ssize_t spq10kbd_write(FAR struct file *filep, FAR const char *buffer,
  *
  ****************************************************************************/
 
-static int spq10kbd_poll(FAR struct file *filep, FAR struct pollfd *fds,
+static int spq10kbd_poll(FAR struct file *filep, FAR struct pollfd_s *fds,
                          bool setup)
 {
   FAR struct inode          *inode;
@@ -660,7 +662,8 @@ static int spq10kbd_poll(FAR struct file *filep, FAR struct pollfd *fds,
     {
       /* This is a request to tear down the poll. */
 
-      FAR struct pollfd **slot = (FAR struct pollfd **)fds->priv;
+      FAR struct pollfd_s **slot = (FAR struct pollfd_s **)fds->priv;
+
       DEBUGASSERT(slot);
 
       /* Remove all memory of the poll setup */

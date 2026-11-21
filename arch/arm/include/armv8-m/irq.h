@@ -36,7 +36,7 @@
 #include <nuttx/irq.h>
 #ifndef __ASSEMBLY__
 #  include <nuttx/compiler.h>
-#  include <arch/armv8-m/nvicpri.h>
+#  include <arch/arm_m/nvicpri.h>
 #  include <stdint.h>
 #endif
 
@@ -202,6 +202,13 @@
 #define CONTROL_FPCA        (1 << 2) /* Bit 2: Floating-point context active */
 #define CONTROL_SPSEL       (1 << 1) /* Bit 1: Stack-pointer select */
 #define CONTROL_NPRIV       (1 << 0) /* Bit 0: Not privileged */
+
+#ifdef CONFIG_ARM_PACBTI
+#  define CONTROL_PACBTI_MASK \
+    (CONTROL_UPAC_EN | CONTROL_PAC_EN | CONTROL_UBTI_EN | CONTROL_BTI_EN)
+#else
+#  define CONTROL_PACBTI_MASK 0
+#endif
 
 /****************************************************************************
  * Public Types
@@ -476,6 +483,21 @@ static always_inline_function uint32_t getpsp(void)
 int up_cpu_index(void) noinstrument_function;
 #endif /* CONFIG_ARCH_HAVE_MULTICPU */
 
+/* Return program counter */
+
+static inline_function uint32_t up_getpc(void)
+{
+  uint32_t pc;
+
+  __asm__ __volatile__
+  (
+    "mov %0, pc\n"
+    : "=r" (pc)
+  );
+
+  return pc;
+}
+
 static always_inline_function uint32_t up_getsp(void)
 {
   uint32_t sp;
@@ -505,14 +527,10 @@ static always_inline_function bool up_interrupt_context(void)
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

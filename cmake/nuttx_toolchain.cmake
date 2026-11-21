@@ -23,6 +23,8 @@
 # search. If the manual of the newly supported toolchain is different, you can
 # override these methods in the toolchain
 
+include(nuttx_collect_extra_flags)
+
 if("${CMAKE_C_COMPILER_ID}" STREQUAL "GNU")
   if(CMAKE_C_COMPILER_VERSION VERSION_GREATER 4.9)
     # force color for gcc > 4.9
@@ -37,7 +39,9 @@ endif()
 # failure logs more deterministic and most importantly makes builds more
 # deterministic. Debuggers usually have a path mapping feature to ensure the
 # files are still found.
-if((NOT MSVC) AND (NOT CONFIG_ARCH_TOOLCHAIN_GHS))
+if((NOT MSVC)
+   AND (NOT CONFIG_ARCH_TOOLCHAIN_GHS)
+   AND (NOT CONFIG_ARCH_TOOLCHAIN_TASKING))
   if(CONFIG_OUTPUT_STRIP_PATHS)
     add_compile_options(-fmacro-prefix-map=${NUTTX_DIR}=)
     add_compile_options(-fmacro-prefix-map=${NUTTX_APPS_DIR}=)
@@ -97,7 +101,16 @@ if(NOT NUTTX_TOOLCHAIN_PREPROCESS_DEFINED)
     if((CMAKE_GENERATOR MATCHES "Ninja|Makefiles")
        AND (CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID MATCHES
                                                   "Clang"))
-      set(preprocess_depfile ${TARGET_FILE}.d)
+      # Keep the depfile out of the preprocessed output directory: for ROMFS
+      # staging targets that directory is packed verbatim by genromfs, so a .d
+      # file next to the output would ship in the image.
+      file(RELATIVE_PATH preprocess_depfile_rel ${CMAKE_CURRENT_BINARY_DIR}
+           ${TARGET_FILE})
+      set(preprocess_depfile
+          ${CMAKE_CURRENT_BINARY_DIR}/.deps/${preprocess_depfile_rel}.d)
+      get_filename_component(preprocess_depfile_dir ${preprocess_depfile}
+                             DIRECTORY)
+      file(MAKE_DIRECTORY ${preprocess_depfile_dir})
       list(
         APPEND
         preprocess_depflags

@@ -83,11 +83,8 @@ struct mymsg
 };
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -165,16 +162,16 @@ int msgget(key_t key, int msgflg);
  *   msgflg - Operations flags
  *
  * Returned Value:
- *   On success, mq_send() returns 0 (OK); on error, -1 (ERROR)
+ *   On success, msgsnd() returns 0 (OK); on error, -1 (ERROR)
  *   is returned, with errno set to indicate the error:
  *
- *   EAGAIN   The queue was full and the O_NONBLOCK flag was set for the
- *            message queue description referred to by mqdes.
- *   EINVAL   Either msg or mqdes is NULL or the value of prio is invalid.
- *   EPERM    Message queue opened not opened for writing.
- *   EMSGSIZE 'msglen' was greater than the maxmsgsize attribute of the
- *            message queue.
+ *   EAGAIN   The queue is full or no free message is left, and
+ *            IPC_NOWAIT is set or the caller is an interrupt handler.
+ *   EINVAL   msqid is not a valid message queue identifier, mtype is
+ *            less than 1, or msgsz is greater than the maximum message
+ *            size of the queue.
  *   EINTR    The call was interrupted by a signal handler.
+ *   EIDRM    The queue was removed while the caller waited.
  *
  ****************************************************************************/
 
@@ -199,15 +196,22 @@ int msgsnd(int msqid, FAR const void *msgp, size_t msgsz, int msgflg);
  * Returned Value:
  *   On success, msgrcv() returns the number of bytes actually copied
  *   into the mtext array.
- *   On failure, both functions return -1, and set errno to indicate
- *   the error.
+ *   On failure, msgrcv() returns -1 and sets errno to indicate the
+ *   error:
+ *
+ *   E2BIG   The message is longer than msgsz and MSG_NOERROR is not set.
+ *           The message stays in the queue.
+ *   EINVAL  msqid is not a valid message queue identifier.
+ *   ENOMSG  IPC_NOWAIT is set and the queue has no message of the
+ *           requested type.
+ *   EINTR   The call was interrupted by a signal handler.
+ *   EIDRM   The queue was removed while the caller waited.
  *
  ****************************************************************************/
 
 ssize_t msgrcv(int msqid, FAR void *msgp,
                size_t msgsz, long msgtyp, int msgflg);
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

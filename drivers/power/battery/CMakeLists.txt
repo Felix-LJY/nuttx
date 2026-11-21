@@ -36,6 +36,18 @@ if(CONFIG_BATTERY_CHARGER)
     list(APPEND SRCS mcp73871.c)
   endif()
 
+  # Add the LTC4013 battery charger driver
+
+  if(CONFIG_LTC4013)
+    list(APPEND SRCS ltc4013.c)
+  endif()
+
+  # Add the Nordic nPM1100 PMIC battery charger driver
+
+  if(CONFIG_NPM1100)
+    list(APPEND SRCS npm1100.c)
+  endif()
+
   # Add the BQ2425x I2C-based battery charger driver
 
   if(CONFIG_I2C_BQ2425X)
@@ -46,6 +58,12 @@ if(CONFIG_BATTERY_CHARGER)
 
   if(CONFIG_I2C_BQ2429X)
     list(APPEND SRCS bq2429x.c)
+  endif()
+
+  # Add the GD30BC2416 I2C-based battery charger driver
+
+  if(CONFIG_I2C_GD30BC2416)
+    list(APPEND SRCS gd30bc2416.c)
   endif()
 
   # Add the axp202 I2C-based battery charger driver

@@ -74,6 +74,10 @@
 #include <nuttx/timers/timer_wdog.h>
 #endif
 
+#ifdef CONFIG_WATCHDOG_WDOG
+#include <nuttx/timers/watchdog_wdog.h>
+#endif
+
 #include "sim_internal.h"
 #include "sim.h"
 
@@ -179,6 +183,7 @@ int sim_bringup(void)
       /* Initialized the RAM MTD */
 
       struct mtd_dev_s *mtd = rammtd_initialize(ramstart, 128 * 1024);
+
       if (mtd == NULL)
         {
           syslog(LOG_ERR, "ERROR: rammtd_initialize failed\n");
@@ -369,6 +374,16 @@ int sim_bringup(void)
     }
 #endif
 
+#ifdef CONFIG_SIM_MOUSE
+  /* Initialize the mouse */
+
+  ret = sim_mouse_initialize(0);
+  if (ret < 0)
+    {
+      syslog(LOG_ERR, "ERROR: sim_mouse_initialize failed: %d\n", ret);
+    }
+#endif
+
 #ifdef CONFIG_SIM_KEYBOARD
   /* Initialize the keyboard */
 
@@ -502,14 +517,6 @@ int sim_bringup(void)
 #  endif
 #endif
 
-#ifdef CONFIG_RPMSG_VIRTIO_LITE
-#  ifdef CONFIG_SIM_RPMSG_MASTER
-  sim_rpmsg_virtio_init("server-proxy", "proxy", true);
-#  else
-  sim_rpmsg_virtio_init("server-proxy", "server", false);
-#  endif
-#endif
-
 #ifdef CONFIG_RPMSG_PORT_UART
 #  ifdef CONFIG_SIM_RPMSG_MASTER
   sim_rpmsg_port_uart_init("server", "proxy", "/dev/ttyVS0");
@@ -562,6 +569,7 @@ int sim_bringup(void)
   /* Set up a MAC address for the RNDIS device. */
 
   uint8_t mac[6];
+
   mac[0] = (CONFIG_SIM_RNDIS_MACADDR >> (8 * 5)) & 0xff;
   mac[1] = (CONFIG_SIM_RNDIS_MACADDR >> (8 * 4)) & 0xff;
   mac[2] = (CONFIG_SIM_RNDIS_MACADDR >> (8 * 3)) & 0xff;
@@ -584,6 +592,14 @@ int sim_bringup(void)
   if (ret < 0)
     {
       syslog(LOG_ERR, "ERROR: sim_cansock_initialize() failed: %d\n", ret);
+    }
+#endif
+
+#ifdef CONFIG_WATCHDOG_WDOG
+  ret = watchdog_wdog_initialize(CONFIG_WATCHDOG_DEVPATH);
+  if (ret < 0)
+    {
+      syslog(LOG_ERR, "ERROR: watchdog_wdog_initialize failed: %d\n", ret);
     }
 #endif
 

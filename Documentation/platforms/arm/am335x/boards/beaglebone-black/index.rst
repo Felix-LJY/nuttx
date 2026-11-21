@@ -1,6 +1,8 @@
-================
-beaglebone-black
-================
+===================
+TI BeagleBone Black
+===================
+
+.. tags:: arch:arm, chip:am335x, vendor:ti
 
 This directory contains the port of NuttX to the Beaglebone Black board
 See http://beagleboard.org for information about Beaglebone Black. This

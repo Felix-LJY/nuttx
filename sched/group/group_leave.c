@@ -33,6 +33,8 @@
 #include <nuttx/debug.h>
 #include <nuttx/irq.h>
 #include <nuttx/fs/fs.h>
+#include <nuttx/kmalloc.h>
+#include <nuttx/lib/elf.h>
 #include <nuttx/net/net.h>
 #include <nuttx/sched.h>
 #include <nuttx/spinlock.h>
@@ -41,12 +43,16 @@
 #  include <nuttx/binfmt/binfmt.h>
 #endif
 
-#include "environ/environ.h"
+#include "sched/sched.h"
 #include "signal/signal.h"
 #include "pthread/pthread.h"
 #include "mqueue/mqueue.h"
 #include "group/group.h"
 #include "tls/tls.h"
+
+#ifdef CONFIG_FS_CHROOT
+#  include "../../fs/fs_heap.h"
+#endif
 
 /****************************************************************************
  * Private Functions
@@ -76,7 +82,29 @@ static inline void group_release(FAR struct task_group_s *group)
 
   nxrmutex_destroy(&group->tg_mutex);
 
-  task_uninit_info(group);
+#if defined(CONFIG_LIBC_ELF) && defined(CONFIG_BUILD_FLAT)
+  /* Close what dlopen() left open.  No thread of the group runs now, so
+   * the lock is not needed.
+   */
+
+  libelf_removeall(&group->tg_info->ta_modules);
+
+#  ifdef CONFIG_BINFMT_LOADABLE
+  /* The rest is used by the program.  Give it back to the program before
+   * the list goes with the task information: binfmt_exit() unloads it.
+   */
+
+  if (group->tg_bininfo != NULL)
+    {
+      FAR struct list_node *node;
+
+      while ((node = list_remove_head(&group->tg_info->ta_modules)) != NULL)
+        {
+          list_add_tail(&group->tg_bininfo->libraries, node);
+        }
+    }
+#  endif
+#endif
 
 #if defined(CONFIG_SCHED_HAVE_PARENT) && defined(CONFIG_SCHED_CHILD_STATUS)
   /* Free all un-reaped child exit status */
@@ -104,9 +132,23 @@ static inline void group_release(FAR struct task_group_s *group)
 
   fdlist_free(&group->tg_fdlist);
 
-  /* Release all shared environment variables */
+  /* Then the task information (environment, streams).  A file that closes
+   * above can still use it: with CONFIG_FS_NOTIFY, the close queues a
+   * notification with the path of the file, and a relative path needs the
+   * current directory from the environment (getcwd()).
+   */
 
-  env_release(group);
+  task_uninit_info(group);
+
+#ifdef CONFIG_FS_CHROOT
+  /* Drop the chroot jail path */
+
+  if (group->tg_root != NULL)
+    {
+      fs_heap_free(group->tg_root);
+      group->tg_root = NULL;
+    }
+#endif
 
   /* Destroy the mm_map list */
 
@@ -186,15 +228,47 @@ void group_leave(FAR struct tcb_s *tcb)
 #ifdef HAVE_GROUP_MEMBERS
       flags = spin_lock_irqsave(&group->tg_lock);
       sq_rem(&tcb->member, &group->tg_members);
+#  if CONFIG_SCHED_CRITMONITOR_MAXTIME_THREAD >= 0
+      group->tg_run_time += nxsched_critmon_runtime(tcb);
+#  endif
       release = release && sq_empty(&group->tg_members);
       spin_unlock_irqrestore(&group->tg_lock, flags);
 
       /* Have all of the members left the group? */
 #endif
 
+#ifdef CONFIG_BUILD_KERNEL
+      /* The heap of an ending user group goes away with its address
+       * environment, and a stack overflow can break it: do not free the
+       * stack into it.  The heap of a vfork() child stays.
+       */
+
+      if ((tcb->flags & TCB_FLAG_TTYPE_MASK) != TCB_FLAG_TTYPE_KERNEL &&
+          (group->tg_flags &
+           (GROUP_FLAG_PRIVILEGED | GROUP_FLAG_VFORK)) == 0 &&
+          (release || (group->tg_flags & GROUP_FLAG_EXITING) != 0))
+        {
+          tcb->flags &= ~TCB_FLAG_FREE_STACK;
+        }
+#endif
+
       if (release)
         {
           /* Yes.. Release all of the resource held by the task group */
+
+#ifdef CONFIG_BUILD_KERNEL
+          /* A vfork() child uses the heap of its parent.  Free into it
+           * only when it is the current heap: the child ends itself.
+           */
+
+          if ((group->tg_flags & GROUP_FLAG_VFORK) != 0 &&
+              (tcb->addrenv_own == NULL ||
+               tcb->addrenv_own != this_task()->addrenv_curr))
+            {
+              group->tg_flags &= ~GROUP_FLAG_VFORK;
+              tcb->flags &= ~TCB_FLAG_FREE_STACK;
+            }
+#endif
 
           group_release(group);
         }
@@ -249,6 +323,12 @@ void group_drop(FAR struct task_group_s *group)
 
   if (group->tg_flags & GROUP_FLAG_DELETED)
     {
+#ifdef CONFIG_SIGNAL_FD
+      /* Free the lazily-allocated signalfd poll waiter array, if any. */
+
+      kmm_free(group->tg_sigfds);
+#endif
+
       /* Release the group container itself */
 
       kmm_free(group);

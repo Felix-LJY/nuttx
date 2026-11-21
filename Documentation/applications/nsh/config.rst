@@ -40,6 +40,7 @@ Command                Depends on Configuration                    Can Be Disabl
                        ! ``CONFIG_NSH_DISABLE_LOOPS``  
 :ref:`cmdcat`          ``CONFIG_NSH_DISABLE_CAT``                  .
 :ref:`cmdcd`           ! ``CONFIG_DISABLE_ENVIRON``                ``CONFIG_NSH_DISABLE_CD``
+:ref:`cmdchroot`       ``CONFIG_FS_CHROOT``                        ``CONFIG_NSH_DISABLE_CHROOT``
 :ref:`cmdcmp`          ``CONFIG_NSH_DISABLE_CMP``                  .
 :ref:`cmdcp`           ``CONFIG_NSH_DISABLE_CP``                   .
 :ref:`cmddate`         ``CONFIG_NSH_DISABLE_DATE``                 .
@@ -133,6 +134,7 @@ Command                Depends on Configuration                    Can Be Disabl
 :ref:`cmdtest`         !  ``CONFIG_NSH_DISABLESCRIPT``             ``CONFIG_NSH_DISABLE_TEST``
 :ref:`cmdtime`         .                                           ``CONFIG_NSH_DISABLE_TIME``
 :ref:`cmdtruncate`     ! ``CONFIG_DISABLE_MOUNTPOINT``             ``CONFIG_NSH_DISABLE_TRUNCATE``
+:ref:`cmdulimit`       .                                           ``CONFIG_NSH_DISABLE_ULIMIT``
 :ref:`cmdumount`       !  ``CONFIG_DISABLE_MOUNTPOINT``            ``CONFIG_NSH_DISABLE_UMOUNT``
 :ref:`cmduname`        .                                           ``CONFIG_NSH_DISABLE_UNAME``
 :ref:`cmdunset`        ``CONFIG_NSH_VARS`` \|\|                    ``CONFIG_NSH_DISABLE_UNSET``
@@ -203,6 +205,11 @@ Configuration                        Description
 
  ``CONFIG_NSH_FILEIOSIZE``           Size of a static I/O buffer used for file access (ignored if there
                                      is no file system). Default is 1024.
+
+ ``CONFIG_NSH_TOP_TASKBUF_SIZE``     Size of the per-task buffer used by the ``top`` command. ``top``
+                                     keeps one buffer per task while it collects and sorts the
+                                     tasks, so peak heap usage is about (number of tasks) * this
+                                     value. Longer per-task output is truncated. Default is 512.
 
  ``CONFIG_NSH_STRERROR``             ``strerror(errno)`` makes more readable output but
                                      ``strerror()`` is very large and will not be used unless this

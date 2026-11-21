@@ -70,16 +70,31 @@
 
 #ifndef __ASSEMBLY__
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
  * Inline functions
  ****************************************************************************/
+
+/* Return program counter */
+
+static inline_function uint16_t up_getpc(void)
+{
+  uint16_t pc;
+
+  __asm__ volatile
+    (
+      "bsr 1f\n\t"
+      "1:\n\t"
+      "pula\n\t"                /* A <- PCH, at the top of the stack */
+      "pulb"                    /* B <- PCL */
+      : "=d"(pc)
+    );
+
+  return pc;
+}
 
 /* Return the current value of the stack pointer */
 
@@ -102,7 +117,7 @@ static inline_function uint16_t up_getsp(void)
  * structure.  It is non-NULL only during interrupt processing.
  */
 
-EXTERN volatile uint8_t *g_current_regs;
+extern volatile uint8_t *g_current_regs;
 
 /****************************************************************************
  * Public Function Prototypes
@@ -147,7 +162,6 @@ static inline_function uintptr_t up_getusrsp(void *regs)
  * Public Function Prototypes
  ****************************************************************************/
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

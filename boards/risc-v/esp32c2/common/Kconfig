@@ -1,0 +1,79 @@
+############################################################################
+# boards/risc-v/esp32c2/common/Kconfig
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.  The
+# ASF licenses this file to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance with the
+# License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
+############################################################################
+#
+# For a description of the syntax of this configuration file,
+# see the file kconfig-language.txt in the NuttX tools repository.
+#
+
+config ESPRESSIF_MERGE_BINS
+	bool "Merge raw binary files into a single file"
+	default n
+	---help---
+		Merge the raw binary files into a single file for flashing to the
+		device.
+		This is only useful when the path to binary files (e.g. bootloader)
+		is provided via the ESPTOOL_BINDIR variable.
+
+config ESPRESSIF_SPIFLASH_AUTO_BRINGUP
+	bool "Automatic mount of SPI Flash MTD"
+	default y
+	depends on ESPRESSIF_MTD
+	---help---
+		Auto bring-up the SPI Flash MTD on board bring-up.
+		If not selected, the MTD will be registered as a device node on /dev.
+
+choice ESPRESSIF_SPIFLASH_FS
+	prompt "File system to mount on SPI Flash MTD"
+	default ESPRESSIF_SPIFLASH_SMARTFS
+	depends on ESPRESSIF_SPIFLASH_AUTO_BRINGUP
+	optional
+	---help---
+		Mount the SPI Flash MTD with the selected File System format on board
+		bring-up.
+		If not selected, the MTD will be registered as a device node on /dev.
+
+config ESPRESSIF_SPIFLASH_SMARTFS
+	bool "SmartFS"
+	select FS_SMARTFS
+	select MTD_SMART
+
+config ESPRESSIF_SPIFLASH_NXFFS
+	bool "NXFFS"
+	select FS_NXFFS
+
+config ESPRESSIF_SPIFLASH_SPIFFS
+	bool "SPIFFS"
+	select FS_SPIFFS
+
+config ESPRESSIF_SPIFLASH_LITTLEFS
+	bool "LittleFS"
+	select FS_LITTLEFS
+
+config ESPRESSIF_SPIFLASH_MTD_CONFIG
+	bool "Non-volatile storage"
+
+endchoice # ESPRESSIF_SPIFLASH_FS
+
+config ESPRESSIF_SPIFLASH_FS_MOUNT_PT
+	string "File-system Mount Point"
+	depends on ESPRESSIF_SPIFLASH_SMARTFS || ESPRESSIF_SPIFLASH_NXFFS || ESPRESSIF_SPIFLASH_SPIFFS || ESPRESSIF_SPIFLASH_LITTLEFS
+	default "/data"

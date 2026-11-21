@@ -39,6 +39,7 @@
 #endif
 
 #include <arch/barriers.h>
+#include <arch/csfr.h>
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -46,17 +47,29 @@
 
 /* MTCR and MFCR - move to / from Core Special Function Register */
 
-#define tricore_mtcr(reg, val)                                         \
-  ({                                                                   \
-    __asm__ volatile ("mtcr %0,%1\n\t"::"i"(reg),"d"(val):"memory");   \
+#define tricore_mtcr(reg, val)                                             \
+  ({                                                                       \
+    __asm__ __volatile__ ("mtcr %0,%1\n\t"::"i"(reg),"d"(val):"memory");   \
   })
 
-#define tricore_mfcr(reg)                                              \
-  ({                                                                   \
-    uint32_t __val;                                                    \
-    __asm__ volatile ("mfcr %0,%1": "=d" (__val) :"i"(reg): "memory"); \
-    __val;                                                             \
+#define tricore_mfcr(reg)                                                  \
+  ({                                                                       \
+    uint32_t __val;                                                        \
+    __asm__ __volatile__ ("mfcr %0,%1": "=d" (__val) :"i"(reg): "memory"); \
+    __val;                                                                 \
   })
+
+/* Return from a handler that the trap or interrupt vector entered with
+ * jli, to the vector code at A11.
+ */
+
+#ifdef CONFIG_TRICORE_TOOLCHAIN_TASKING
+#  define tricore_jump_backto_link() \
+     __asm__ __volatile__ ("ji a11" : : : "a11")
+#else
+#  define tricore_jump_backto_link() \
+     __asm__ __volatile__ ("ji %a11")
+#endif
 
 /****************************************************************************
  * Public Types
@@ -67,14 +80,10 @@
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

@@ -1,3 +1,24 @@
+############################################################################
+# drivers/video/Kconfig
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.  The
+# ASF licenses this file to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance with the
+# License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
+############################################################################
 #
 # For a description of the syntax of this configuration file,
 # see the file kconfig-language.txt in the NuttX tools repository.
@@ -497,6 +518,27 @@ config VIDEO_GC0308
 	select I2C
 	---help---
 		GC0308 VGA CMOS image sensor with DVP interface.
+
+config VIDEO_VL53L5CX
+	bool "VL53L5CX multizone ToF sensor"
+	default n
+	depends on VIDEO_STREAM && I2C && SCHED_LPWORK && ALLOW_BSD_COMPONENTS
+	---help---
+		ST VL53L5CX 8x8 multizone time-of-flight sensor as a V4L2 depth
+		capture device (V4L2_PIX_FMT_Z16).  The sensor firmware is ST
+		code under the BSD-3-Clause license, downloaded at build time.
+
+if VIDEO_VL53L5CX
+
+config VIDEO_VL53L5CX_I2C_FREQUENCY
+	int "I2C frequency"
+	default 1000000
+	range 100000 1000000
+	---help---
+		I2C clock in Hz, up to 1 MHz (Fast-mode Plus).  Most of the
+		first stream start is the 86 KB firmware write at this rate.
+
+endif # VIDEO_VL53L5CX
 
 config GOLDFISH_CAMERA
 	bool "Goldfish camera support"

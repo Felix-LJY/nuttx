@@ -28,133 +28,158 @@
 
 #include <sys/types.h>
 #include <stdint.h>
+#include <string.h>
 #include <unistd.h>
 #include <errno.h>
 #include <assert.h>
 #include <nuttx/debug.h>
 
 #include <nuttx/fs/fs.h>
+#include <nuttx/kmalloc.h>
 #include "devif/devif.h"
 
 #include "local/local.h"
 
 /****************************************************************************
- * Private Functions
+ * Pre-processor Definitions
  ****************************************************************************/
 
-/****************************************************************************
- * Name: local_fifo_write
- *
- * Description:
- *   Write a data on the write-only FIFO.
- *
- * Input Parameters:
- *   filep    File structure of write-only FIFO.
- *   buf      Data to send
- *   len      Length of data to send
- *
- * Returned Value:
- *   On success, the number of bytes written are returned (zero indicates
- *   nothing was written).  On any failure, a negated errno value is returned
- *
- ****************************************************************************/
+/* The segments of a frame (preamble, path and payload) that the stack
+ * holds.  A frame with more segments is copied into one buffer.
+ */
 
-static int local_fifo_write(FAR struct file *filep, FAR const uint8_t *buf,
-                            size_t len)
-{
-  ssize_t nwritten = 0;
-  ssize_t ret = 0;
-
-  while (len != nwritten)
-    {
-      ret = file_write(filep, buf + nwritten, len - nwritten);
-      if (ret < 0)
-        {
-          if (ret == -EINTR)
-            {
-              continue;
-            }
-          else if (ret == -EAGAIN)
-            {
-              break;
-            }
-          else
-            {
-              nerr("ERROR: file_write failed: %zd\n", ret);
-              break;
-            }
-        }
-
-      nwritten += ret;
-    }
-
-  return nwritten > 0 ? nwritten : ret;
-}
+#define LOCAL_FRAME_NIOV 8
 
 /****************************************************************************
  * Public Functions
  ****************************************************************************/
 
 /****************************************************************************
- * Name: local_send_preamble
+ * Name: local_send_frame
  *
  * Description:
- *   Send a packet on the write-only FIFO.
+ *   Send one datagram on the write-only FIFO as a single atomic writev, so
+ *   that the reader is never woken on a preamble whose payload has not been
+ *   written yet.
  *
  * Input Parameters:
- * conn      A reference to local connection structure
- * filep     File structure of write-only FIFO.
- * buf       Data to send
- * len       Length of data to send
+ *   conn     A reference to local connection structure
+ *   path     The address of the sender ("" for none)
+ *   buf      Payload to send
+ *   len      Number of payload iovec segments
+ *   rcvsize  Receive buffer size the peer advertised, preamble room
+ *            included
  *
  * Returned Value:
- *   Packet length is returned on success; a negated errno value is returned
- *   on any failure.
+ *   Payload length is returned on success; a negated errno value is
+ *   returned on any failure.  -EMSGSIZE means the whole frame, preamble
+ *   included, does not fit in rcvsize.
  *
  ****************************************************************************/
 
-int local_send_preamble(FAR struct local_conn_s *conn,
-                        FAR struct file *filep,
-                        FAR const struct iovec *buf,
-                        size_t len, size_t rcvsize)
+ssize_t local_send_frame(FAR struct local_conn_s *conn,
+                         FAR const char *path,
+                         FAR const struct iovec *buf, size_t len,
+                         size_t rcvsize)
 {
-  FAR const struct iovec *end = buf + len;
-  FAR const struct iovec *iov;
-  int ret;
+  struct iovec stackiov[LOCAL_FRAME_NIOV];
+  FAR uint8_t *frame = NULL;
+  lc_size_t preamble[2];
   lc_size_t pathlen;
-  lc_size_t pktlen;
+  size_t niov = len + 2;
+  size_t total;
+  size_t i;
+  ssize_t ret;
 
-  /* Send the packet length */
+  pathlen = strlen(path);
 
-  for (pktlen = 0, iov = buf; iov != end; iov++)
+  /* Hold the frame to the capacity the receiver advertised.  The driver
+   * refuses only what its FIFO can never hold, which is a different limit:
+   * the FIFO may have been created or resized for another rcvsize.  Add
+   * the segments one at a time, so that the sum cannot overflow.
+   */
+
+  total = sizeof(preamble) + pathlen;
+  for (i = 0; i < len && total <= rcvsize; i++)
     {
-      pktlen += iov->iov_len;
+      total = buf[i].iov_len > rcvsize - total ? rcvsize + 1 :
+              total + buf[i].iov_len;
     }
 
-  if (pktlen > rcvsize - sizeof(lc_size_t))
+  if (total > rcvsize)
     {
-      nerr("ERROR: Packet is too big: %d\n", pktlen);
+      nerr("ERROR: Frame is too big for %zu\n", rcvsize);
       return -EMSGSIZE;
     }
 
-  pathlen = strlen(conn->lc_path);
-  ret = local_fifo_write(&conn->lc_outfile, (FAR const uint8_t *)&pathlen,
-                         sizeof(lc_size_t));
-  if (ret != sizeof(lc_size_t))
+  /* Wire format is [pathlen][pktlen][path][payload]; the receiver parses
+   * the two lengths before it knows how much of either follows.
+   */
+
+  preamble[0] = pathlen;
+  preamble[1] = total - sizeof(preamble) - pathlen;
+
+  if (niov <= LOCAL_FRAME_NIOV)
     {
-      nerr("ERROR: local send path length failed ret: %d\n", ret);
+      stackiov[0].iov_base = preamble;
+      stackiov[0].iov_len  = sizeof(preamble);
+      stackiov[1].iov_base = (FAR char *)path;
+      stackiov[1].iov_len  = pathlen;
+      memcpy(&stackiov[2], buf, len * sizeof(struct iovec));
+    }
+  else
+    {
+      FAR uint8_t *ptr;
+
+      /* Too many segments for the stack: copy the frame into one buffer.
+       * rcvsize limits its size.
+       */
+
+      frame = kmm_malloc(total);
+      if (frame == NULL)
+        {
+          return -ENOMEM;
+        }
+
+      memcpy(frame, preamble, sizeof(preamble));
+      ptr = frame + sizeof(preamble);
+      memcpy(ptr, path, pathlen);
+      ptr += pathlen;
+      for (i = 0; i < len; i++)
+        {
+          if (buf[i].iov_base == NULL && buf[i].iov_len > 0)
+            {
+              kmm_free(frame);
+              return -EFAULT;
+            }
+
+          memcpy(ptr, buf[i].iov_base, buf[i].iov_len);
+          ptr += buf[i].iov_len;
+        }
+
+      stackiov[0].iov_base = frame;
+      stackiov[0].iov_len  = total;
+      niov = 1;
+    }
+
+  /* The FIFO is in atomic mode, so this either publishes the whole frame
+   * or writes nothing at all.
+   */
+
+  ret = file_writev(&conn->lc_outfile, stackiov, niov);
+  kmm_free(frame);
+
+  if (ret < 0)
+    {
+      if (ret != -EAGAIN)
+        {
+          nerr("ERROR: local send frame failed ret: %zd\n", ret);
+        }
+
       return ret;
     }
 
-  ret = local_fifo_write(filep, (FAR const uint8_t *)&pktlen,
-                         sizeof(lc_size_t));
-  if (ret != sizeof(lc_size_t))
-    {
-      return ret;
-    }
-
-  return local_fifo_write(&conn->lc_outfile, (uint8_t *)conn->lc_path,
-                          pathlen);
+  return preamble[1];
 }
 
 /****************************************************************************
@@ -169,39 +194,48 @@ int local_send_preamble(FAR struct local_conn_s *conn,
  *   len      Length of data to send
  *
  * Returned Value:
- *   Packet length is returned on success; a negated errno value is returned
- *   on any failure.
+ *   The number of bytes sent is returned on success.  It is less than the
+ *   length of the data when the FIFO is full and does not wait, or when a
+ *   signal came while the send waited.  A negated errno value is returned
+ *   on any failure (-EINTR: a signal came before the first byte).
  *
  ****************************************************************************/
 
-int local_send_packet(FAR struct file *filep, FAR const struct iovec *buf,
-                      size_t len)
+ssize_t local_send_packet(FAR struct file *filep,
+                          FAR const struct iovec *buf,
+                          size_t len)
 {
   FAR const struct iovec *end = buf + len;
   FAR const struct iovec *iov;
-  int ret = -EINVAL;
-  lc_size_t sendlen;
+  ssize_t ret = 0;
+  ssize_t sendlen = 0;
 
-  for (sendlen = 0, iov = buf; iov != end; iov++)
+  if (len == 0)
     {
-      ret = local_fifo_write(filep, iov->iov_base, iov->iov_len);
+      return 0;
+    }
+
+  for (iov = buf; iov != end; iov++)
+    {
+      ret = file_write(filep, iov->iov_base, iov->iov_len);
       if (ret < 0)
         {
-          if (ret != -EAGAIN)
+          if (ret != -EAGAIN && ret != -EINTR)
             {
-              nerr("ERROR: local send packet failed ret: %d\n", ret);
+              nerr("ERROR: local send packet failed ret: %zd\n", ret);
             }
 
           break;
         }
 
-      if (ret > 0)
+      /* A short write: the FIFO is full and does not wait, or a signal came
+       * while the write waited.
+       */
+
+      sendlen += ret;
+      if (ret != iov->iov_len)
         {
-          sendlen += ret;
-          if (ret != iov->iov_len)
-            {
-              break;
-            }
+          break;
         }
     }
 

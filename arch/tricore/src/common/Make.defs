@@ -45,6 +45,18 @@ CMN_CSRCS += tricore_tcbinfo.c
 CMN_CSRCS += tricore_trapcall.c
 CMN_CSRCS += tricore_systimer.c
 CMN_CSRCS += tricore_usestack.c
+CMN_CSRCS += tricore_fork.c
+
+ifeq ($(CONFIG_TRICORE_TOOLCHAIN_TASKING),y)
+  TRICORE_SUBDIR = tasking
+else
+  TRICORE_SUBDIR = gnu
+endif
+
+HEAD_ASRC += tricore_vectors$(ASMEXT)
+
+HEAD_ASRC += tricore_head$(ASMEXT)
+VPATH += common$(DELIM)$(TRICORE_SUBDIR)
 
 ifeq ($(CONFIG_SCHED_BACKTRACE),y)
   CMN_CSRCS += tricore_backtrace.c
@@ -52,6 +64,16 @@ endif
 
 ifeq ($(CONFIG_ENABLE_ALL_SIGNALS),y)
 CMN_CSRCS += tricore_schedulesigaction.c tricore_sigdeliver.c
+endif
+
+ifeq ($(CONFIG_BUILD_PROTECTED)$(CONFIG_BUILD_KERNEL),y)
+  CMN_CSRCS += tricore_task_start.c
+  CMN_CSRCS += tricore_pthread_start.c
+  CMN_CSRCS += tricore_signal_dispatch.c
+
+  ifeq ($(CONFIG_BUILD_PROTECTED),y)
+    CMN_UASRCS += tricore_signal_handler.c
+  endif
 endif
 
 ifeq ($(CONFIG_ARCH_USE_MPU),y)
@@ -66,5 +88,18 @@ ifeq ($(CONFIG_ARCH_HAVE_DEBUG),y)
   CMN_CSRCS += tricore_hwdebug.c
 endif
 
-CFLAGS += -DIFX_CFG_EXTEND_TRAP_HOOKS
-CFLAGS += -DIFX_USE_SW_MANAGED_INT
+# TASKING toolchain: build a fake libc_fpu.a to override the toolchain's
+# default C library and provide stubs for the symbols the linker still
+# references (see tricore_libc.c for details).
+
+ifeq ($(CONFIG_TRICORE_TOOLCHAIN_TASKING),y)
+
+tricore_libc$(OBJEXT): tricore_libc.c
+	$(call COMPILE, $<, $@)
+
+libc_fpu$(LIBEXT): tricore_libc$(OBJEXT)
+	$(call ARCHIVE, $@, $^)
+
+EXTRA_LIBS += libc_fpu$(LIBEXT)
+
+endif

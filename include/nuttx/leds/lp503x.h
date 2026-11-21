@@ -28,6 +28,7 @@
  ****************************************************************************/
 
 #include <nuttx/config.h>
+#include <stdbool.h>
 #include <nuttx/fs/ioctl.h>
 
 /* Configuration
@@ -235,11 +236,8 @@ struct i2c_master_s;
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -263,7 +261,6 @@ extern "C"
 int lp503x_register(const char *devpath, struct i2c_master_s *i2c,
                     uint8_t const lp503x_i2c_addr, int const i2c_frequency);
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

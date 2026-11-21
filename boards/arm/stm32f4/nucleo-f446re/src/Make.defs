@@ -20,8 +20,6 @@
 #
 ############################################################################
 
-include $(TOPDIR)/Make.defs
-
 CSRCS = stm32_boot.c stm32_bringup.c stm32_spi.c
 
 ifeq ($(CONFIG_ARCH_LEDS),y)
@@ -44,15 +42,6 @@ CSRCS += stm32_adc.c
 ifeq ($(CONFIG_INPUT_AJOYSTICK),y)
 CSRCS += stm32_ajoystick.c
 endif
-endif
-endif
-
-ifeq ($(CONFIG_STM32_CAN),y)
-ifeq ($(CONFIG_STM32_CAN_CHARDRIVER),y)
-CSRCS += stm32_can.c
-endif
-ifeq ($(CONFIG_STM32_CAN_SOCKET),y)
-CSRCS += stm32_cansock.c
 endif
 endif
 

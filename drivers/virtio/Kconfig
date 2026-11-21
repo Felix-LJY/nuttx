@@ -1,3 +1,24 @@
+############################################################################
+# drivers/virtio/Kconfig
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.  The
+# ASF licenses this file to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance with the
+# License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
+############################################################################
 #
 # For a description of the syntax of this configuration file,
 # see the file kconfig-language.txt in the NuttX tools repository.
@@ -42,12 +63,42 @@ config DRIVERS_VIRTIO_BLK
 	default n
 	select DRIVERS_VIRTIO
 
+config DRIVERS_VIRTIO_CRYPTO
+	bool "Virtio Crypto support"
+	depends on CRYPTO_CRYPTODEV
+	default n
+	select DRIVERS_VIRTIO
+
 config DRIVERS_VIRTIO_GPU
 	bool "Virtio gpu support"
 	default n
 	depends on VIDEO_FB
 	select FB_UPDATE
 	select DRIVERS_VIRTIO
+
+choice
+	prompt "Select virtio-gpu framebuffer format"
+	default DRIVERS_VIRTIO_GPU_XRGB8888
+	depends on DRIVERS_VIRTIO_GPU
+
+config DRIVERS_VIRTIO_GPU_XRGB8888
+	bool "XRGB8888"
+
+config DRIVERS_VIRTIO_GPU_RGB565
+	bool "RGB565 (Supported by virtio-gpu-gl)"
+
+endchoice
+
+config DRIVERS_VIRTIO_I2C
+	bool "Virtio I2C support"
+	default n
+	select I2C
+	select DRIVERS_VIRTIO
+	---help---
+		Enable the native VirtIO I2C frontend driver.  It probes a VirtIO
+		I2C adapter device (device ID 34), exposes a NuttX I2C lower-half
+		instance through virtio_i2c_get_master(), and submits transfers
+		through the request virtqueue using the OASIS VirtIO I2C wire format.
 
 config DRIVERS_VIRTIO_INPUT
 	bool "Virtio input support"
@@ -103,7 +154,7 @@ config DRIVERS_VIRTIO_SERIAL
 if DRIVERS_VIRTIO_SERIAL
 config DRIVERS_VIRTIO_SERIAL_BUFSIZE
 	int "Virtio serial driver buffer size"
-	default 256
+	default 1024
 
 config DRIVERS_VIRTIO_SERIAL_CONSOLE
 	bool "Virtio serial console"
@@ -138,3 +189,30 @@ config DRIVERS_VIRTIO_SND_BUFFER_COUNT
 	int "Virtio snd driver buffer count"
 	default 6
 endif
+
+config DRIVERS_VIRTIO_SPI
+	bool "Virtio SPI support"
+	depends on SPI && SPI_EXCHANGE
+	default n
+	select DRIVERS_VIRTIO
+	---help---
+		Enable the native VirtIO SPI frontend driver.  It probes a VirtIO
+		SPI device (device ID 45), reads the SPI configuration space,
+		exposes a NuttX SPI lower-half instance through
+		virtio_spi_get_master(), and submits transfers through the request
+		virtqueue using the Linux-compatible VirtIO SPI wire format.
+
+config DRIVERS_VIRTIO_GPIO
+	bool "Virtio GPIO support"
+	depends on IOEXPANDER
+	default n
+	select DRIVERS_VIRTIO
+	---help---
+		Enable the native VirtIO GPIO frontend driver.  It probes a VirtIO
+		GPIO device (device ID 41), exposes a NuttX ioexpander instance
+		through virtio_gpio_get_ioe(), and submits line requests through the
+		request virtqueue using the OASIS VirtIO GPIO wire format.
+
+		With IOEXPANDER_INT_ENABLE the driver also negotiates
+		VIRTIO_GPIO_F_IRQ and delivers line interrupts over the eventq;
+		without it the feature is declined and lines are polled only.

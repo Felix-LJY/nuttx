@@ -1,8 +1,8 @@
-===================
-PIC32MZ Starter Kit
-===================
+=============================
+Microchip PIC32MZ Starter Kit
+=============================
 
-.. tags:: arch:mips, chip:pic32mz
+.. tags:: arch:mips, chip:pic32mz, vendor:microchip
 
 Documentation for the NuttX port to the Microchip PIC32MZ Embedded Connectivity
 (EC) Starter Kit.

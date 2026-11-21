@@ -1,3 +1,24 @@
+############################################################################
+# drivers/mtd/Kconfig
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.  The
+# ASF licenses this file to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance with the
+# License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
+############################################################################
 #
 # For a description of the syntax of this configuration file,
 # see the file kconfig-language.txt in the NuttX tools repository.
@@ -935,6 +956,29 @@ config MX25RXX_LXX
 	default n
 
 endif # MTD_MX25RXX
+
+config MTD_MX66UW1G45G
+	bool "Macronix MX66UW1G45G XSPI flash"
+	default n
+	---help---
+		Enable the MTD driver for the 1-Gbit Macronix MX66UW1G45G
+		OctaBus flash memory.  The driver uses the QSPI interface.
+
+if MTD_MX66UW1G45G
+
+config MX66UW1G45G_QSPIMODE
+	int "MX66UW1G45G QSPI mode"
+	default 0
+	---help---
+		The MX66UW1G45G supports QSPI mode 0 or 3.
+
+config MX66UW1G45G_QSPI_FREQUENCY
+	int "MX66UW1G45G QSPI frequency"
+	default 75000000
+	---help---
+		Clock frequency used for MX66UW1G45G transfers.
+
+endif # MTD_MX66UW1G45G
 
 config MTD_GD55
 	bool "QuadSPI-based GigaDevices GD55 family FLASH"

@@ -29,8 +29,10 @@
 
 #include <nuttx/config.h>
 
+#include <errno.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <stdio.h>
 
 #include <arch/arch.h>
 #include <arch/types.h>
@@ -39,10 +41,9 @@
 #include <nuttx/cache.h>
 #include <nuttx/atexit.h>
 #include <nuttx/fs/fs.h>
-
-#ifdef CONFIG_PTHREAD_ATFORK
-#  include <nuttx/list.h>
-#endif
+#include <nuttx/list.h>
+#include <nuttx/mutex.h>
+#include <nuttx/queue.h>
 
 #include <sys/types.h>
 
@@ -75,12 +76,18 @@
  * Public Types
  ****************************************************************************/
 
+#ifdef CONFIG_FILE_STREAM
+struct streamlist
+{
+  mutex_t                 sl_lock;   /* For thread safety */
+  struct file_struct      sl_std[3];
+  sq_queue_t              sl_queue;
+};
+#endif /* CONFIG_FILE_STREAM */
+
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /* type tls_dtor_t **********************************************************/
@@ -90,6 +97,15 @@ extern "C"
  */
 
 typedef CODE void (*tls_dtor_t)(FAR void *);
+
+#ifdef CONFIG_TLS_EMUTLS
+/* The integer types of the emulated TLS of libgcc: a machine word, and an
+ * integer as wide as a pointer.
+ */
+
+typedef unsigned int emutls_word_t __attribute__((mode(word)));
+typedef unsigned int emutls_pointer_t __attribute__((mode(pointer)));
+#endif
 
 /* This structure encapsulates all variables associated with getopt(). */
 
@@ -108,6 +124,31 @@ struct getopt_s
   bool      go_binitialized; /* true:  getopt() has been initialized */
 };
 
+#ifdef CONFIG_FILE_STREAM
+/* The state of getusershell(), allocated by libc at the first call */
+
+struct usershell_s
+{
+  FAR FILE *us_file;         /* _PATH_SHELLS, or NULL: the default list */
+  FAR char *us_line;         /* The line buffer of getline() */
+  size_t    us_size;         /* The size of us_line */
+  size_t    us_next;         /* The next shell of the default list */
+};
+#endif
+
+#ifdef CONFIG_SYSLOG_OPENLOG
+/* This structure holds the settings of openlog() */
+
+#define OPENLOG_IDENT_SIZE 32
+
+struct openlog_s
+{
+  char ol_ident[OPENLOG_IDENT_SIZE]; /* Prefix of the messages */
+  int  ol_option;                    /* LOG_PID, LOG_PERROR ... */
+  int  ol_facility;                  /* Default facility */
+};
+#endif
+
 #ifdef CONFIG_PTHREAD_ATFORK
 /* This structure defines the pthread_atfork_s, which is used to manage
  * the funcs that operates on pthread_atfork() method
@@ -123,33 +164,65 @@ struct pthread_atfork_s
 };
 #endif
 
+struct __res_state;
+
 struct task_info_s
 {
-  mutex_t         ta_lock;
+  rmutex_t        ta_lock;
 #if CONFIG_TLS_TASK_NELEM > 0
   uintptr_t       ta_telem[CONFIG_TLS_TASK_NELEM]; /* Task local storage elements */
 #endif
 #if defined(CONFIG_TLS_NELEM) && CONFIG_TLS_NELEM > 0
   tls_dtor_t      ta_tlsdtor[CONFIG_TLS_NELEM]; /* List of TLS destructors      */
 #endif
+#if defined(CONFIG_LIBCXX) && !defined(CONFIG_DISABLE_PTHREAD)
+  FAR void       *ta_thread_local_data;  /* C++ thread local  */
+  void          (*ta_thread_local_dtor)(FAR void *);
+#endif
 #ifndef CONFIG_BUILD_KERNEL
   struct getopt_s ta_getopt; /* Globals used by getopt() */
-  mode_t          ta_umask;  /* File mode creation mask */
 #  ifdef CONFIG_LIBC_LOCALE
   char            ta_domain[NAME_MAX]; /* Current domain for gettext */
 #  endif
+#endif
+#ifdef CONFIG_NETDB_DNSCLIENT
+  FAR struct __res_state *ta_res; /* Resolver state (_res), allocated by
+                                   * libc at the first use
+                                   */
+#endif
+#ifdef CONFIG_SYSLOG_OPENLOG
+  struct openlog_s ta_openlog; /* Settings of openlog() */
 #endif
 #if CONFIG_LIBC_MAX_EXITFUNS > 0
   struct atexit_list_s ta_exit; /* Exit functions */
 #endif
 #ifdef CONFIG_FILE_STREAM
   struct streamlist ta_streamlist; /* Holds C buffered I/O info */
+
+  /* The state of getusershell(), allocated by libc */
+
+  FAR struct usershell_s *ta_usershell;
 #endif
 
 #ifdef CONFIG_PTHREAD_ATFORK
   struct list_node ta_atfork; /* Holds the pthread_atfork_s list */
 #endif
   pid_t ta_pid; /* Process ID */
+#ifndef CONFIG_DISABLE_ENVIRON
+  /* Environment variables **************************************************/
+
+  FAR char            **ta_envp;    /* The array that environ names         */
+  FAR char            **ta_envarr;  /* The array that libc allocated        */
+  FAR void             *ta_envmem;  /* Blocks that libc allocated, freed at
+                                     * exit
+                                     */
+  size_t                ta_envpc;   /* Maximum entries of environment array */
+  size_t                ta_envc;    /* Number of environment strings        */
+#endif
+#if defined(CONFIG_LIBC_ELF) || defined(CONFIG_BINFMT_LOADABLE)
+  rmutex_t         ta_modlock; /* Protects ta_modules */
+  struct list_node ta_modules; /* Objects this task group loaded */
+#endif
 };
 
 /* struct tls_cleanup_s *****************************************************/
@@ -226,11 +299,19 @@ struct tls_info_s
   int tl_errno;                        /* Per-thread error number */
   pid_t tl_tid;                        /* Thread ID */
   FAR char **tl_argv;                  /* Arguments first string */
+#ifdef CONFIG_TLS_EMUTLS
+  FAR void *tl_emutls;                 /* Copies of __thread variables */
+#endif
 
   /* Robust mutex support ***************************************************/
 
 #if !defined(CONFIG_DISABLE_PTHREAD) && !defined(CONFIG_PTHREAD_MUTEX_UNSAFE)
   FAR struct pthread_mutex_s *tl_mhead;   /* List of mutexes held by thread  */
+#endif
+
+#if defined(CONFIG_CXX_EXCEPTION) && !defined(CONFIG_SCHED_THREAD_LOCAL)
+  FAR void                   *tl_eh_globals;           /* __cxa_eh_globals */
+  void                      (*tl_eh_free)(FAR void *); /* Destructor       */
 #endif
 };
 
@@ -357,6 +438,22 @@ void tls_destruct(void);
 #endif
 
 /****************************************************************************
+ * Name: __wrap___emutls_get_address and __wrap___emutls_register_common
+ *
+ * Description:
+ *   The per-thread emulated TLS of libc.  --wrap sends the calls that GCC
+ *   makes to __emutls_get_address() and __emutls_register_common() here.
+ *   The system symbol table (libc.csv) needs these prototypes.
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_TLS_EMUTLS
+FAR void *__wrap___emutls_get_address(FAR void *arg);
+void __wrap___emutls_register_common(FAR void *arg, emutls_word_t size,
+                                     emutls_word_t align, FAR void *templ);
+#endif
+
+/****************************************************************************
  * Name: task_get_info
  *
  * Description:
@@ -372,6 +469,48 @@ void tls_destruct(void);
  ****************************************************************************/
 
 FAR struct task_info_s *task_get_info(void);
+
+#if defined(CONFIG_LIBC_ELF) || defined(CONFIG_BINFMT_LOADABLE)
+/****************************************************************************
+ * Name: task_modules_lock
+ *
+ * Description:
+ *   Lock the list of the objects that the calling task group loaded
+ *   (dlopen() and the libraries its program needs) and return it.  The
+ *   lock is recursive: the constructors of a library run with it held, and
+ *   they can call dlopen().
+ *
+ ****************************************************************************/
+
+static inline FAR struct list_node *task_modules_lock(void)
+{
+  FAR struct task_info_s *info = task_get_info();
+  int ret;
+
+  /* A signal must not make the caller run without the lock */
+
+  do
+    {
+      ret = nxrmutex_lock(&info->ta_modlock);
+    }
+  while (ret == -EINTR);
+
+  return &info->ta_modules;
+}
+
+/****************************************************************************
+ * Name: task_modules_unlock
+ *
+ * Description:
+ *   Unlock the list of the objects that the calling task group loaded.
+ *
+ ****************************************************************************/
+
+static inline void task_modules_unlock(void)
+{
+  nxrmutex_unlock(&task_get_info()->ta_modlock);
+}
+#endif
 
 #if CONFIG_TLS_NCLEANUP > 0
 /****************************************************************************
@@ -432,7 +571,6 @@ void tls_cleanup_popall(FAR struct tls_info_s *tls);
 #  define tls_cleanup_popall(tls) ((void)(tls))
 #endif
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

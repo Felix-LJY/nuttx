@@ -1,6 +1,8 @@
-================
-ESP32-C3 DevKit
-================
+=========================
+Espressif ESP32-C3-DevKit
+=========================
+
+.. tags:: arch:risc-v, chip:esp32c3, vendor:espressif
 
 The ESP32-C3 DevKit is an entry-level development board equipped with either
 an ESP32-C3-WROOM-02 or an ESP32-C3-MINI-1.

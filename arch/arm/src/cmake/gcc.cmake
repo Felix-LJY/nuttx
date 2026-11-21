@@ -83,10 +83,12 @@ if(CMAKE_GENERATOR MATCHES "Ninja")
   set(CMAKE_ASM_RESPONSE_FILE_FLAG "$DEFINES $INCLUDES $FLAGS @")
 endif()
 
-# override the ARCHIVE command
+# override the ARCHIVE command.  CMake keeps CMAKE_AR and CMAKE_RANLIB of the
+# first configure, so put the tools selected above in the rules: they follow a
+# later change of the LTO options.
 
-set(CMAKE_ARCHIVE_COMMAND "<CMAKE_AR> rcs <TARGET> <LINK_FLAGS> <OBJECTS>")
-set(CMAKE_RANLIB_COMMAND "<CMAKE_RANLIB> <TARGET>")
+set(CMAKE_ARCHIVE_COMMAND "${CMAKE_AR} rcs <TARGET> <LINK_FLAGS> <OBJECTS>")
+set(CMAKE_RANLIB_COMMAND "${CMAKE_RANLIB} <TARGET>")
 set(CMAKE_C_ARCHIVE_CREATE ${CMAKE_ARCHIVE_COMMAND})
 set(CMAKE_CXX_ARCHIVE_CREATE ${CMAKE_ARCHIVE_COMMAND})
 set(CMAKE_ASM_ARCHIVE_CREATE ${CMAKE_ARCHIVE_COMMAND})
@@ -184,7 +186,7 @@ endif()
 if(CONFIG_LTO_THIN)
   add_compile_options(-flto=thin)
 elseif(CONFIG_LTO_FULL)
-  add_compile_options(-flto)
+  add_compile_options(-flto=auto)
   add_compile_options(-fuse-linker-plugin)
 elseif(CONFIG_LTO_FAT)
   add_compile_options(-flto -ffat-lto-objects)
@@ -245,6 +247,14 @@ set(PICFLAGS -fpic -fPIE -mno-pic-data-is-text-relative -msingle-pic-base)
 if(CONFIG_BUILD_PIC)
   add_compile_options(${PICFLAGS} -mpic-register=r9)
   add_link_options(-Wl,--emit-relocs)
+endif()
+
+if(CONFIG_PIC)
+  # Reserve r9 across the base firmware so callbacks into module code arrive
+  # with the module's data base intact. ELF applications are excluded because
+  # they receive r9 via -mpic-register=r9.
+  add_compile_options(
+    $<$<NOT:$<BOOL:$<TARGET_PROPERTY:ELF_BINARY>>>:-ffixed-r9>)
 endif()
 
 add_compile_options(-Wno-attributes -Wno-unknown-pragmas

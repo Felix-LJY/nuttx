@@ -55,14 +55,16 @@ struct mrf24j40_lower_s
   int  (*attach)(FAR const struct mrf24j40_lower_s *lower, xcpt_t handler,
                  FAR void *arg);
   void (*enable)(FAR const struct mrf24j40_lower_s *lower, bool state);
+
+  /* Get the extended address of the board, NULL if it has none */
+
+  void (*geteaddr)(FAR const struct mrf24j40_lower_s *lower,
+                   FAR uint8_t *eaddr);
 };
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -95,7 +97,6 @@ FAR struct ieee802154_radio_s *
   mrf24j40_init(FAR struct spi_dev_s *spi,
                 FAR const struct mrf24j40_lower_s *lower);
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

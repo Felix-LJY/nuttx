@@ -31,6 +31,7 @@
 
 #include <spawn.h>
 #include <sys/types.h>
+#include <stdbool.h>
 
 #include <nuttx/sched.h>
 #include <nuttx/lib/elf.h>
@@ -72,6 +73,7 @@ struct binary_s
 #ifdef CONFIG_LIBC_ELF
   struct module_s mod;                 /* Module context */
 #endif
+  struct list_node libraries;          /* The libraries it needs */
 
 #ifdef CONFIG_PIC
   FAR void *picbase;                   /* Position-independent */
@@ -109,6 +111,15 @@ struct binary_s
 
 #ifndef CONFIG_BUILD_KERNEL
   FAR void *stackaddr;                 /* Task stack address */
+#endif
+
+  FAR char **argv;                     /* Arguments in place of argv[0],
+                                        * from the loader, or NULL: for
+                                        * example the interpreter of a
+                                        * script, its argument and the
+                                        * script.  Freed by unload_module() */
+#ifdef CONFIG_BINFMT_SCRIPT
+  uint8_t scriptdepth;                 /* Scripts being loaded */
 #endif
 
   /* Unload module callback */
@@ -232,6 +243,8 @@ int unload_module(FAR struct binary_s *bin);
  *
  * Description:
  *   Execute a module that has been loaded into memory by load_module().
+ *   The new task takes the address environment of the module.  On failure
+ *   the caller releases a binp->addrenv that is not NULL.
  *
  * Returned Value:
  *   This is a NuttX internal function so it follows the convention that
@@ -374,7 +387,6 @@ int exec_spawn(FAR const char *filename, FAR char * const *argv,
 int binfmt_exit(FAR struct binary_s *bin);
 #endif
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

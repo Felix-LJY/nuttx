@@ -26,12 +26,44 @@ ifeq ($(CONFIG_DRIVERS_VHOST),y)
   CSRCS += vhost.c
 endif
 
+ifeq ($(CONFIG_DRIVERS_VHOST_BLK),y)
+  CSRCS += vhost-blk.c
+endif
+
+ifeq ($(CONFIG_DRIVERS_VHOST_CAN),y)
+  CSRCS += vhost-can.c
+endif
+
+ifeq ($(CONFIG_DRIVERS_VHOST_I2C),y)
+  CSRCS += vhost-i2c.c
+endif
+
+ifeq ($(CONFIG_DRIVERS_VHOST_SPI),y)
+  CSRCS += vhost-spi.c
+endif
+
+ifeq ($(CONFIG_DRIVERS_VHOST_GPIO),y)
+  CSRCS += vhost-gpio.c
+endif
+
+ifeq ($(CONFIG_DRIVERS_VHOST_RPMB),y)
+  CSRCS += vhost-rpmb.c
+endif
+
 ifeq ($(CONFIG_DRIVERS_VHOST_RNG),y)
   CSRCS += vhost-rng.c
 endif
 
+ifeq ($(CONFIG_DRIVERS_VHOST_NET),y)
+CSRCS += vhost-net.c
+endif
+
 ifeq ($(CONFIG_DRIVERS_VHOST_RPMSG),y)
   CSRCS += vhost-rpmsg.c
+endif
+
+ifeq ($(CONFIG_DRIVERS_VHOST_SERIAL),y)
+  CSRCS += vhost-serial.c
 endif
 
 # Include build support

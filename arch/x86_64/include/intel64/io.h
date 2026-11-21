@@ -179,7 +179,9 @@ static inline void up_invalid_tlb(uintptr_t start, uintptr_t end)
 
   for (i = start; i < end; i += PAGE_SIZE)
     {
-      __asm__ volatile ("invlpg %0;":: "m"(i):"memory");
+      /* The operand of invlpg is the address to invalidate */
+
+      __asm__ volatile ("invlpg (%0)" :: "r"(i) : "memory");
     }
 }
 
@@ -192,14 +194,10 @@ static inline void up_invalid_tlb(uintptr_t start, uintptr_t end)
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

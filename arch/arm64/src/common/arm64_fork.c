@@ -86,6 +86,17 @@ static uint64_t arm64_fork_stack(struct tcb_s *parent, struct tcb_s *child,
   uint64_t stackutil;
   uint64_t newtop;
 
+  if (child->stack_base_ptr == parent->stack_base_ptr)
+    {
+      /* The child is running on the parent's stack addresses:  a fork()
+       * child, which inherited them and already has its own copy of the
+       * contents in its duplicated address environment.  There is nothing to
+       * copy and no offset to apply.
+       */
+
+      return 0;
+    }
+
   /* How much of the parent's stack was utilized?  The ARM uses a push-down
    * stack so that the current stack pointer should be lower than the
    * initial, adjusted stack pointer.  The stack usage should be the
@@ -251,6 +262,7 @@ static pid_t arm64_fork_direct(bool vfork, struct tcb_s *parent,
 #endif
 
   child->xcp.regs[REG_EXE_DEPTH] = 0;
+  child->xcp.regs[REG_TPIDR_EL0] = (uint64_t)child->stack_alloc_ptr;
   child->xcp.regs[REG_SP_ELX]    = newsp - XCPTCONTEXT_SIZE;
 #ifdef CONFIG_ARCH_KERNEL_STACK
   child->xcp.regs[REG_SP_EL0]    = (uint64_t)child->xcp.ustkptr;
@@ -366,6 +378,7 @@ static pid_t arm64_fork_syscall(bool vfork, struct tcb_s *parent)
   child->xcp.regs[REG_X0]        = 0;
   child->xcp.regs[REG_FP]        = newfp;
   child->xcp.regs[REG_EXE_DEPTH] = 0;
+  child->xcp.regs[REG_TPIDR_EL0] = (uint64_t)child->stack_alloc_ptr;
   child->xcp.regs[REG_SP_ELX]    = regtop - XCPTCONTEXT_SIZE;
 
   if ((sregs[REG_SPSR] & SPSR_MODE_MASK) == SPSR_MODE_EL0T)

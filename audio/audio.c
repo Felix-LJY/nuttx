@@ -77,9 +77,10 @@ struct audio_openpriv_s
 {
   unsigned long               head;
   int                         state;
-  FAR struct pollfd           *fd;
+  FAR struct pollfd_s         *fd;
   FAR struct audio_openpriv_s *flink;
-  struct file                 *usermq; /* User mode app's message queue */
+  struct file                 *usermq;  /* User mode app's message queue */
+  struct file                 kernelmq; /* Kernel managed message queue */
 };
 
 /* This structure describes the state of the upper half driver */
@@ -95,6 +96,8 @@ struct audio_upperhalf_s
   FAR struct audio_lowerhalf_s *dev;     /* lower-half state */
   FAR struct audio_openpriv_s  *head;    /* Appl private info list */
   struct audio_status_s        *status;  /* lowerhalf driver status */
+  struct file                  file;     /* dump file */
+  bool                         dump;     /* dump started */
 };
 
 /****************************************************************************
@@ -115,7 +118,7 @@ static int      audio_ioctl(FAR struct file *filep,
 static int      audio_mmap(FAR struct file *filep,
                            FAR struct mm_map_entry_s *map);
 static int      audio_poll(FAR struct file *filep,
-                           FAR struct pollfd *fds, bool setup);
+                           FAR struct pollfd_s *fds, bool setup);
 #ifdef CONFIG_AUDIO_MULTI_SESSION
 static void     audio_callback(FAR void *priv,
                                uint16_t reason,
@@ -151,6 +154,74 @@ static const struct file_operations g_audioops =
  ****************************************************************************/
 
 /****************************************************************************
+ * Name: audio_registermq
+ *
+ * Description:
+ *   Handle the AUDIOIOC_REGISTERMQ ioctl command.
+ *   Supports two modes: Kernel_MQ (arg == AUDIO_MQ_KERNEL) and User_MQ.
+ *   The two modes are mutually exclusive.
+ *
+ ****************************************************************************/
+
+static int audio_registermq(FAR struct audio_openpriv_s *priv,
+                            unsigned long arg)
+{
+  if (priv->usermq != NULL)
+    {
+      return -EBUSY;
+    }
+
+  if (arg == AUDIO_MQ_KERNEL)
+    {
+      /* Kernel_MQ mode */
+
+      struct mq_attr attr;
+      char mqname[32];
+      int ret;
+
+      attr.mq_maxmsg  = 32;
+      attr.mq_msgsize = sizeof(struct audio_msg_s);
+      attr.mq_flags   = 0;
+      attr.mq_curmsgs = 0;
+
+      snprintf(mqname, sizeof(mqname), "/aud_%p", priv);
+      ret = file_mq_open(&priv->kernelmq, mqname,
+                         O_RDWR | O_CREAT, 0644, &attr);
+      if (ret >= 0)
+        {
+          file_mq_unlink(mqname);
+          priv->usermq = &priv->kernelmq;
+        }
+
+      return ret;
+    }
+
+  return file_get((mqd_t)arg, &priv->usermq);
+}
+
+/****************************************************************************
+ * Name: audio_unregistermq
+ *
+ * Description:
+ *   Release the message queue associated with the open instance.
+ *
+ ****************************************************************************/
+
+static void audio_unregistermq(FAR struct audio_openpriv_s *priv)
+{
+  if (priv->usermq == &priv->kernelmq)
+    {
+      file_mq_close(priv->usermq);
+    }
+  else if (priv->usermq != NULL)
+    {
+      file_put(priv->usermq);
+    }
+
+  priv->usermq = NULL;
+}
+
+/****************************************************************************
  * Name: audio_open
  *
  * Description:
@@ -166,11 +237,18 @@ static int audio_open(FAR struct file *filep)
   irqstate_t flags;
   int ret;
 
+  priv = kmm_zalloc(sizeof(*priv));
+  if (priv == NULL)
+    {
+      return -ENOMEM;
+    }
+
   /* Get exclusive access to the device structures */
 
   ret = nxmutex_lock(&upper->lock);
   if (ret < 0)
     {
+      kmm_free(priv);
       return ret;
     }
 
@@ -187,13 +265,6 @@ static int audio_open(FAR struct file *filep)
         }
     }
 
-  priv = kmm_zalloc(sizeof(*priv));
-  if (priv == NULL)
-    {
-      ret = -ENOMEM;
-      goto errout;
-    }
-
   flags = spin_lock_irqsave(&upper->spinlock);
   priv->flink = upper->head;
   filep->f_priv = priv;
@@ -203,6 +274,11 @@ static int audio_open(FAR struct file *filep)
 
 errout:
   nxmutex_unlock(&upper->lock);
+  if (ret < 0)
+    {
+      kmm_free(priv);
+    }
+
   return ret;
 }
 
@@ -248,10 +324,6 @@ static int audio_close(FAR struct file *filep)
       upper->head = priv->flink;
     }
 
-  spin_unlock_irqrestore(&upper->spinlock, flags);
-
-  kmm_free(priv);
-
   /*  If the reference head decrement to NULL,
    *  then uninitialize the driver.
    */
@@ -270,6 +342,12 @@ static int audio_close(FAR struct file *filep)
       upper->status = NULL;
     }
 
+  spin_unlock_irqrestore(&upper->spinlock, flags);
+
+  /* Clean up message queue */
+
+  audio_unregistermq(priv);
+  kmm_free(priv);
   ret = OK;
   nxmutex_unlock(&upper->lock);
 
@@ -609,7 +687,11 @@ static int audio_start(FAR struct file *filep)
 #ifndef CONFIG_AUDIO_EXCLUDE_PAUSE_RESUME
   else if (upper->status->state == AUDIO_STATE_PAUSED)
     {
+#ifdef CONFIG_AUDIO_MULTI_SESSION
+      return audio_resume(filep, session);
+#else
       return audio_resume(filep);
+#endif
     }
 #endif /* CONFIG_AUDIO_EXCLUDE_PAUSE_RESUME */
 
@@ -660,6 +742,7 @@ static int audio_stop(FAR struct file *filep)
   FAR struct audio_lowerhalf_s *lower = upper->dev;
   FAR struct audio_openpriv_s *priv = filep->f_priv;
   int nstate;
+  int tstate;
   int ret;
 
   DEBUGASSERT(upper != NULL && lower->ops->stop != NULL);
@@ -669,6 +752,8 @@ static int audio_stop(FAR struct file *filep)
        upper->status->state == AUDIO_STATE_PAUSED) &&
       nstate == AUDIO_STATE_OPEN)
     {
+      tstate = upper->status->state;
+      audio_setstate(upper, AUDIO_STATE_DRAINING);
 #ifdef CONFIG_AUDIO_MULTI_SESSION
       ret = lower->ops->stop(lower, session);
 #else
@@ -676,22 +761,20 @@ static int audio_stop(FAR struct file *filep)
 #endif
       if (ret != OK)
         {
+          audio_setstate(upper, tstate);
           return ret;
         }
 
       memset(&upper->info, 0, sizeof(upper->info));
-
-      /* Audio_complete may have set state to AUDIO_STATE_OPEN */
-
-      if (upper->status->state != AUDIO_STATE_OPEN)
-        {
-          audio_setstate(upper, AUDIO_STATE_DRAINING);
-        }
     }
 #ifndef CONFIG_AUDIO_EXCLUDE_PAUSE_RESUME
   else if (nstate == AUDIO_STATE_PAUSED)
     {
+#ifdef CONFIG_AUDIO_MULTI_SESSION
+      ret = audio_pause(filep, session);
+#else
       ret = audio_pause(filep);
+#endif
       if (ret != OK)
         {
           return ret;
@@ -856,6 +939,76 @@ static int audio_enqueuebuffer(FAR struct file *filep,
   return ret;
 }
 
+static int audio_dump(FAR struct audio_upperhalf_s *upper, FAR char *path)
+{
+  int ret = OK;
+
+  if (path == NULL)
+    {
+      if (upper->dump)
+        {
+          ret = file_close(&upper->file);
+          if (ret < 0)
+            {
+              return ret;
+            }
+
+          upper->dump = false;
+        }
+
+      return ret;
+    }
+
+  if (upper->dump)
+    {
+      ret = file_close(&upper->file);
+      if (ret < 0)
+        {
+          return ret;
+        }
+
+      upper->dump = false;
+    }
+
+  ret = file_open(&upper->file, path,
+                  O_WRONLY | O_TRUNC | O_CREAT | O_CLOEXEC, 0666);
+  if (ret < 0)
+    {
+      return ret;
+    }
+
+  upper->dump = true;
+  return ret;
+}
+
+/****************************************************************************
+ * Name: audio_receivemsg
+ *
+ * Description:
+ *   Handle the AUDIOIOC_RECEIVEMSG ioctl command.
+ *   Receive a message from the registered message queue (either Kernel_MQ
+ *   or User_MQ) with timeout support.
+ *
+ ****************************************************************************/
+
+static int audio_receivemsg(FAR struct audio_openpriv_s *priv,
+                            unsigned long arg)
+{
+  FAR struct audio_msg_timeout_s *param =
+    (FAR struct audio_msg_timeout_s *)((uintptr_t)arg);
+  unsigned int prio;
+
+  if (param == NULL || priv->usermq == NULL)
+    {
+      return -EINVAL;
+    }
+
+  return file_mq_tickreceive(priv->usermq,
+                            (FAR char *)&param->msg,
+                            sizeof(param->msg),
+                            &prio, param->ticks);
+}
+
 /****************************************************************************
  * Name: audio_ioctl
  *
@@ -895,6 +1048,7 @@ static int audio_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
         {
           FAR struct audio_caps_s *caps =
                      (FAR struct audio_caps_s *)((uintptr_t)arg);
+
           DEBUGASSERT(lower->ops->getcaps != NULL);
 
           audinfo("AUDIOIOC_GETCAPS: Device=%d\n", caps->ac_type);
@@ -1057,7 +1211,7 @@ static int audio_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
         {
           audinfo("AUDIOIOC_REGISTERMQ\n");
 
-          ret = file_get((mqd_t)arg, &priv->usermq);
+          ret = audio_registermq(priv, arg);
         }
         break;
 
@@ -1070,13 +1224,20 @@ static int audio_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
         {
           audinfo("AUDIOIOC_UNREGISTERMQ\n");
 
-          if (priv->usermq != NULL)
-            {
-              file_put(priv->usermq);
-              priv->usermq = NULL;
-            }
-
+          audio_unregistermq(priv);
           ret = OK;
+        }
+        break;
+
+      /* RECEIVEMSG must not hold upper->lock (mq is thread-safe,
+       * and blocking would prevent other ioctls).
+       */
+
+      case AUDIOIOC_RECEIVEMSG:
+        {
+          nxmutex_unlock(&upper->lock);
+          ret = audio_receivemsg(priv, arg);
+          nxmutex_lock(&upper->lock);
         }
         break;
 
@@ -1221,6 +1382,12 @@ static int audio_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
         }
         break;
 
+      case AUDIOIOC_DUMP:
+        {
+          ret = audio_dump(upper, (FAR char *)arg);
+        }
+        break;
+
       /* Any unrecognized IOCTL commands might be
        * platform-specific ioctl commands
        */
@@ -1301,6 +1468,26 @@ static int audio_mmap(FAR struct file *filep, FAR struct mm_map_entry_s *map)
 }
 
 /****************************************************************************
+ * Name: audio_check_mq
+ *
+ * Description:
+ *   Check if the message queue has pending messages.
+ *
+ ****************************************************************************/
+
+static bool audio_check_mq(FAR struct file *mq)
+{
+  struct mq_attr attr;
+
+  if (mq == NULL || file_mq_getattr(mq, &attr) < 0)
+    {
+      return false;
+    }
+
+  return attr.mq_curmsgs > 0;
+}
+
+/****************************************************************************
  * Name: audio_poll
  *
  * Description:
@@ -1309,7 +1496,7 @@ static int audio_mmap(FAR struct file *filep, FAR struct mm_map_entry_s *map)
  ****************************************************************************/
 
 static int audio_poll(FAR struct file *filep,
-                      FAR struct pollfd *fds, bool setup)
+                      FAR struct pollfd_s *fds, bool setup)
 {
   FAR struct inode *inode = filep->f_inode;
   FAR struct audio_upperhalf_s *upper = inode->i_private;
@@ -1325,15 +1512,27 @@ static int audio_poll(FAR struct file *filep,
     {
       priv->fd = fds;
       fds->priv = &priv->fd;
+      eventset = 0;
 
-      if (priv->head - upper->status->tail != upper->periods)
+      if (upper->periods > 0)
         {
-          eventset = POLLIN | POLLOUT;
+          if (priv->head - upper->status->tail != upper->periods)
+            {
+              eventset = POLLIN | POLLOUT;
+            }
+
           if ((long)(priv->head - upper->status->tail) <= 0)
             {
               eventset |= POLLERR;
             }
+        }
+      else if (audio_check_mq(priv->usermq))
+        {
+          eventset = POLLIN | POLLOUT;
+        }
 
+      if (eventset)
+        {
           poll_notify(&fds, 1, eventset);
         }
     }
@@ -1341,7 +1540,8 @@ static int audio_poll(FAR struct file *filep,
     {
       /* This is a request to tear down the poll. */
 
-      FAR struct pollfd **slot = (FAR struct pollfd **)fds->priv;
+      FAR struct pollfd_s **slot = (FAR struct pollfd_s **)fds->priv;
+
       *slot = NULL;
       fds->priv = NULL;
     }
@@ -1362,6 +1562,7 @@ static inline void audio_sendmsg(FAR struct audio_upperhalf_s *upper,
                                  FAR struct audio_msg_s *msg)
 {
   FAR struct audio_openpriv_s *priv;
+  pollevent_t eventset;
   irqstate_t flags;
 
   flags = spin_lock_irqsave_nopreempt(&upper->spinlock);
@@ -1371,6 +1572,18 @@ static inline void audio_sendmsg(FAR struct audio_upperhalf_s *upper,
         {
           file_mq_send(priv->usermq, (FAR const char *)msg, sizeof(*msg),
                        CONFIG_AUDIO_BUFFER_DEQUEUE_PRIO);
+        }
+
+      if (priv->fd)
+        {
+          eventset = POLLIN | POLLOUT;
+          if (upper->periods > 0 &&
+              (long)(priv->head - upper->status->tail) <= 0)
+            {
+              eventset |= POLLERR;
+            }
+
+          poll_notify(&priv->fd, 1, eventset);
         }
     }
 
@@ -1418,12 +1631,15 @@ static inline void audio_dequeuebuffer(FAR struct audio_upperhalf_s *upper,
                     FAR struct ap_buffer_s *apb, uint16_t status)
 #endif
 {
-  FAR struct audio_openpriv_s *priv;
   struct audio_msg_s    msg;
-  pollevent_t eventset;
   irqstate_t flags;
 
   audinfo("Entry\n");
+
+  if (upper->dump && !up_interrupt_context())
+    {
+      file_write(&upper->file, apb->samp, apb->nbytes);
+    }
 
   if (upper->info.type == AUDIO_TYPE_OUTPUT)
     {
@@ -1432,22 +1648,14 @@ static inline void audio_dequeuebuffer(FAR struct audio_upperhalf_s *upper,
     }
 
   flags = spin_lock_irqsave_nopreempt(&upper->spinlock);
-  upper->status->tail++;
-  audio_try_enqueue(upper);
-  for (priv = upper->head; priv != NULL; priv = priv->flink)
+  if (upper->status == NULL)
     {
-      if (priv->fd > 0)
-        {
-          eventset = POLLIN | POLLOUT;
-          if ((long)(priv->head - upper->status->tail) <= 0)
-            {
-              eventset |= POLLERR;
-            }
-
-          poll_notify(&priv->fd, 1, eventset);
-        }
+      spin_unlock_irqrestore_nopreempt(&upper->spinlock, flags);
+      return;
     }
 
+  upper->status->tail++;
+  audio_try_enqueue(upper);
   spin_unlock_irqrestore_nopreempt(&upper->spinlock, flags);
 
   /* Send a dequeue message to the user if a message queue is registered */
@@ -1481,13 +1689,17 @@ static inline void audio_complete(FAR struct audio_upperhalf_s *upper,
 #endif
 {
   struct audio_msg_s    msg;
+  irqstate_t flags;
 
   audinfo("Entry\n");
 
-  if (upper->status != NULL)
+  flags = spin_lock_irqsave(&upper->spinlock);
+  if (upper->status && (upper->status->state == AUDIO_STATE_DRAINING))
     {
-      audio_setstate(upper, AUDIO_STATE_OPEN);
+      upper->status->state = AUDIO_STATE_OPEN;
     }
+
+  spin_unlock_irqrestore(&upper->spinlock, flags);
 
   /* Send a dequeue message to the user if a message queue is registered */
 
@@ -1703,6 +1915,65 @@ static void audio_callback(FAR void *handle, uint16_t reason,
 }
 
 /****************************************************************************
+ * Name: audio_get_path
+ *
+ * Description:
+ *   Convert a audio device name to a full path in filesystem.
+ *
+ * Input Parameters:
+ *   name - Audio device name
+ *   path - Outvalue, device absolute path in filesystem
+ *
+ * Returned Value:
+ *   None
+ *
+ ****************************************************************************/
+
+static void audio_get_path(FAR const char *name, FAR char *path,
+                           size_t pathlen)
+{
+#ifndef CONFIG_AUDIO_CUSTOM_DEV_PATH
+  FAR const char *devname = "/dev/audio";
+#elif !defined(CONFIG_AUDIO_DEV_ROOT)
+  FAR const char *devname = CONFIG_AUDIO_DEV_PATH;
+#endif
+
+#ifdef CONFIG_AUDIO_CUSTOM_DEV_PATH
+
+#ifdef CONFIG_AUDIO_DEV_ROOT
+
+  /* This is the simple case ... No need to make a directory */
+
+  strlcpy(path, "/dev/", pathlen);
+  strlcat(path, name, pathlen);
+
+#else
+  /* Ensure the path begins with "/dev" as we don't support placing device
+   * anywhere but in the /dev directory
+   */
+
+  DEBUGASSERT(strncmp(devname, "/dev", 4) == 0);
+
+  strlcpy(path, devname, pathlen);
+  if (devname[strlen(devname) - 1] != '/')
+    {
+      strlcat(path, "/", pathlen);
+    }
+
+  strlcat(path, name, pathlen);
+#endif /* CONFIG_AUDIO_DEV_PATH=="/dev" */
+
+#else /* CONFIG_AUDIO_CUSTOM_DEV_PATH */
+
+  /* Unregister the Audio device */
+
+  strlcpy(path, devname, pathlen);
+  strlcat(path, "/", pathlen);
+  strlcat(path, name, pathlen);
+#endif
+}
+
+/****************************************************************************
  * Public Functions
  ****************************************************************************/
 
@@ -1735,14 +2006,13 @@ int audio_register(FAR const char *name, FAR struct audio_lowerhalf_s *dev)
 {
   FAR struct audio_upperhalf_s *upper;
   char path[AUDIO_MAX_DEVICE_PATH];
-  static bool dev_audio_created = false;
-#ifndef CONFIG_AUDIO_CUSTOM_DEV_PATH
-  FAR const char *devname = "/dev/audio";
-#elif !defined(CONFIG_AUDIO_DEV_ROOT)
-  FAR const char *devname = CONFIG_AUDIO_DEV_PATH;
-  FAR const char *ptr;
-  FAR char *pathptr;
-#endif
+  int ret;
+
+  if (!name || !dev)
+    {
+      auderr("ERROR: Invalid arguments\n");
+      return -EINVAL;
+    }
 
   /* Allocate the upper-half data structure */
 
@@ -1761,101 +2031,9 @@ int audio_register(FAR const char *name, FAR struct audio_lowerhalf_s *dev)
   spin_lock_init(&upper->spinlock);
   upper->dev = dev;
 
-#ifdef CONFIG_AUDIO_CUSTOM_DEV_PATH
-
-#ifdef CONFIG_AUDIO_DEV_ROOT
-
-  /* This is the simple case ... No need to make a directory */
-
-  strlcpy(path, "/dev/", sizeof(path));
-  strlcat(path, name, sizeof(path));
-
-#else
-  /* Ensure the path begins with "/dev" as we don't support placing device
-   * anywhere but in the /dev directory
-   */
-
-  DEBUGASSERT(strncmp(devname, "/dev", 4) == 0);
-
-  /* Create a /dev/audio directory. */
-
-  if (!dev_audio_created)
-    {
-      /* Get path name after "/dev" */
-
-      ptr = &devname[4];
-      if (*ptr == '/')
-        {
-          ptr++;
-        }
-
-      strlcpy(path, "/dev/", sizeof(path));
-      pathptr = &path[5];
-
-      /* Do mkdir for each segment of the path */
-
-      while (*ptr != '\0')
-        {
-          /* Build next path segment into path variable */
-
-          while (*ptr != '/' && *ptr != '\0')
-            {
-              *pathptr++ = *ptr++;
-            }
-
-          *pathptr = '\0';
-
-          /* Make this level of directory */
-
-          mkdir(path, 0644);
-
-          /* Check for another level */
-
-          *pathptr++ = '/';
-          if (*ptr == '/')
-            {
-              ptr++;
-            }
-        }
-
-      /* Indicate we have created the audio dev path */
-
-      dev_audio_created = true;
-    }
-
-  /* Now build the path for registration */
-
-  strlcpy(path, devname, sizeof(path));
-  if (devname[sizeof(devname)-1] != '/')
-    {
-      strlcat(path, "/", sizeof(path));
-    }
-
-  strlcat(path, name, sizeof(path));
-
-#endif /* CONFIG_AUDIO_DEV_PATH=="/dev" */
-
-#else  /* CONFIG_AUDIO_CUSTOM_DEV_PATH */
-
-  /* Create a /dev/audio directory. */
-
-  if (!dev_audio_created)
-    {
-      /* We don't check for error here because even if it fails, then
-       * the register_driver call below will return an error condition
-       * for us.
-       */
-
-      mkdir(devname, 0644);
-      dev_audio_created = true;
-    }
-
   /* Register the Audio device */
 
-  strlcpy(path, devname, sizeof(path));
-  strlcat(path, "/", sizeof(path));
-  strlcat(path, name, sizeof(path));
-#endif
+  audio_get_path(name, path, sizeof(path));
 
   /* Give the lower-half a context to the upper half */
 
@@ -1863,7 +2041,85 @@ int audio_register(FAR const char *name, FAR struct audio_lowerhalf_s *dev)
   dev->priv = upper;
 
   audinfo("Registering %s\n", path);
-  return register_driver(path, &g_audioops, 0660, upper);
+  ret = register_driver(path, &g_audioops, 0660, upper);
+  if (ret != OK)
+    {
+      auderr("Failed to register %s\n", path);
+      kmm_free(upper);
+    }
+
+  return ret;
+}
+
+/****************************************************************************
+ * Name: audio_unregister
+ *
+ * Description:
+ *   This function unbinds an instance of a "lower half" Audio driver with
+ *   the "upper half" Audio device and unregisters that device from the
+ *   filesystem.
+ *
+ *   When this function is called, the "lower half" driver should be in the
+ *   reset state (as if the shutdown() method had already been called).
+ *
+ * Input Parameters:
+ *   name - The name of the audio device.  This name will be used to generate
+ *     a full path to the driver in the format "/dev/audio/[name]" in the
+ *     NuttX filesystem (i.e. the path "/dev/audio" will be prepended to the
+ *     supplied device name.  The recommended convention is to name Audio
+ *     drivers based on the type of functionality they provide, such as
+ *     "/dev/audio/pcm0", "/dev/audio/midi0", "/dev/audio/mp30, etc.
+ *   dev - A pointer to an instance of lower half audio driver. This instance
+ *     is bound to the Audio driver and must persists as long as the driver
+ *     persists.
+ *
+ * Returned Value:
+ *   Zero on success; a negated errno value on failure.  -EBUSY means the
+ *   device is still open.
+ *
+ ****************************************************************************/
+
+int audio_unregister(FAR const char *name, FAR struct audio_lowerhalf_s *dev)
+{
+  FAR struct audio_upperhalf_s *upper;
+  char path[AUDIO_MAX_DEVICE_PATH];
+  int ret;
+
+  if (!name || !dev || !dev->priv)
+    {
+      auderr("ERROR: Invalid arguments\n");
+      return -EINVAL;
+    }
+
+  upper = dev->priv;
+  ret = nxmutex_lock(&upper->lock);
+  if (ret < 0)
+    {
+      return ret;
+    }
+
+  /* Open files still reach upper through the inode */
+
+  if (upper->head != NULL)
+    {
+      nxmutex_unlock(&upper->lock);
+      return -EBUSY;
+    }
+
+  audio_get_path(name, path, sizeof(path));
+
+  ret = unregister_driver(path);
+  nxmutex_unlock(&upper->lock);
+  if (ret < 0)
+    {
+      auderr("Failed to unregister %s\n", path);
+      return ret;
+    }
+
+  nxmutex_destroy(&upper->lock);
+  kmm_free(upper);
+  dev->priv = NULL;
+  return 0;
 }
 
 #endif /* CONFIG_AUDIO */

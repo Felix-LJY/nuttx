@@ -26,6 +26,7 @@
 
 #include <nuttx/config.h>
 
+#include <limits.h>
 #include <stdint.h>
 #include <time.h>
 #include <string.h>
@@ -35,6 +36,7 @@
 #include <nuttx/irq.h>
 
 #include "clock/clock.h"
+#include "signal/signal.h"
 #include "timer/timer.h"
 
 #ifndef CONFIG_DISABLE_POSIX_TIMERS
@@ -53,11 +55,128 @@ static void timer_timeout(wdparm_t itimer);
  ****************************************************************************/
 
 /****************************************************************************
+ * Name: timer_overrun
+ *
+ * Description:
+ *   Count n more overruns of the timer, up to DELAYTIMER_MAX.
+ *
+ ****************************************************************************/
+
+static inline void timer_overrun(FAR struct posix_timer_s *timer, clock_t n)
+{
+  if (n >= (clock_t)(DELAYTIMER_MAX - timer->pt_overrun))
+    {
+      timer->pt_overrun = DELAYTIMER_MAX;
+    }
+  else
+    {
+      timer->pt_overrun += (int)n;
+    }
+}
+
+#if CONFIG_SCHED_CRITMONITOR_MAXTIME_THREAD >= 0
+/****************************************************************************
+ * Name: timer_cpu_getticks
+ *
+ * Description:
+ *   Read the CPU-time clock of the timer, in ticks rounded down.
+ *
+ ****************************************************************************/
+
+static int timer_cpu_getticks(FAR struct posix_timer_s *timer,
+                              FAR clock_t *ticks)
+{
+  struct timespec ts;
+  int ret;
+
+  ret = nxclock_gettime(timer->pt_clock, &ts);
+  if (ret >= 0)
+    {
+      *ticks = clock_time2ticks_floor(&ts);
+    }
+
+  return ret;
+}
+
+/****************************************************************************
+ * Name: timer_cpu_start
+ *
+ * Description:
+ *   Start the watchdog of a CPU-time timer.  The CPU time cannot reach
+ *   pt_expected before the watchdog expires.  timer_timeout() then reads
+ *   the clock again and starts the watchdog again if that is necessary.
+ *
+ ****************************************************************************/
+
+static int timer_cpu_start(FAR struct posix_timer_s *timer, clock_t ticks)
+{
+  clock_t delay = timer->pt_expected - ticks;
+
+  if (delay < 0)
+    {
+      delay = 0;
+    }
+
+#ifdef CONFIG_SMP
+  /* The threads of a process can run on all CPUs at the same time */
+
+  if ((timer->pt_clock & CLOCK_MASK) == CLOCK_PROCESS_CPUTIME_ID)
+    {
+      delay = div_round_up(delay, CONFIG_SMP_NCPUS);
+    }
+#endif
+
+  return wd_start(&timer->pt_wdog, delay, timer_timeout, (wdparm_t)timer);
+}
+
+/****************************************************************************
+ * Name: timer_cpu_settime
+ *
+ * Description:
+ *   Arm a CPU-time timer.  pt_expected is a time on the CPU-time clock.
+ *
+ ****************************************************************************/
+
+static int timer_cpu_settime(FAR struct posix_timer_s *timer, int flags,
+                             FAR const struct timespec *value)
+{
+  struct timespec ts;
+  int ret;
+
+  ret = nxclock_gettime(timer->pt_clock, &ts);
+  if (ret < 0)
+    {
+      return ret;
+    }
+
+  if ((flags & TIMER_ABSTIME) != 0)
+    {
+      timer->pt_expected = clock_time2ticks(value);
+    }
+  else
+    {
+      struct timespec expected;
+
+      clock_timespec_add(&ts, value, &expected);
+      timer->pt_expected = clock_time2ticks(&expected);
+    }
+
+  return timer_cpu_start(timer, clock_time2ticks_floor(&ts));
+}
+#endif /* CONFIG_SCHED_CRITMONITOR_MAXTIME_THREAD >= 0 */
+
+/****************************************************************************
  * Name: timer_signotify
  *
  * Description:
  *   This function basically re-implements nxsig_queue() so that the si_code
- *   can be correctly set to SI_TIMER
+ *   can be correctly set to SI_TIMER.
+ *
+ *   POSIX queues one signal of a timer at a time: while the last one is
+ *   still pending or queued for a signal handler, an expiration is only an
+ *   overrun.  An expiration whose signal cannot be queued (no free pending
+ *   signal in an interrupt handler) is an overrun too.  The overrun count
+ *   starts again with each signal that is queued (timer_getoverrun()).
  *
  * Input Parameters:
  *   timer - A reference to the POSIX timer that just timed out
@@ -72,13 +191,32 @@ static void timer_timeout(wdparm_t itimer);
 
 static inline void timer_signotify(FAR struct posix_timer_s *timer)
 {
+  pid_t pid = timer->pt_owner;
+  int ret;
+
+  if ((timer->pt_event.sigev_notify & SIGEV_THREAD_ID) != 0)
+    {
+      pid = timer->pt_event.sigev_notify_thread_id;
+    }
+
+  if (nxsig_source_queued(pid, timer, timer->pt_event.sigev_signo))
+    {
+      timer_overrun(timer, 1);
+      return;
+    }
+
+  timer->pt_overrun = 0;
 #ifdef CONFIG_SIG_EVTHREAD
-  DEBUGVERIFY(nxsig_notification(timer->pt_owner, &timer->pt_event,
-                                 SI_TIMER, &timer->pt_work));
+  ret = nxsig_notification_source(timer->pt_owner, &timer->pt_event,
+                                  SI_TIMER, &timer->pt_work, timer);
 #else
-  DEBUGVERIFY(nxsig_notification(timer->pt_owner, &timer->pt_event,
-                                 SI_TIMER, NULL));
+  ret = nxsig_notification_source(timer->pt_owner, &timer->pt_event,
+                                  SI_TIMER, NULL, timer);
 #endif
+  if (ret < 0)
+    {
+      timer_overrun(timer, 1);
+    }
 }
 
 /****************************************************************************
@@ -111,7 +249,20 @@ static inline void timer_restart(FAR struct posix_timer_s *timer,
     {
       /* Check whether next expected time is reached */
 
-      ticks = clock_systime_ticks();
+#if CONFIG_SCHED_CRITMONITOR_MAXTIME_THREAD >= 0
+      if (timer_is_cputime(timer))
+        {
+          if (timer_cpu_getticks(timer, &ticks) < 0)
+            {
+              return;
+            }
+        }
+      else
+#endif
+        {
+          ticks = clock_systime_ticks();
+        }
+
       delay = ticks - timer->pt_expected;
 
       /* Calculate the number of timer overruns and the next expected tick.
@@ -121,18 +272,27 @@ static inline void timer_restart(FAR struct posix_timer_s *timer,
        *  |   pt_delay   |   pt_delay   |   pt_delay   | ... |
        *  ^ pt_expected                    ^ ticks     ^ next pt_expected
        * In this case, frame equals 3.
-       * Then, pt_overrun <- frame - 1 and
+       * Then, pt_overrun <- pt_overrun + frame - 1 and
        * the next pt_expected <- pt_expected + frame * pt_delay.
        * Assumption of correctness:
        * (delay + timer->pt_delay) should not overflow.
        */
 
       frame = (delay + timer->pt_delay) / timer->pt_delay;
-      timer->pt_overrun   = (int)(frame - 1u);
+      timer_overrun(timer, frame - 1u);
       timer->pt_expected += frame * timer->pt_delay;
 
-      wd_start_abstick(&timer->pt_wdog, timer->pt_expected,
-                       timer_timeout, itimer);
+#if CONFIG_SCHED_CRITMONITOR_MAXTIME_THREAD >= 0
+      if (timer_is_cputime(timer))
+        {
+          timer_cpu_start(timer, ticks);
+        }
+      else
+#endif
+        {
+          wd_start_abstick(&timer->pt_wdog, timer->pt_expected,
+                           timer_timeout, itimer);
+        }
     }
 }
 
@@ -160,6 +320,28 @@ static void timer_timeout(wdparm_t itimer)
 
   if (timer)
     {
+#if CONFIG_SCHED_CRITMONITOR_MAXTIME_THREAD >= 0
+      clock_t ticks;
+
+      /* Wait until the CPU time reaches the expiration time.  Stop if the
+       * thread or the process of the clock does not exist any more.
+       */
+
+      if (timer_is_cputime(timer))
+        {
+          if (timer_cpu_getticks(timer, &ticks) < 0)
+            {
+              return;
+            }
+
+          if (!clock_compare(timer->pt_expected, ticks))
+            {
+              timer_cpu_start(timer, ticks);
+              return;
+            }
+        }
+#endif
+
       /* Send the specified signal to the specified task.   Increment the
        * reference count on the timer first so that will not be deleted until
        * after the signal handler returns.
@@ -268,13 +450,20 @@ int timer_settime(timer_t timerid, int flags,
     {
       if (ovalue)
         {
-          /* Get the number of ticks before the underlying watchdog expires */
+#if CONFIG_SCHED_CRITMONITOR_MAXTIME_THREAD >= 0
+          if (timer_is_cputime(timer))
+            {
+              timer_cpu_gettime(timer, &ovalue->it_value);
+            }
+          else
+#endif
+            {
+              /* Get the number of ticks before the watchdog expires */
 
-          delay = wd_gettime(&timer->pt_wdog);
+              delay = wd_gettime(&timer->pt_wdog);
+              clock_ticks2time(&ovalue->it_value, delay);
+            }
 
-          /* Convert that to a struct timespec and return it */
-
-          clock_ticks2time(&ovalue->it_value, delay);
           clock_ticks2time(&ovalue->it_interval, timer->pt_delay);
         }
 
@@ -307,33 +496,43 @@ int timer_settime(timer_t timerid, int flags,
               timer->pt_delay = 0u;
             }
 
-          /* Check if abstime is selected */
-
-          if ((flags & TIMER_ABSTIME) != 0)
+#if CONFIG_SCHED_CRITMONITOR_MAXTIME_THREAD >= 0
+          if (timer_is_cputime(timer))
             {
-              /* Calculate a delay corresponding to the
-               * absolute time in 'value'.
-               */
-
-              clock_abstime2ticks(timer->pt_clock, &value->it_value, &delay);
+              ret = timer_cpu_settime(timer, flags, &value->it_value);
             }
           else
+#endif
             {
-              /* Calculate a delay assuming that 'value' holds the
-               * relative time to wait.
-               * We have internal knowledge that clock_time2ticks always
-               * returns success.
-               */
+              /* Check if abstime is selected */
 
-              delay = clock_time2ticks(&value->it_value);
+              if ((flags & TIMER_ABSTIME) != 0)
+                {
+                  /* Calculate a delay corresponding to the
+                   * absolute time in 'value'.
+                   */
+
+                  clock_abstime2ticks(timer->pt_clock, &value->it_value,
+                                      &delay);
+                }
+              else
+                {
+                  /* Calculate a delay assuming that 'value' holds the
+                   * relative time to wait.
+                   * We have internal knowledge that clock_time2ticks always
+                   * returns success.
+                   */
+
+                  delay = clock_time2ticks(&value->it_value);
+                }
+
+              timer->pt_expected = clock_delay2abstick(delay);
+
+              /* Then start the watchdog */
+
+              ret = wd_start_abstick(&timer->pt_wdog, timer->pt_expected,
+                                    timer_timeout, (wdparm_t)timer);
             }
-
-          timer->pt_expected = clock_delay2abstick(delay);
-
-          /* Then start the watchdog */
-
-          ret = wd_start_abstick(&timer->pt_wdog, timer->pt_expected,
-                                timer_timeout, (wdparm_t)timer);
         }
     }
 

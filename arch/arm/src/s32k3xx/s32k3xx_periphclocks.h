@@ -1,6 +1,8 @@
 /****************************************************************************
  * arch/arm/src/s32k3xx/s32k3xx_periphclocks.h
  *
+ * SPDX-License-Identifier: Apache-2.0
+ *
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.  The
@@ -159,13 +161,9 @@ struct peripheral_clock_config_s
  * Public Data
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /* Clock name mappings.
@@ -176,7 +174,7 @@ extern "C"
  * clock name, then the corresponding value is PCC_INVALID_INDEX.
  */
 
-EXTERN const uint16_t g_clkname_mapping[];
+extern const uint16_t g_clkname_mapping[];
 
 /* Peripheral Features.
  *
@@ -185,7 +183,7 @@ EXTERN const uint16_t g_clkname_mapping[];
  * feature definitions above
  */
 
-EXTERN const uint8_t g_periph_features[];
+extern const uint8_t g_periph_features[];
 
 /****************************************************************************
  * Public Function Prototypes
@@ -230,7 +228,6 @@ void s32k3xx_periphclocks(unsigned int count,
 
 int s32k3xx_get_pclkfreq(enum clock_names_e clkname, uint32_t *frequency);
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

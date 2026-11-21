@@ -1,0 +1,99 @@
+/****************************************************************************
+ * libs/libc/environ/env_findvar.c
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.  The
+ * ASF licenses this file to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance with the
+ * License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
+ * License for the specific language governing permissions and limitations
+ * under the License.
+ *
+ ****************************************************************************/
+
+/****************************************************************************
+ * Included Files
+ ****************************************************************************/
+
+#include <assert.h>
+#include <errno.h>
+#include <string.h>
+
+#include <nuttx/tls.h>
+
+#include "environ/environ.h"
+
+/****************************************************************************
+ * Private Functions
+ ****************************************************************************/
+
+/****************************************************************************
+ * Name: env_cmpname
+ ****************************************************************************/
+
+static bool env_cmpname(FAR const char *pname, size_t namelen,
+                        FAR const char *peqname)
+{
+  return strncmp(pname, peqname, namelen) == 0 && peqname[namelen] == '=';
+}
+
+/****************************************************************************
+ * Public Functions
+ ****************************************************************************/
+
+/****************************************************************************
+ * Name: env_findvar
+ *
+ * Description:
+ *   Search the provided environment structure for the variable of the
+ *   specified name.
+ *
+ * Input Parameters:
+ *   info    - The task containing environment array to be searched.
+ *   pname   - The variable name to find.  It needs no terminating NUL.
+ *   namelen - The length of the name.
+ *
+ * Returned Value:
+ *   A index to the name=value string in the environment
+ *
+ * Assumptions:
+ *   - Not called from an interrupt handler
+ *   - Pre-emption is disabled by caller
+ *
+ ****************************************************************************/
+
+ssize_t env_findvar(FAR struct task_info_s *info, FAR const char *pname,
+                    size_t namelen)
+{
+  ssize_t i;
+
+  /* Verify input parameters */
+
+  DEBUGASSERT(info != NULL && pname != NULL);
+
+  if (info->ta_envp == NULL)
+    {
+      return -ENOENT;
+    }
+
+  /* Search for a name=value string with matching name */
+
+  for (i = 0; info->ta_envp[i] != NULL; i++)
+    {
+      if (env_cmpname(pname, namelen, info->ta_envp[i]))
+        {
+          return i;
+        }
+    }
+
+  return -ENOENT;
+}

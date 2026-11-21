@@ -26,6 +26,7 @@
 
 #include <nuttx/config.h>
 
+#include <nuttx/fs/fs.h>
 #include <nuttx/sensors/wtgahrs2.h>
 #include <nuttx/kthread.h>
 #include <nuttx/kmalloc.h>
@@ -161,6 +162,7 @@ static int wtgahrs2_activate(FAR struct sensor_lowerhalf_s *lower,
                              FAR struct file *filep, bool sw)
 {
   FAR struct wtgahrs2_sensor_s *dev = (FAR struct wtgahrs2_sensor_s *)lower;
+
   dev->enable = sw;
 
   return 0;
@@ -422,7 +424,7 @@ static int wtgahrs2_thread(int argc, FAR char *argv[])
             }
         }
 
-        count -= pos;
+      count -= pos;
     }
 
   return 0;

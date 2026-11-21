@@ -20,6 +20,12 @@
  *
  ****************************************************************************/
 
+/****************************************************************************
+ * Included Files
+ ****************************************************************************/
+
+#include <assert.h>
+
 /*  Based on chip selection this file is included in imxrt_daisy.c */
 
 /****************************************************************************
@@ -11553,7 +11559,7 @@ void imxrt_daisy_select(unsigned int index, unsigned int alt)
 {
   uintptr_t address;
 
-  DEBUGASSERT(index < sizeof(g_daisy_select) / sizeof(g_daisy_select[0]));
+  DEBUGASSERT(index < nitems(g_daisy_select));
 
   const struct imxrt_daisy_t *daisy = &g_daisy_select[index];
 

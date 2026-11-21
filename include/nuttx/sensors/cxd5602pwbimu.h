@@ -30,6 +30,7 @@
 #include <nuttx/config.h>
 #include <nuttx/fs/ioctl.h>
 #include <sys/types.h>
+#include <stdbool.h>
 #include <nuttx/irq.h>
 #include <nuttx/spi/spi.h>
 #include <nuttx/i2c/i2c_master.h>
@@ -132,11 +133,8 @@ struct i2c_master_s;
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -163,7 +161,6 @@ int cxd5602pwbimu_register(FAR const char *devpath,
                            FAR struct i2c_master_s *dev_i2c,
                            FAR cxd5602pwbimu_config_t *config);
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

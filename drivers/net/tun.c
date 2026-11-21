@@ -59,6 +59,7 @@
 #endif
 
 #include <nuttx/arch.h>
+#include <nuttx/poll.h>
 #include <nuttx/spinlock.h>
 #include <nuttx/mutex.h>
 #include <nuttx/wqueue.h>
@@ -124,7 +125,7 @@ struct tun_device_s
   bool              read_wait;
   bool              write_wait;
   struct work_s     work;      /* For deferring poll work to the work queue */
-  FAR struct pollfd *poll_fds;
+  FAR struct pollfd_s *poll_fds;
   mutex_t           lock;
   spinlock_t        spinlock;   /* Spinlock to protect the driver state */
   sem_t             read_wait_sem;
@@ -196,7 +197,7 @@ static ssize_t tun_read(FAR struct file *filep, FAR char *buffer,
 static ssize_t tun_write(FAR struct file *filep, FAR const char *buffer,
                          size_t buflen);
 static int tun_ioctl(FAR struct file *filep, int cmd, unsigned long arg);
-static int tun_poll(FAR struct file *filep, FAR struct pollfd *fds,
+static int tun_poll(FAR struct file *filep, FAR struct pollfd_s *fds,
                     bool setup);
 
 /****************************************************************************
@@ -234,7 +235,7 @@ static const struct file_operations g_tun_file_ops =
 static void tun_pollnotify(FAR struct tun_device_s *priv,
                            pollevent_t eventset)
 {
-  FAR struct pollfd *fds = priv->poll_fds;
+  FAR struct pollfd_s *fds = priv->poll_fds;
 
   if (priv->read_wait && (eventset & POLLIN))
     {
@@ -516,6 +517,11 @@ static void tun_net_receive_tap(FAR struct tun_device_s *priv)
 
   if (priv->dev.d_len > 0)
     {
+#ifdef CONFIG_NET_PKT
+      /* When packet sockets are enabled, feed the frame into the tap */
+
+      pkt_input(dev);
+#endif
       /* And send the packet */
 
       DEBUGASSERT(priv->write_buf == NULL);
@@ -598,6 +604,13 @@ static void tun_net_receive_tun(FAR struct tun_device_s *priv)
 
   if (dev->d_len > 0)
     {
+#ifdef CONFIG_NET_PKT
+      /* When packet sockets are enabled, feed the frame into the tap */
+
+      pkt_input(dev);
+#endif
+      /* And send the packet */
+
       DEBUGASSERT(priv->write_buf == NULL);
       priv->write_d_len = dev->d_len;
       priv->write_buf   = dev->d_iob;
@@ -1156,7 +1169,7 @@ static ssize_t tun_read(FAR struct file *filep, FAR char *buffer,
  ****************************************************************************/
 
 static int tun_poll(FAR struct file *filep,
-                    FAR struct pollfd *fds, bool setup)
+                    FAR struct pollfd_s *fds, bool setup)
 {
   FAR struct tun_device_s *priv = filep->f_priv;
   pollevent_t eventset;
@@ -1277,6 +1290,7 @@ static int tun_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
   else if (cmd == TUNGETIFF)
     {
       FAR struct ifreq *ifr = (FAR struct ifreq *)arg;
+
       if (priv == NULL || ifr == NULL)
         {
           return -EINVAL;

@@ -1,3 +1,24 @@
+############################################################################
+# arch/arm/src/nrf53/Kconfig
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.  The
+# ASF licenses this file to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance with the
+# License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
+############################################################################
 #
 # For a description of the syntax of this configuration file,
 # see the file kconfig-language.txt in the NuttX tools repository.
@@ -38,6 +59,8 @@ config NRF53_APPCORE
 config NRF53_NETCORE
 	bool
 	default n
+	select NRF53_HAVE_IEEE802154
+	select NRF53_HAVE_BLELR
 
 choice
 	prompt "nRF5340 Core Selection"
@@ -72,7 +95,7 @@ config NRF53_CPUNET_MEM_RAM_64
 
 config NRF53_CPUNET_MEM_RAM_SIZE
 	hex
-	default 0x008000 if NRF53_CPUNET_MEM_RAM_64
+	default 0x010000 if NRF53_CPUNET_MEM_RAM_64
 
 # FLASH size for the app core
 
@@ -145,6 +168,14 @@ config NRF53_HAVE_SPI1234
 	default n
 
 config NRF53_HAVE_HFCLK192M
+	bool
+	default n
+
+config NRF53_HAVE_IEEE802154
+	bool
+	default n
+
+config NRF53_HAVE_BLELR
 	bool
 	default n
 
@@ -305,6 +336,13 @@ config NRF53_RTC0
 config NRF53_RTC1
 	bool "RTC1"
 	select NRF53_RTC
+	default n
+
+config NRF53_RADIO
+	bool "RADIO"
+	depends on EXPERIMENTAL
+	depends on NRF53_NETCORE
+	depends on !NRF53_SOFTDEVICE_CONTROLLER
 	default n
 
 config NRF53_USBDEV
@@ -676,6 +714,56 @@ config NRF53_SAADC_LIMITS
 endif # NRF53_SAADC
 
 endmenu # SAADC Configuration
+
+menu "RADIO Configuration"
+
+if NRF53_RADIO
+
+config NRF53_RADIO_CUSTOM
+	bool "RADIO uses custom IRQ handlers"
+	default n
+
+config NRF53_RADIO_IEEE802154
+	bool "RADIO IEEE802.15.4 protocol"
+	default n
+	depends on NRF53_HAVE_IEEE802154
+	select ARCH_RAMVECTORS
+	select ARCH_IRQPRIO
+	select NRF53_RADIO_CUSTOM
+	select NRF53_TIMER0
+
+if NRF53_RADIO_IEEE802154
+
+config NRF53_RADIO_IEEE802154_SUPERFRAME
+	bool "RADIO IEEE802.15.4 superframe support"
+	default n
+	select NRF53_RTC0
+	select NRF53_USE_LFCLK
+	---help---
+		The superframe timing runs from the LFCLK.  With the LFXO source
+		(NRF53_LFCLK_XTAL) the application core must configure the
+		oscillator (NRF53_OSCILLATOR_LFXO), otherwise the network core
+		waits for the LFCLK forever at boot.
+
+config NRF53_RADIO_IEEE802154_GTS_SLOTS
+	int "RADIO IEEE802.15.4 GTS slots"
+	default 2
+	depends on NRF53_RADIO_IEEE802154_SUPERFRAME
+
+config NRF53_RADIO_IEEE802154_TRACE
+	bool "RADIO IEEE802.15.4 trace support"
+	default n
+
+config NRF53_RADIO_IEEE802154_TRACE_BUFSIZE
+	int "RADIO IEEE802.15.4 trace buffer size"
+	depends on NRF53_RADIO_IEEE802154_TRACE
+	default 1024
+
+endif # NRF53_RADIO_IEEE802154
+
+endif # NRF53_RADIO
+
+endmenu # RADIO Configuration
 
 menu "SPI Configuration"
 

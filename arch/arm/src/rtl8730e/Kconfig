@@ -1,0 +1,56 @@
+############################################################################
+# arch/arm/src/rtl8730e/Kconfig
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.  The
+# ASF licenses this file to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance with the
+# License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
+############################################################################
+#
+# For a description of the syntax of this configuration file,
+# see the file kconfig-language.txt in the NuttX tools repository.
+#
+
+if ARCH_CHIP_RTL8730E
+
+menu "Realtek AmebaSmart (RTL8730E) Chip Selection"
+
+# NOTE (P0 bring-up):
+#   The RTL8730E application core is a Cortex-A32.  NuttX does not yet
+#   provide an ARCH_CORTEXA32 option, so for the P0 compile skeleton we
+#   temporarily borrow ARCH_CORTEXA7 (both are ARMv7-A) to get the tree
+#   building.  TODO: add a proper ARCH_CORTEXA32 option and select it here.
+
+config ARCH_CHIP_RTL8730E_CA32
+	bool "RTL8730E application core (Cortex-A32, borrows Cortex-A7 for P0)"
+	default y
+	select ARCH_CORTEXA7
+	select ARCH_HAVE_ADDRENV
+	select ARCH_HAVE_ELF_EXECUTABLE
+	select ARCH_HAVE_LOWVECTORS
+	select ARCH_HAVE_MULTICPU
+	select ARCH_NEED_ADDRENV_MAPPING
+	select ARM_HAVE_NEON
+	select ARM_HAVE_PSCI
+	select ARMV7A_HAVE_GICv2
+	select ARMV7A_HAVE_GTM
+	select ARMV7A_HAVE_PTM
+
+endmenu # "Realtek AmebaSmart (RTL8730E) Chip Selection"
+
+source "arch/arm/src/common/ameba/Kconfig"
+
+endif # ARCH_CHIP_RTL8730E

@@ -28,7 +28,23 @@
  ****************************************************************************/
 
 #include <nuttx/addrenv.h>
+#include <nuttx/elf.h>
 #include <nuttx/lib/elf.h>
+
+/****************************************************************************
+ * Pre-processor Definitions
+ ****************************************************************************/
+
+/* The loader makes a GOT behind the data of a relocatable object whose code
+ * uses the GOT relocations of the architecture.  With separated sections or
+ * with the load to the LMA, there is no data block to put the GOT behind.
+ */
+
+#if defined(ARCH_ELF_RELOC_GOT) && \
+    !defined(CONFIG_ARCH_USE_SEPARATED_SECTION) && \
+    !defined(CONFIG_LIBC_ELF_LOADTO_LMA)
+#  define LIBELF_MAKE_GOT 1
+#endif
 
 /****************************************************************************
  * Public Function Prototypes
@@ -237,6 +253,17 @@ int libelf_reallocbuffer(FAR struct mod_loadinfo_s *loadinfo,
  ****************************************************************************/
 
 int libelf_freebuffers(FAR struct mod_loadinfo_s *loadinfo);
+
+/****************************************************************************
+ * Name: libelf_symname
+ *
+ * Description:
+ *   Read a name out of a string table into the I/O buffer.
+ *
+ ****************************************************************************/
+
+int libelf_symname(FAR struct mod_loadinfo_s *loadinfo,
+                   FAR const Elf_Sym *sym, Elf_Off sh_offset);
 
 /****************************************************************************
  * Name: libelf_addr

@@ -31,6 +31,7 @@
  * Included Files
  ****************************************************************************/
 
+#include <stdbool.h>
 #include <sys/videoio.h>
 #include <nuttx/fs/fs.h>
 
@@ -147,6 +148,10 @@ struct v4l2_ops_s
                           FAR struct v4l2_decoder_cmd *cmd);
   CODE int (*encoder_cmd)(FAR struct file *filep,
                           FAR struct v4l2_encoder_cmd *cmd);
+#ifdef CONFIG_DMA_SHARED_BUFFER
+  CODE int (*expbuf)(FAR struct file *filep,
+                     FAR struct v4l2_exportbuffer *ebuf);
+#endif
 };
 
 /****************************************************************************

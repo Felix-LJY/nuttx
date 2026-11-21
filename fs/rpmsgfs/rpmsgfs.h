@@ -28,6 +28,7 @@
  ****************************************************************************/
 
 #include <dirent.h>
+#include <stdint.h>
 #include <sys/stat.h>
 #include <sys/statfs.h>
 #include <sys/param.h>
@@ -96,6 +97,7 @@ begin_packed_struct struct rpmsgfs_read_s
   struct rpmsgfs_header_s header;
   int32_t                 fd;
   uint32_t                count;
+  int64_t                 offset;
   char                    buf[0];
 } end_packed_struct;
 
@@ -106,7 +108,7 @@ begin_packed_struct struct rpmsgfs_lseek_s
   struct rpmsgfs_header_s header;
   int32_t                 fd;
   int32_t                 whence;
-  int32_t                 offset;
+  int64_t                 offset;
 } end_packed_struct;
 
 begin_packed_struct struct rpmsgfs_ioctl_s
@@ -136,8 +138,8 @@ begin_packed_struct struct rpmsgfs_stat_priv_s
   int64_t  ctim_sec;  /* Time of last status change, seconds */
   int64_t  ctim_nsec; /* Time of last status change, nanoseconds */
   uint64_t blocks;    /* Number of blocks allocated */
-  int16_t  uid;       /* User ID of file */
-  int16_t  gid;       /* Group ID of file */
+  uint32_t uid;       /* User ID of file */
+  uint32_t gid;       /* Group ID of file */
   int16_t  blksize;   /* Block size used for filesystem I/O */
   uint16_t nlink;     /* Number of hard links to the file */
 } end_packed_struct;
@@ -240,7 +242,7 @@ off_t     rpmsgfs_client_lseek(FAR void *handle, int fd,
                                off_t offset, int whence);
 int       rpmsgfs_client_ioctl(FAR void *handle, int fd,
                                int request, unsigned long arg);
-void      rpmsgfs_client_sync(FAR void *handle, int fd);
+int       rpmsgfs_client_sync(FAR void *handle, int fd);
 int       rpmsgfs_client_dup(FAR void *handle, int fd);
 int       rpmsgfs_client_fstat(FAR void *handle, int fd,
                                FAR struct stat *buf);

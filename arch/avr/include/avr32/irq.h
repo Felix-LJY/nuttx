@@ -155,6 +155,17 @@ static inline_function uint32_t avr32_evba(void)
   return evba;
 }
 
+/* Return program counter */
+
+static inline_function uint32_t up_getpc(void)
+{
+  uint32_t pc;
+
+  __asm__ __volatile__ ("mov %0, pc" : "=r" (pc));
+
+  return pc;
+}
+
 /* Return the current value of the stack pointer */
 
 static inline_function uint32_t up_getsp(void)
@@ -235,14 +246,10 @@ static inline_function irqstate_t up_irq_enable(void)
 
 #ifndef __ASSEMBLY__
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

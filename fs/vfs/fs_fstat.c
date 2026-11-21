@@ -27,6 +27,7 @@
 #include <nuttx/config.h>
 
 #include <sys/stat.h>
+#include <string.h>
 #include <unistd.h>
 #include <sched.h>
 #include <assert.h>
@@ -198,6 +199,23 @@ int file_fstat(FAR struct file *filep, FAR struct stat *buf)
 
           ret = inode->u.i_mops->fstat(filep, buf);
         }
+
+      /* A file system that gives no device number gets the serial number
+       * of its mount point: st_dev and st_ino then tell the files of two
+       * volumes apart.
+       */
+
+      if (ret >= 0 && buf->st_dev == 0)
+        {
+          buf->st_dev = inode->i_ino;
+        }
+
+      /* No file on a mount with MS_NOEXEC can be executed */
+
+      if (ret >= 0 && INODE_IS_NOEXEC(inode) && S_ISREG(buf->st_mode))
+        {
+          buf->st_mode &= ~(S_IXUSR | S_IXGRP | S_IXOTH);
+        }
     }
   else
 #endif
@@ -211,14 +229,22 @@ int file_fstat(FAR struct file *filep, FAR struct stat *buf)
   else
 #endif
     {
-      /* Check if the inode is a proxy for a block or MTD driver */
+      /* A directory opened with open() has a stand-in inode; stat the
+       * directory itself.
+       */
 
-      ret = proxy_fstat(filep, inode, buf);
-      if (ret < 0)
+      ret = dir_fstat(filep, buf);
+      if (ret == -ENOTTY)
         {
-          /* The inode is part of the root pseudo file system. */
+          /* Check if the inode is a proxy for a block or MTD driver */
 
-          ret = inode_stat(inode, buf, 0);
+          ret = proxy_fstat(filep, inode, buf);
+          if (ret < 0)
+            {
+              /* The inode is part of the root pseudo file system. */
+
+              ret = inode_stat(inode, buf, 0);
+            }
         }
     }
 
@@ -228,6 +254,7 @@ int file_fstat(FAR struct file *filep, FAR struct stat *buf)
 int nx_fstat(int fd, FAR struct stat *buf)
 {
   FAR struct file *filep;
+  struct stat kbuf;
   int ret;
 
   /* First, get the file structure.  Note that on failure,
@@ -237,10 +264,20 @@ int nx_fstat(int fd, FAR struct stat *buf)
   ret = file_get(fd, &filep);
   if (ret >= 0)
     {
-      /* Perform the fstat operation */
+      /* Perform the fstat operation on a local buffer.  Copy it to the
+       * caller's buffer after file_put(), so that a bad buffer faults with
+       * no file reference held.
+       */
 
-      ret = file_fstat(filep, buf);
+      /* Clear it first: a file system fills only some of the fields */
+
+      memset(&kbuf, 0, sizeof(kbuf));
+      ret = file_fstat(filep, &kbuf);
       file_put(filep);
+      if (ret >= 0)
+        {
+          memcpy(buf, &kbuf, sizeof(kbuf));
+        }
     }
 
   return ret;

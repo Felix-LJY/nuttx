@@ -154,6 +154,19 @@ commit list cannot be determined, or it causes a cherry-pick conflict,
 ``Fetch-Source`` fails instead of silently testing without the requested
 dependency.
 
+A dependency that is already merged is skipped. ``Fetch-Source`` reads the
+state of each dependency through the GitHub API. If the dependency is merged
+and its merge commit is in the checkout, its commits are already in the tree,
+so CI does not cherry-pick them again. Thus a ``Depends-On:`` declaration can
+stay in the description after the dependency is merged. A dependency that is
+merged into a different branch, or whose merge commit is not in the checkout,
+is applied as before. If CI cannot read the state, it also applies the
+dependency as before.
+
+A dependency that is closed without merge is an error. ``Fetch-Source`` does
+not apply it and fails. Remove the dependency from the ``Depends-On:``
+declaration, or reopen the dependency pull request.
+
 The memory footprint workflow applies the same declarations independently,
 using the same parser and apply sequence (see `Memory Footprint Tracking`_).
 
@@ -161,9 +174,10 @@ When a valid dependency report is available, the follow-up comment reports one
 of three outcomes:
 
 * successfully applied dependencies and their fetched head SHAs (abbreviated in
-  the comment)
+  the comment); a skipped dependency is marked "already merged, skipped"
 * a declaration from which no valid dependency could be parsed
-* valid dependencies that could not be applied and the failure reason
+* valid dependencies that could not be applied and the failure reason; a
+  dependency that is closed without merge is marked "closed without merge"
 
 The write-capable follow-up workflow does not execute fork code. It validates
 the untrusted report's structure, repository allow-list, run and current PR
@@ -231,6 +245,21 @@ should be able to download the artifact, flash the NuttX image(s) to your target
 device and test them that way if you'd like to avoid building all of the images
 yourself!
 
+Bluetooth Integration Tests
+===========================
+
+The separate ``Bluetooth`` workflow builds the current NuttX and apps sources
+and runs Bluetooth integration tests on a Linux/x86_64 runner. The tests use
+the ``sim:bthcisock`` and ``sim:nimble`` configurations with BabbleSim time
+enabled, connected to Python BSControllers through Unix sockets. No Bluetooth
+hardware is required.
+
+Build logs, source versions, JUnit results, device logs and HCI/radio
+captures are uploaded as the ``bluetooth-results`` artifact.
+
+For local commands and cross-repository PR testing, see
+`the Bluetooth test README <https://github.com/apache/nuttx-apps/tree/master/testing/bluetooth/bsworld>`_.
+
 Memory Footprint Tracking
 =========================
 
@@ -257,4 +286,6 @@ The memory report applies the same ``Depends-On:`` declarations as the Build
 workflow (see `Pull Request Dependencies`_), so a pull request that only builds
 on top of another one is measured against a tree that compiles. The declaration
 rules and the ``master``-only gate are the same. A dependency that cannot be
-fetched or applied fails the job in both workflows.
+fetched or applied fails the job in both workflows. Both workflows skip a
+dependency that is already merged, and fail on a dependency that is closed
+without merge.

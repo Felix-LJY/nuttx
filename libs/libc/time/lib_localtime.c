@@ -48,6 +48,7 @@
 #include <string.h>
 #include <limits.h>
 #include <fcntl.h>
+#include <unistd.h>
 #include <assert.h>
 #include <errno.h>
 
@@ -80,7 +81,11 @@
 /* Time zone files */
 
 #define TZ_MAGIC            "TZif"
-#define TZDEFAULT           "localtime"
+#ifdef CONFIG_LIBC_TZDEFAULT
+#  define TZDEFAULT         CONFIG_LIBC_TZDEFAULT
+#else
+#  define TZDEFAULT         ""
+#endif
 #define TZDEFRULES          "posixrules"
 
 /* In the current implementation, "tzset()" refuses to deal with files that
@@ -333,6 +338,9 @@ FAR char *tzname[2] =
   (FAR char *)g_wildabbr
 };
 
+int daylight;
+long int timezone;
+
 /****************************************************************************
  * Private Function Prototypes
  ****************************************************************************/
@@ -362,6 +370,8 @@ static int  normalize_overflow32(FAR int_fast32_t *tensptr,
               FAR int *unitsptr, int base);
 static int  normalize_overflow(FAR int *tensptr, FAR int *unitsptr,
               int base);
+static void update_tzname(FAR struct state_s *sp,
+                          FAR const struct ttinfo_s *ttisp);
 static void settzname(void);
 static time_t time1(FAR struct tm *tmp,
               FAR struct tm *(*funcp)(FAR const time_t *, int_fast32_t,
@@ -521,6 +531,20 @@ static void scrub_abbrs(struct state_s *sp)
     }
 }
 
+static void update_tzname(FAR struct state_s *sp,
+                          FAR const struct ttinfo_s *ttisp)
+{
+  tzname[ttisp->tt_isdst] = &sp->chars[ttisp->tt_desigidx];
+  if (ttisp->tt_isdst)
+    {
+      daylight = 1;
+    }
+  else
+    {
+      timezone = -ttisp->tt_utoff;
+    }
+}
+
 static void settzname(void)
 {
   FAR struct state_s * const sp = g_lcl_ptr;
@@ -533,20 +557,26 @@ static void settzname(void)
       return;
     }
 
-  /* And to get the latest zone names into tzname */
+  daylight = 0;
+  timezone = 0;
+
+  /* And to get the latest zone names into tzname, the offset of standard
+   * time into timezone, and whether there is daylight saving time into
+   * daylight (the last transition wins, as for the names)
+   */
 
   for (i = 0; i < sp->typecnt; ++i)
     {
       FAR const struct ttinfo_s * const ttisp = &sp->ttis[i];
 
-      tzname[ttisp->tt_isdst] = &sp->chars[ttisp->tt_desigidx];
+      update_tzname(sp, ttisp);
     }
 
   for (i = 0; i < sp->timecnt; ++i)
     {
       FAR const struct ttinfo_s * const ttisp = &sp->ttis[sp->types[i]];
 
-      tzname[ttisp->tt_isdst] = &sp->chars[ttisp->tt_desigidx];
+      update_tzname(sp, ttisp);
     }
 }
 
@@ -756,12 +786,14 @@ static int tzload(FAR const char *name,
           for (i = 0; i < sp->timecnt; ++i)
             {
               int_fast64_t at = stored == 4 ? detzcode(p) : detzcode64(p);
+
               sp->types[i] = at <= TIME_T_MAX;
               if (sp->types[i])
                 {
                   time_t attime = ((TYPE_SIGNED(time_t) ?
                                   at < TIME_T_MIN : at < 0) ?
                                   TIME_T_MIN : at);
+
                   if (timecnt && attime <= sp->ats[timecnt - 1])
                     {
                       if (attime < sp->ats[timecnt - 1])
@@ -783,6 +815,7 @@ static int tzload(FAR const char *name,
           for (i = 0; i < sp->timecnt; ++i)
             {
               unsigned char typ = *p++;
+
               if (sp->typecnt <= typ)
                 {
                   goto oops;
@@ -838,6 +871,7 @@ static int tzload(FAR const char *name,
             {
               int_fast64_t tr = stored == 4 ? detzcode(p) : detzcode64(p);
               int_fast32_t corr = detzcode(p + stored);
+
               p += stored + 4;
 
               /* Leap seconds cannot occur before the Epoch,
@@ -949,6 +983,7 @@ static int tzload(FAR const char *name,
 
           int gotabbr = 0;
           int charcnt = sp->charcnt;
+
           for (i = 0; i < ts->typecnt; i++)
             {
               FAR char *tsabbr = ts->chars + ts->ttis[i].tt_desigidx;
@@ -996,6 +1031,7 @@ static int tzload(FAR const char *name,
               for (i = 0; i < ts->timecnt && sp->timecnt < TZ_MAX_TIMES; i++)
                 {
                   time_t t = ts->ats[i];
+
                   if (increment_overflow_time(&t, leapcorr(sp, t))
                       || (0 < sp->timecnt && t <= sp->ats[sp->timecnt - 1]))
                     {
@@ -1027,6 +1063,7 @@ static int tzload(FAR const char *name,
         {
           time_t repeatat = sp->ats[0] + SECSPERREPEAT;
           int repeattype = sp->types[0];
+
           for (i = 1; i < sp->timecnt; ++i)
             {
               if (sp->ats[i] == repeatat &&
@@ -1043,6 +1080,7 @@ static int tzload(FAR const char *name,
         {
           time_t repeatat = sp->ats[sp->timecnt - 1] - SECSPERREPEAT;
           int repeattype = sp->types[sp->timecnt - 1];
+
           for (i = sp->timecnt - 2; i >= 0; --i)
             {
               if (sp->ats[i] == repeatat &&
@@ -1403,80 +1441,82 @@ static int_fast32_t transtime(int year,
   leap_year = isleap(year);
   switch (rulep->r_type)
     {
-    case JULIAN_DAY:
+      case JULIAN_DAY:
 
-      /* Jn - Julian day, 1 == January 1, 60 == March 1 even in leap
-       * years.
-       * In non-leap years, or if the day number is 59 or less, just
-       * add SECSPERDAY times the day number-1 to the time of
-       * January 1, midnight, to get the day.
-       */
+        /* Jn - Julian day, 1 == January 1, 60 == March 1 even in leap
+         * years.
+         * In non-leap years, or if the day number is 59 or less, just
+         * add SECSPERDAY times the day number-1 to the time of
+         * January 1, midnight, to get the day.
+         */
 
-      value = (rulep->r_day - 1) * SECSPERDAY;
-      if (leap_year && rulep->r_day >= 60)
-        {
-          value += SECSPERDAY;
-        }
+        value = (rulep->r_day - 1) * SECSPERDAY;
+        if (leap_year && rulep->r_day >= 60)
+          {
+            value += SECSPERDAY;
+          }
 
-      break;
+        break;
 
-    case DAY_OF_YEAR:
+      case DAY_OF_YEAR:
 
-      /* n - day of year.
-       * Just add SECSPERDAY times the day number to the time of
-       * January 1, midnight, to get the day.
-       */
+        /* n - day of year.
+         * Just add SECSPERDAY times the day number to the time of
+         * January 1, midnight, to get the day.
+         */
 
-      value = rulep->r_day * SECSPERDAY;
-      break;
+        value = rulep->r_day * SECSPERDAY;
+        break;
 
-    case MONTH_NTH_DAY_OF_WEEK:
+      case MONTH_NTH_DAY_OF_WEEK:
 
-      /* Mm.n.d - nth "dth day" of month m */
+        /* Mm.n.d - nth "dth day" of month m */
 
-      /* Use Zeller's Congruence to get day-of-week of first day of
-       * month.
-       */
+        /* Use Zeller's Congruence to get day-of-week of first day of
+         * month.
+         */
 
-      m1  = (rulep->r_mon + 9) % 12 + 1;
-      yy0 = (rulep->r_mon <= 2) ? (year - 1) : year;
-      yy1 = yy0 / 100;
-      yy2 = yy0 % 100;
-      dow = ((26 * m1 - 2) / 10 + 1 + yy2 + yy2 / 4 + yy1 / 4 - 2 * yy1) % 7;
-      if (dow < 0)
-        {
-          dow += DAYSPERWEEK;
-        }
+        m1  = (rulep->r_mon + 9) % 12 + 1;
+        yy0 = (rulep->r_mon <= 2) ? (year - 1) : year;
+        yy1 = yy0 / 100;
+        yy2 = yy0 % 100;
+        dow = ((26 * m1 - 2) / 10 + 1 + yy2 + yy2 / 4 + yy1 / 4 -
+               2 * yy1) % 7;
+        if (dow < 0)
+          {
+            dow += DAYSPERWEEK;
+          }
 
-      /* "dow" is the day-of-week of the first day of the month. Get
-       * the day-of-month (zero-origin) of the first "dow" day of the
-       * month.
-       */
+        /* "dow" is the day-of-week of the first day of the month. Get
+         * the day-of-month (zero-origin) of the first "dow" day of the
+         * month.
+         */
 
-      d = rulep->r_day - dow;
-      if (d < 0)
-        {
-          d += DAYSPERWEEK;
-        }
+        d = rulep->r_day - dow;
+        if (d < 0)
+          {
+            d += DAYSPERWEEK;
+          }
 
-      for (i = 1; i < rulep->r_week; ++i)
-        {
-          if (d + DAYSPERWEEK >= g_mon_lengths[leap_year][rulep->r_mon - 1])
-            {
-              break;
-            }
+        for (i = 1; i < rulep->r_week; ++i)
+          {
+            if (d + DAYSPERWEEK >=
+                g_mon_lengths[leap_year][rulep->r_mon - 1])
+              {
+                break;
+              }
 
-          d += DAYSPERWEEK;
-        }
+            d += DAYSPERWEEK;
+          }
 
-      /* "d" is the day-of-month (zero-origin) of the day we want */
+        /* "d" is the day-of-month (zero-origin) of the day we want */
 
-      value = d * SECSPERDAY;
-      for (i = 0; i < rulep->r_mon - 1; ++i)
-        {
-          value += g_mon_lengths[leap_year][i] * SECSPERDAY;
-        }
-      break;
+        value = d * SECSPERDAY;
+        for (i = 0; i < rulep->r_mon - 1; ++i)
+          {
+            value += g_mon_lengths[leap_year][i] * SECSPERDAY;
+          }
+        break;
     }
 
   /* "value" is the year-relative time of 00:00:00 UT on the day in
@@ -1506,6 +1546,18 @@ static int tzparse(FAR const char *name, FAR struct state_s *sp,
   int load_ok;
   time_t atlo = TIME_T_MIN;
   time_t leaplo = TIME_T_MIN;
+
+  /* Initialize goback/goahead unconditionally. These are only set to TRUE
+   * in the DST-rule branch below, while the standard-time-only branch and
+   * the early error returns leave them untouched. tzparse() may be called
+   * on a scratch state_s obtained from lib_malloc() (e.g. via zoneinit()
+   * when parsing a TZ environment string) that is NOT zeroed, so without
+   * this they would carry uninitialized heap garbage. localsub() later
+   * reads them to decide whether to apply a time wrap-around, so a bogus
+   * value produces intermittent wrong time values.
+   */
+
+  sp->goback = sp->goahead = FALSE;
 
   stdname = name;
   if (*name == '<')
@@ -1561,6 +1613,21 @@ static int tzparse(FAR const char *name, FAR struct state_s *sp,
       if (load_ok != 0)
         {
           sp->leapcnt = 0; /* so, we're off a little */
+
+          /* No zoneinfo base rules were available (common on embedded
+           * builds without CONFIG_LIBC_ZONEINFO). The POSIX-rule
+           * transition generator below starts two transitions per year
+           * from the lower bound "atlo" and stops once the table reaches
+           * TZ_MAX_TIMES.  With atlo == TIME_T_MIN the backward scan walks
+           * yearbeg down to EPOCH_YEAR - YEARSPERREPEAT / 2 and the table
+           * then fills with ancient years, overflowing TZ_MAX_TIMES long
+           * before reaching the current era, so modern DST transitions are
+           * never recorded and localtime()/mktime() silently ignore DST.
+           * Clamp atlo to the Unix epoch so generation covers EPOCH_YEAR
+           * forward, giving ~TZ_MAX_TIMES / 2 years of correct DST rules.
+           */
+
+          atlo = 0;
         }
     }
 
@@ -1710,9 +1777,11 @@ static int tzparse(FAR const char *name, FAR struct state_s *sp,
                 yearsecs   = (g_year_lengths[isleap(year)] * SECSPERDAY);
 
               int reversed = endtime < starttime;
+
               if (reversed)
                 {
                   int_fast32_t swap = starttime;
+
                   starttime = endtime;
                   endtime = swap;
                 }
@@ -2037,7 +2106,7 @@ static FAR struct tm *localsub(FAR const time_t *timep,
   if (result != NULL)
     {
       result->tm_isdst = ttisp->tt_isdst;
-      tzname[result->tm_isdst] = &sp->chars[ttisp->tt_desigidx];
+      update_tzname(sp, ttisp);
       result->tm_zone = tzname[result->tm_isdst];
     }
 
@@ -2178,6 +2247,7 @@ static FAR struct tm *timesub(FAR const time_t *timep,
   if (!TYPE_SIGNED(time_t) && y < TM_YEAR_BASE)
     {
       int signed_y = y;
+
       tmp->tm_year = signed_y - TM_YEAR_BASE;
     }
   else if ((!TYPE_SIGNED(time_t) || INT_MIN + TM_YEAR_BASE <= y)
@@ -2773,16 +2843,30 @@ static int zoneinit(FAR const char *name)
 void tzset(void)
 {
   FAR const char *name;
+  int lcl;
+
+  /* Without TZ the local time zone is the file TZDEFAULT, if there is one
+   * (g_lcl_isset is -1 then), else UTC.
+   */
 
   name = getenv("TZ");
   if (name == NULL)
     {
-      return;
-    }
+      if (TZDEFAULT[0] == '\0' || g_lcl_isset < 0)
+        {
+          return;
+        }
 
-  if (g_lcl_isset > 0 && strcmp(g_lcl_tzname, name) == 0)
+      lcl = -1;
+    }
+  else
     {
-      return;
+      if (g_lcl_isset > 0 && strcmp(g_lcl_tzname, name) == 0)
+        {
+          return;
+        }
+
+      lcl = 1;
     }
 
   if (nxrmutex_is_hold(&g_lcl_lock))
@@ -2806,11 +2890,14 @@ void tzset(void)
       zoneinit("");
     }
 
-  strlcpy(g_lcl_tzname, name, sizeof(g_lcl_tzname));
+  if (lcl > 0)
+    {
+      strlcpy(g_lcl_tzname, name, sizeof(g_lcl_tzname));
+    }
 
 tzname:
   settzname();
-  g_lcl_isset = 1;
+  g_lcl_isset = lcl;
   tz_unlock(&g_lcl_lock);
 }
 

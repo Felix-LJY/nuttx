@@ -247,9 +247,6 @@ void arm64_mpu_enable(void)
 
   val = read_sysreg(sctlr_el1);
   val |= (SCTLR_M_BIT
-#ifndef CONFIG_ARM64_DCACHE_DISABLE
-          | SCTLR_C_BIT
-#endif
           | SCTLR_BR_BIT             /* Background region enable */
          );
   write_sysreg(val, sctlr_el1);
@@ -279,7 +276,7 @@ void arm64_mpu_disable(void)
   UP_DMB();
 
   val = read_sysreg(sctlr_el1);
-  val &= ~(SCTLR_M_BIT | SCTLR_C_BIT);
+  val &= ~(SCTLR_M_BIT);
   write_sysreg(val, sctlr_el1);
   UP_MB();
 }
@@ -352,6 +349,7 @@ unsigned int mpu_configure_region(uintptr_t base, size_t size,
                                   uint32_t flags1, uint32_t flags2)
 {
   unsigned int region = mpu_allocregion();
+
   mpu_modify_region(region, base, size, flags1, flags2);
   return region;
 }
@@ -450,7 +448,7 @@ void arm64_mpu_init(bool is_primary_core)
 
   mpu_init();
 
-  arm64_mpu_init_regiions();
+  arm64_mpu_init_regions();
 
   arm64_mpu_enable();
 }

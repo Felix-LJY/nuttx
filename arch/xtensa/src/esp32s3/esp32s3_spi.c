@@ -124,9 +124,9 @@ struct esp32s3_spi_config_s
   enum spi_mode_e mode;       /* SPI default mode */
 
   uint8_t id;                 /* ESP32-S3 SPI device ID: SPIx {2,3} */
-  uint8_t cs_pin;             /* GPIO configuration for CS */
-  uint8_t mosi_pin;           /* GPIO configuration for MOSI */
-  uint8_t miso_pin;           /* GPIO configuration for MISO */
+  int8_t cs_pin;              /* GPIO configuration for CS */
+  int8_t mosi_pin;            /* GPIO configuration for MOSI */
+  int8_t miso_pin;            /* GPIO configuration for MISO */
   uint8_t clk_pin;            /* GPIO configuration for CLK */
 #ifdef CONFIG_ESP32S3_SPI_DMA
   uint8_t periph;             /* Peripheral ID */
@@ -196,7 +196,7 @@ static int esp32s3_spi_hwfeatures(struct spi_dev_s *dev,
                                   spi_hwfeatures_t features);
 #endif
 static uint32_t esp32s3_spi_send(struct spi_dev_s *dev, uint32_t wd);
-static void esp32s3_spi_exchange(struct spi_dev_s *dev,
+static int  esp32s3_spi_exchange(struct spi_dev_s *dev,
                                  const void *txbuffer,
                                  void *rxbuffer, size_t nwords);
 #ifdef CONFIG_ESP32S3_SPI_DMA
@@ -1117,12 +1117,15 @@ static void esp32s3_spi_poll_exchange(struct esp32s3_spi_priv_s *priv,
       for (int i = 0 ; i < transfer_size; i += sizeof(uintptr_t))
         {
           uint32_t w_wd = UINT32_MAX;
+          size_t chunk = MIN(sizeof(uint32_t), transfer_size - i);
 
           if (tp != NULL)
             {
-              memcpy(&w_wd, tp, sizeof(uintptr_t));
+              /* The last word may be partial: never read past txbuffer */
 
-              tp += sizeof(uintptr_t);
+              memcpy(&w_wd, tp, chunk);
+
+              tp += chunk;
             }
 
           putreg32(w_wd, data_buf_reg);
@@ -1184,13 +1187,16 @@ static void esp32s3_spi_poll_exchange(struct esp32s3_spi_priv_s *priv,
           for (int i = 0 ; i < transfer_size; i += sizeof(uintptr_t))
             {
               uint32_t r_wd = getreg32(data_buf_reg);
+              size_t chunk = MIN(sizeof(uint32_t), transfer_size - i);
 
               spiinfo("recv=0x%" PRIx32 " data_reg=0x%" PRIxPTR "\n",
                       r_wd, data_buf_reg);
 
-              memcpy(rp, &r_wd, sizeof(uintptr_t));
+              /* The last word may be partial: never write past rxbuffer */
 
-              rp += sizeof(uintptr_t);
+              memcpy(rp, &r_wd, chunk);
+
+              rp += chunk;
 
               /* Update data_buf_reg to point to the next data buffer
                * register.
@@ -1221,11 +1227,11 @@ static void esp32s3_spi_poll_exchange(struct esp32s3_spi_priv_s *priv,
  *              uint16_t's
  *
  * Returned Value:
- *   None.
+ *   Returns zero (OK) on success; a negated errno value on failure.
  *
  ****************************************************************************/
 
-static void esp32s3_spi_exchange(struct spi_dev_s *dev,
+static int  esp32s3_spi_exchange(struct spi_dev_s *dev,
                                  const void *txbuffer,
                                  void *rxbuffer,
                                  size_t nwords)
@@ -1244,6 +1250,8 @@ static void esp32s3_spi_exchange(struct spi_dev_s *dev,
     {
       esp32s3_spi_poll_exchange(priv, txbuffer, rxbuffer, nwords);
     }
+
+  return OK;
 }
 
 #ifndef CONFIG_SPI_EXCHANGE

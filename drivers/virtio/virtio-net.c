@@ -31,7 +31,9 @@
 #include <stdlib.h>
 
 #include <nuttx/compiler.h>
+#include <nuttx/nuttx.h>
 #include <nuttx/kmalloc.h>
+#include <nuttx/mm/iob.h>
 #include <nuttx/net/ip.h>
 #include <nuttx/net/netdev_lowerhalf.h>
 #include <nuttx/virtio/virtio.h>
@@ -63,6 +65,14 @@
     ((CONFIG_NET_LL_GUARDSIZE - ETH_HDRLEN) + VIRTIO_NET_BUFSIZE)
 #define VIRTIO_NET_MAX_NIOB \
     ((VIRTIO_NET_MAX_PKT_SIZE + CONFIG_IOB_BUFSIZE - 1) / CONFIG_IOB_BUFSIZE)
+
+/* Ethernet header size: wider when 802.1Q VLAN tagging is enabled */
+
+#ifdef CONFIG_NET_VLAN
+#  define VIRTIO_NET_ETH_HDRSIZE  ETH_8021Q_HDRLEN
+#else
+#  define VIRTIO_NET_ETH_HDRSIZE  ETH_HDRLEN
+#endif
 
 /****************************************************************************
  * Private Types
@@ -130,10 +140,10 @@ struct virtio_net_priv_s
  * |               |<--------- datalen -------->|
  * ^base           ^data
  *
- * CONFIG_NET_LL_GUARDSIZE >= VIRTIO_NET_LLHDRSIZE + ETH_HDR_SIZE
- *                          = sizeof(uintptr) + 10 + 14
- *                          = 32 (64-Bit)
- *                          = 28 (32-Bit)
+ * CONFIG_NET_LL_GUARDSIZE >= VIRTIO_NET_LLHDRSIZE + VIRTIO_NET_ETH_HDRSIZE
+ *                          = sizeof(uintptr) + 10 + 14 or (18 for VLAN)
+ *                          = 32 or (36 for VLAN) (64-Bit)
+ *                          = 28 or (32 for VLAN) (32-Bit)
  */
 
 begin_packed_struct struct virtio_net_llhdr_s
@@ -142,9 +152,10 @@ begin_packed_struct struct virtio_net_llhdr_s
   struct virtio_net_hdr_s vhdr;        /* Virtio net header */
 } end_packed_struct;
 
-static_assert(CONFIG_NET_LL_GUARDSIZE >= VIRTIO_NET_LLHDRSIZE + ETH_HDRLEN,
-              "CONFIG_NET_LL_GUARDSIZE cannot be less than ETH_HDRLEN"
-              " + VIRTIO_NET_LLHDRSIZE");
+static_assert(CONFIG_NET_LL_GUARDSIZE >= VIRTIO_NET_LLHDRSIZE +
+              VIRTIO_NET_ETH_HDRSIZE,
+              "CONFIG_NET_LL_GUARDSIZE cannot be less than"
+              " VIRTIO_NET_ETH_HDRSIZE + VIRTIO_NET_LLHDRSIZE");
 
 /****************************************************************************
  * Private Function Prototypes
@@ -169,6 +180,7 @@ static void virtio_net_txfree(FAR struct netdev_lowerhalf_s *dev);
 
 static int  virtio_net_probe(FAR struct virtio_device *vdev);
 static void virtio_net_remove(FAR struct virtio_device *vdev);
+static void virtio_net_dump(FAR struct virtio_device *vdev);
 
 /****************************************************************************
  * Private Data
@@ -176,10 +188,10 @@ static void virtio_net_remove(FAR struct virtio_device *vdev);
 
 static struct virtio_driver g_virtio_net_driver =
 {
-  LIST_INITIAL_VALUE(g_virtio_net_driver.node), /* node */
-  VIRTIO_ID_NETWORK,                            /* device id */
-  virtio_net_probe,                             /* probe */
-  virtio_net_remove,                            /* remove */
+  VIRTIO_ID_NETWORK, /* device id */
+  virtio_net_probe,  /* probe */
+  virtio_net_remove, /* remove */
+  virtio_net_dump,   /* dump */
 };
 
 static const struct netdev_ops_s g_virtio_net_ops =
@@ -195,7 +207,10 @@ static const struct netdev_ops_s g_virtio_net_ops =
 #ifdef CONFIG_NETDEV_IOCTL
   virtio_net_ioctl,
 #endif
-  virtio_net_txfree
+  virtio_net_txfree,  /* reclaim */
+#ifdef CONFIG_NET_NETPOLL
+  virtio_net_txfree,  /* txpoll */
+#endif
 };
 
 #ifdef CONFIG_DRIVERS_WIFI_SIM
@@ -313,7 +328,12 @@ static void virtio_net_rxfill(FAR struct netdev_lowerhalf_s *dev)
 
       /* Add buffer to RX virtqueue */
 
-      virtio_net_addbuffer(dev, vq, pkt, VIRTIO_NET_RX);
+      if (virtio_net_addbuffer(dev, vq, pkt, VIRTIO_NET_RX) < 0)
+        {
+          vrterr("Failed to add buffer to RX virtqueue, i=%d\n", i);
+          netpkt_free(dev, pkt, NETPKT_RX);
+          break;
+        }
     }
 
   if (i > 0)
@@ -345,6 +365,70 @@ static void virtio_net_txfree(FAR struct netdev_lowerhalf_s *dev)
 
       netpkt_free(dev, hdr->pkt, NETPKT_TX);
       vrtinfo("Free, hdr: %p, pkt: %p\n", hdr, hdr->pkt);
+    }
+}
+
+/****************************************************************************
+ * Name: virtio_net_free_vq_buffers
+ *
+ * Description:
+ *   Reclaim and free all in-flight RX/TX netpkt buffers still queued in the
+ *   virtqueues. Called after virtio_reset_device() so the device no longer
+ *   accesses the buffers, and before virtio_delete_virtqueues() so the ring
+ *   and virtqueue structures are still valid.
+ *
+ * Input Parameters:
+ *   vdev - The virtio device
+ *
+ * Returned Value:
+ *   None
+ *
+ ****************************************************************************/
+
+static void virtio_net_free_vq_buffers(FAR struct virtio_device *vdev)
+{
+  FAR struct virtio_net_priv_s *priv = vdev->priv;
+  FAR struct netdev_lowerhalf_s *dev = (FAR struct netdev_lowerhalf_s *)priv;
+  FAR struct virtio_net_llhdr_s *hdr;
+  FAR struct virtqueue *vq;
+  FAR void *buf;
+  enum netpkt_type_e type;
+  uint16_t idx;
+  int i;
+
+  for (i = 0; i < VIRTIO_NET_NUM; i++)
+    {
+      vq   = vdev->vrings_info[i].vq;
+      type = (i == VIRTIO_NET_RX) ? NETPKT_RX : NETPKT_TX;
+
+      while (1)
+        {
+          hdr = virtqueue_get_buffer_lock(vq, NULL, NULL,
+                                           &priv->lock[i]);
+          if (hdr == NULL)
+            {
+              break;
+            }
+
+          netpkt_free(dev, hdr->pkt, type);
+        }
+
+      /* virtio_reset_device does not return driver-submitted buffers, so
+       * reclaim those still queued in the avail ring.
+       */
+
+      while (1)
+        {
+          buf = virtqueue_get_available_buffer_lock(vq, &idx, NULL,
+                                                    &priv->lock[i]);
+          if (buf == NULL)
+            {
+              break;
+            }
+
+          hdr = container_of(buf, struct virtio_net_llhdr_s, vhdr);
+          netpkt_free(dev, hdr->pkt, type);
+        }
     }
 }
 
@@ -392,6 +476,8 @@ static int virtio_net_ifup(FAR struct netdev_lowerhalf_s *dev)
 static int virtio_net_ifdown(FAR struct netdev_lowerhalf_s *dev)
 {
   FAR struct virtio_net_priv_s *priv = (FAR struct virtio_net_priv_s *)dev;
+  FAR struct virtqueue *vq = priv->vdev->vrings_info[VIRTIO_NET_RX].vq;
+  FAR struct virtio_net_llhdr_s *hdr;
   int i;
 
   /* Disable the Ethernet interrupt */
@@ -401,6 +487,26 @@ static int virtio_net_ifdown(FAR struct netdev_lowerhalf_s *dev)
       virtqueue_disable_cb_lock(priv->vdev->vrings_info[i].vq,
                                 &priv->lock[i]);
     }
+
+  /* Drain RX virtqueue to free netpkt buffers that are still queued
+   * but not yet consumed.
+   */
+
+  while (1)
+    {
+      hdr = virtqueue_get_buffer_lock(vq, NULL, NULL,
+                                      &priv->lock[VIRTIO_NET_RX]);
+      if (hdr == NULL)
+        {
+          break;
+        }
+
+      netpkt_free(dev, hdr->pkt, NETPKT_RX);
+    }
+
+  /* Drain TX virtqueue as well */
+
+  virtio_net_txfree(dev);
 
 #ifdef CONFIG_DRIVERS_WIFI_SIM
   if (priv->lower.wifi)
@@ -424,6 +530,7 @@ static int virtio_net_send(FAR struct netdev_lowerhalf_s *dev,
 {
   FAR struct virtio_net_priv_s *priv = (FAR struct virtio_net_priv_s *)dev;
   FAR struct virtqueue *vq = priv->vdev->vrings_info[VIRTIO_NET_TX].vq;
+  int ret;
 
   /* Check the send length */
 
@@ -435,7 +542,21 @@ static int virtio_net_send(FAR struct netdev_lowerhalf_s *dev,
 
   /* Add buffer to vq and notify the other side */
 
-  virtio_net_addbuffer(dev, vq, pkt, VIRTIO_NET_TX);
+  ret = virtio_net_addbuffer(dev, vq, pkt, VIRTIO_NET_TX);
+  if (ret < 0)
+    {
+      /* The virtqueue has no room.  The packet was not queued, so it is
+       * still owned (and will be recycled) by the upper-half.  Reclaim what
+       * the other side has finished and ask for a TX done callback to
+       * resume the transmission.
+       */
+
+      vrterr("net send failed: %d\n", ret);
+      virtio_net_txfree(dev);
+      virtqueue_enable_cb_lock(vq, &priv->lock[VIRTIO_NET_TX]);
+      return -ENOMEM;
+    }
+
   virtqueue_kick_lock(vq, &priv->lock[VIRTIO_NET_TX]);
 
   /* Try return Netpkt TX buffer to upper-half. */
@@ -476,15 +597,21 @@ static netpkt_t *virtio_net_recv(FAR struct netdev_lowerhalf_s *dev)
     {
       /* If we have no buffer left, enable RX callback. */
 
-      virtqueue_enable_cb(vq);
-      spin_unlock_irqrestore(&priv->lock[VIRTIO_NET_RX], flags);
+      if (virtqueue_enable_cb(vq))
+        {
+          /* A buffer was received before the callback was enabled */
 
+          virtqueue_disable_cb(vq);
+          hdr = virtqueue_get_buffer(vq, &len, NULL);
+        }
+    }
+
+  spin_unlock_irqrestore(&priv->lock[VIRTIO_NET_RX], flags);
+
+  if (hdr == NULL)
+    {
       vrtinfo("get NULL buffer\n");
       return NULL;
-    }
-  else
-    {
-      spin_unlock_irqrestore(&priv->lock[VIRTIO_NET_RX], flags);
     }
 
   /* Set the received pkt length */
@@ -549,6 +676,7 @@ static void virtio_net_txdone(FAR struct virtqueue *vq)
   FAR struct virtio_net_priv_s *priv = vq->vq_dev->priv;
 
   virtqueue_disable_cb_lock(vq, &priv->lock[VIRTIO_NET_TX]);
+  virtio_net_txfree((FAR struct netdev_lowerhalf_s *)priv);
   netdev_lower_txdone((FAR struct netdev_lowerhalf_s *)priv);
 }
 
@@ -720,12 +848,54 @@ static void virtio_net_remove(FAR struct virtio_device *vdev)
 
   netdev_lower_unregister((FAR struct netdev_lowerhalf_s *)priv);
   virtio_reset_device(vdev);
+  virtio_net_free_vq_buffers(vdev);
   virtio_delete_virtqueues(vdev);
 #ifdef CONFIG_DRIVERS_WIFI_SIM
   g_netdev_num--;
   wifi_sim_remove(&priv->lower);
 #endif
   kmm_free(priv);
+}
+
+/****************************************************************************
+ * Name: virtio_net_dump
+ ****************************************************************************/
+
+static void virtio_net_dump(FAR struct virtio_device *vdev)
+{
+  FAR struct virtio_net_priv_s *priv = vdev->priv;
+  FAR struct netdev_lowerhalf_s *netdev =
+    (FAR struct netdev_lowerhalf_s *)&priv->lower;
+  FAR struct net_driver_s *dev = &netdev->netdev;
+  FAR uint8_t *mac = dev->d_mac.ether.ether_addr_octet;
+
+  syslog(LOG_EMERG, "    name=%s, "
+         "mac=%02x:%02x:%02x:%02x:%02x:%02x\n",
+         dev->d_ifname,
+         mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+  syslog(LOG_EMERG, "    bufnum=%d, iob_free=%d, "
+         "quota: rx=%" PRId32 " tx=%" PRId32
+#ifdef CONFIG_NET_IPv4
+         ", ipv4=%u.%u.%u.%u"
+#endif
+#ifdef CONFIG_NET_IPv6
+         ", ipv6=%04x:%04x:%04x:%04x:%04x:%04x:%04x:%04x"
+#endif
+         "\n",
+         priv->bufnum, iob_navail(false),
+         netdev_lower_quota_load(netdev, NETPKT_RX),
+         netdev_lower_quota_load(netdev, NETPKT_TX)
+#ifdef CONFIG_NET_IPv4
+         , ip4_addr1(dev->d_ipaddr), ip4_addr2(dev->d_ipaddr),
+         ip4_addr3(dev->d_ipaddr), ip4_addr4(dev->d_ipaddr)
+#endif
+#ifdef CONFIG_NET_IPv6
+         , dev->d_ipv6addr[0], dev->d_ipv6addr[1],
+         dev->d_ipv6addr[2], dev->d_ipv6addr[3],
+         dev->d_ipv6addr[4], dev->d_ipv6addr[5],
+         dev->d_ipv6addr[6], dev->d_ipv6addr[7]
+#endif
+         );
 }
 
 /****************************************************************************

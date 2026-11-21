@@ -2,8 +2,7 @@
  * libs/libc/lzf/lzf_c.c
  *
  * SPDX-License-Identifier: BSD-2-Clause
- * SPDX-FileCopyrightText:
- *  2000-2010 Marc Alexander Lehmann <schmorp@schmorp.de>
+ * SPDX-FileCopyrightText: 2000-2010 Marc Alexander Lehmann <schmorp@schmorp.de>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -192,6 +191,7 @@ size_t lzf_compress(FAR const void *const in_data,
 
           unsigned int len = 2;
           unsigned int maxlen = in_end - ip - len;
+
           maxlen = maxlen > MAX_REF ? MAX_REF : maxlen;
 
           /* First a faster conservative test */

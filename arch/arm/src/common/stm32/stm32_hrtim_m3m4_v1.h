@@ -29,6 +29,8 @@
 
 #include <nuttx/config.h>
 
+#include <stdbool.h>
+
 #include <arch/board/board.h>
 
 #include "chip.h"
@@ -40,7 +42,7 @@
 #  include "hardware/stm32f33xxx_rcc.h"
 #elif defined(CONFIG_STM32_STM32G47XX)
 #  include "hardware/stm32g47xxx_hrtim.h"
-#  include "hardware/stm32g4xxxx_rcc.h"
+#  include "hardware/stm32_rcc.h"
 #else
 #  error
 #endif
@@ -1094,11 +1096,8 @@ struct hrtim_dev_s
 
 #ifndef __ASSEMBLY__
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -1129,7 +1128,6 @@ struct hrtim_dev_s *stm32_hrtiminitialize(void);
 int hrtim_register(const char *path, struct hrtim_dev_s *dev);
 #endif
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

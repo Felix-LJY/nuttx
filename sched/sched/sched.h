@@ -48,8 +48,8 @@
  * and by a series of task lists.  All of these tasks lists are declared
  * below. Although it is not always necessary, most of these lists are
  * prioritized so that common list handling logic can be used (only the
- * g_readytorun, the g_pendingtasks, and the g_waitingforsemaphore lists
- * need to be prioritized).
+ * g_readytorun and g_pendingtasks lists, and the wait lists in each
+ * semaphore, event and message queue, need to be prioritized).
  */
 
 #define list_readytorun()        (&g_readytorun)
@@ -71,8 +71,6 @@
 #else
 #  define current_task(cpu)      ((FAR struct tcb_s *)list_readytorun()->head)
 #endif
-
-#define is_idle_task(t)          ((t)->pid < CONFIG_SMP_NCPUS)
 
 /* This macro returns the running task which may different from this_task()
  * during interrupt level context switches.
@@ -154,8 +152,8 @@ enum task_deliver_e
  * and by a series of task lists.  All of these tasks lists are declared
  * below. Although it is not always necessary, most of these lists are
  * prioritized so that common list handling logic can be used (only the
- * g_readytorun, the g_pendingtasks, and the g_waitingforsemaphore lists
- * need to be prioritized).
+ * g_readytorun and g_pendingtasks lists, and the wait lists in each
+ * semaphore, event and message queue, need to be prioritized).
  */
 
 /* This is the list of all tasks that are ready to run.  This is a
@@ -256,7 +254,7 @@ extern volatile int g_npidhash;
  * ordered list or not.
  */
 
-extern struct tasklist_s g_tasklisttable[NUM_TASK_STATES];
+extern const struct tasklist_s g_tasklisttable[NUM_TASK_STATES];
 
 #ifndef CONFIG_SCHED_CPULOAD_NONE
 /* This is the total number of clock tick counts.  Essentially the
@@ -321,6 +319,7 @@ void nxsched_remove_self(FAR struct tcb_s *rtrtcb);
 void nxsched_add_blocked(FAR struct tcb_s *btcb, tstate_t task_state);
 void nxsched_remove_blocked(FAR struct tcb_s *btcb);
 int  nxsched_set_priority(FAR struct tcb_s *tcb, int sched_priority);
+void nxsched_releasepid(pid_t pid);
 
 /* Release the vfork() parent suspended on this child, if there is one.
  * Called from nxsched_release_tcb(), the last point in the child's life --
@@ -444,8 +443,13 @@ void nxsched_process_cpuload_ticks(clock_t ticks);
 void nxsched_switch_context(FAR struct tcb_s *from, FAR struct tcb_s *to);
 
 #ifdef CONFIG_SCHED_CRITMONITOR
-void nxsched_switch_critmon(FAR struct tcb_s *from, FAR struct tcb_s *to);
-void nxsched_update_critmon(FAR struct tcb_s *tcb);
+void nxsched_suspend_critmon(FAR struct tcb_s *tcb);
+void nxsched_resume_critmon(FAR struct tcb_s *tcb);
+#endif
+
+#if CONFIG_SCHED_CRITMONITOR_MAXTIME_THREAD >= 0
+void nxsched_update_critmon(void);
+clock_t nxsched_critmon_runtime(FAR struct tcb_s *tcb);
 #endif
 
 #if CONFIG_SCHED_CRITMONITOR_MAXTIME_PREEMPTION >= 0
@@ -458,6 +462,12 @@ void nxsched_critmon_preemption(FAR struct tcb_s *tcb, bool state,
 #if CONFIG_SCHED_CRITMONITOR_MAXTIME_CSECTION >= 0
 void nxsched_critmon_csection(FAR struct tcb_s *tcb, bool state,
                               FAR void *caller);
+#endif
+
+#ifdef CONFIG_SCHED_CAPABILITIES
+bool nxsched_may_control(pid_t pid);
+#else
+#  define nxsched_may_control(pid) true
 #endif
 
 /* TCB operations */
@@ -474,8 +484,16 @@ FAR char **nxsched_get_stackargs(FAR struct tcb_s *tcb);
  * Inline functions
  ****************************************************************************/
 
-static inline_function bool nxsched_add_prioritized(FAR struct tcb_s *tcb,
-                                                    DSEG dq_queue_t *list)
+/* Single body for both forms: inline in every caller, or emitted once by
+ * sched_addprioritized.c (which defines SCHED_ADDPRIORITIZED_IMPL).
+ */
+
+#if defined(CONFIG_SCHED_INLINE_ADDPRIORITIZED) || \
+    defined(SCHED_ADDPRIORITIZED_IMPL)
+#  ifdef CONFIG_SCHED_INLINE_ADDPRIORITIZED
+static inline_function
+#  endif
+bool nxsched_add_prioritized(FAR struct tcb_s *tcb, DSEG dq_queue_t *list)
 {
   FAR struct tcb_s *next;
   FAR struct tcb_s *prev;
@@ -552,6 +570,9 @@ static inline_function bool nxsched_add_prioritized(FAR struct tcb_s *tcb,
 
   return ret;
 }
+#else
+bool nxsched_add_prioritized(FAR struct tcb_s *tcb, DSEG dq_queue_t *list);
+#endif
 
 #  ifdef CONFIG_SMP
 
@@ -628,4 +649,5 @@ static inline_function int nxsched_select_cpu(cpu_set_t affinity)
   return cpu;
 }
 #  endif
+
 #endif /* __SCHED_SCHED_SCHED_H */

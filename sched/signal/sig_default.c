@@ -49,8 +49,13 @@
 
 #if defined(CONFIG_SIG_SIGUSR1_ACTION) || defined(CONFIG_SIG_SIGUSR2_ACTION) || \
     defined(CONFIG_SIG_SIGALRM_ACTION) || defined(CONFIG_SIG_SIGPOLL_ACTION) || \
-    defined(CONFIG_SIG_SIGKILL_ACTION) || defined(CONFIG_SIG_SIGPIPE_ACTION)
+    defined(CONFIG_SIG_SIGKILL_ACTION) || defined(CONFIG_SIG_SIGPIPE_ACTION) || \
+    defined(CONFIG_SIG_SIGPROF_ACTION)
 #  define HAVE_NXSIG_ABNORMAL_TERMINANTION 1
+#endif
+
+#if defined(CONFIG_SIG_SIGSTOP_ACTION) || defined(CONFIG_SIG_SIGURG_ACTION)
+#  define HAVE_NXSIG_NULL_ACTION 1
 #endif
 
 /* Bit definitions for the struct nxsig_defaction_s 'flags' field */
@@ -79,8 +84,10 @@ struct nxsig_defaction_s
 #ifdef HAVE_NXSIG_ABNORMAL_TERMINANTION
 static void nxsig_abnormal_termination(int signo);
 #endif
-#ifdef CONFIG_SIG_SIGSTOP_ACTION
+#ifdef HAVE_NXSIG_NULL_ACTION
 static void nxsig_null_action(int signo);
+#endif
+#ifdef CONFIG_SIG_SIGSTOP_ACTION
 static void nxsig_stop_task(int signo);
 #endif
 
@@ -190,7 +197,7 @@ static const struct nxsig_defaction_s g_defactions[] =
  *
  ****************************************************************************/
 
-#ifdef CONFIG_SIG_SIGSTOP_ACTION
+#ifdef HAVE_NXSIG_NULL_ACTION
 static void nxsig_null_action(int signo)
 {
 }
@@ -222,13 +229,22 @@ static void nxsig_abnormal_termination(int signo)
 #ifdef HAVE_GROUP_MEMBERS
   /* Kill all of the children of the task.  This will not kill the currently
    * running task/pthread (this_task).  It will kill the main thread of the
-   * task group if this_task is a pthread.
+   * task group if this_task is a pthread.  Cancel them at once, as for a
+   * fatal exception: a thread can block or catch SIGTERM.
    */
 
+  rtcb->flags |= TCB_FLAG_FORCED_CANCEL;
   group_kill_children(rtcb);
 #endif
 
-  tls_cleanup_popall(tls_get_info());
+  if ((rtcb->flags & TCB_FLAG_EXIT_PROCESSING) != 0)
+    {
+      /* If we are already in the process of terminating, then we should
+       * not be here.  We should have already exited.
+       */
+
+      return;
+    }
 
 #ifndef CONFIG_DISABLE_PTHREAD
   /* Check if the currently running task is actually a pthread */
@@ -313,7 +329,7 @@ static void nxsig_stop_task(int signo)
       if (group->tg_statloc != NULL)
         {
           *group->tg_statloc = 0;
-           group->tg_statloc = NULL;
+          group->tg_statloc = NULL;
         }
 
       /* tg_waitflags == 0 means that the flags are available to another
@@ -537,17 +553,17 @@ _sa_handler_t nxsig_default(FAR struct tcb_s *tcb, int signo, bool defaction)
        */
 
       handler = nxsig_default_action(signo);
-      if (handler != SIG_IGN)
-        {
-          /* nxsig_addset() is not atomic (but neither is sigaction()) */
 
-          flags = spin_lock_irqsave(&group->tg_lock);
-          nxsig_addset(&group->tg_sigdefault, signo);
-          spin_unlock_irqrestore(&group->tg_lock, flags);
-        }
+      /* The signal is at its default action, also when that action is to
+       * ignore it.  NOTE that nxsig_addset() is not atomic (but neither is
+       * sigaction()).
+       */
+
+      flags = spin_lock_irqsave(&group->tg_lock);
+      nxsig_addset(&group->tg_sigdefault, signo);
+      spin_unlock_irqrestore(&group->tg_lock, flags);
     }
-
-  if (handler == SIG_IGN)
+  else
     {
       /* We are unsetting the default action. NOTE that nxsig_delset() is not
        * atomic (but neither is sigaction()).
@@ -585,9 +601,9 @@ int nxsig_default_initialize(FAR struct tcb_s *tcb)
   DEBUGASSERT(tcb != NULL && tcb->group != NULL);
   group = tcb->group;
 
-  /* Initialize the set of default signal handlers */
+  /* All signals start at their default action */
 
-  sigemptyset(&group->tg_sigdefault);
+  sigfillset(&group->tg_sigdefault);
 
   /* Setup the default action for each signal in g_defactions[] */
 

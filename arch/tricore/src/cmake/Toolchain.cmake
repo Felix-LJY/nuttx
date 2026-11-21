@@ -23,11 +23,7 @@
 # Toolchain
 
 if(CONFIG_TRICORE_TOOLCHAIN_TASKING)
-  include(${CMAKE_CURRENT_LIST_DIR}/ToolchainTasking.cmake)
+  include(${CMAKE_CURRENT_LIST_DIR}/tasking.cmake)
 elseif(CONFIG_TRICORE_TOOLCHAIN_GNU)
-  include(${CMAKE_CURRENT_LIST_DIR}/ToolchainGnuc.cmake)
-endif()
-
-if(CONFIG_DEBUG_SYMBOLS)
-  add_compile_options(${CONFIG_DEBUG_SYMBOLS_LEVEL})
+  include(${CMAKE_CURRENT_LIST_DIR}/gcc.cmake)
 endif()

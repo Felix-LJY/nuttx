@@ -108,6 +108,7 @@ The main task thread does not have thread-specific data.
 
  - :c:func:`pthread_kill`
  - :c:func:`pthread_sigmask`
+ - :c:func:`pthread_sigqueue`
 
 No support for the following pthread interfaces is provided by NuttX:
 
@@ -298,7 +299,10 @@ No support for the following pthread interfaces is provided by NuttX:
   zero (``OK``). Otherwise, an error number will be returned to indicate
   the error:
 
-  -  ``To be provided``.
+  -  ``EINVAL``. ``stacksize`` is less than ``PTHREAD_STACK_MIN``, or,
+     with ``CONFIG_TLS_ALIGNED``, more than
+     ``2^CONFIG_TLS_LOG2_MAXSTACK`` bytes.  ``pthread_attr_setstack()``
+     and ``pthread_create()`` give the same error for such a size.
 
   **Assumptions/Limitations:**
 
@@ -519,6 +523,11 @@ No support for the following pthread interfaces is provided by NuttX:
   The cancellability state and type of any newly created threads are
   ``PTHREAD_CANCEL_ENABLE`` and ``PTHREAD_CANCEL_DEFERRED respectively``.
 
+  Deferred cancellation needs ``CONFIG_CANCELLATION_POINTS``.  Without it,
+  ``pthread_cancel()`` acts at once, the type is always
+  ``PTHREAD_CANCEL_ASYNCHRONOUS`` (``oldtype`` reports it), and
+  ``PTHREAD_CANCEL_DEFERRED`` fails with ``EINVAL``.
+
   **Input Parameters:**
 
   :param type: New cancellation state. One of ``PTHREAD_CANCEL_DEFERRED``
@@ -579,6 +588,10 @@ No support for the following pthread interfaces is provided by NuttX:
   -  The thread acts upon a cancellation request.
   -  The thread calls ``pthread_cleanup_pop()`` with a non-zero execute
      argument.
+
+  The stack has ``CONFIG_TLS_NCLEANUP`` entries.  With
+  ``CONFIG_TLS_NCLEANUP=0`` the function does not exist and a program that
+  calls it does not link.
 
   **Input Parameters:**
 
@@ -782,7 +795,6 @@ No support for the following pthread interfaces is provided by NuttX:
   -  ``key`` is a pointer to the key to create.
   -  ``destructor`` is an optional destructor function that may be
      associated with each key that is invoked when a thread exits.
-     However, this argument is ignored in the current implementation.
 
   **Returned Value:**
 
@@ -800,7 +812,12 @@ No support for the following pthread interfaces is provided by NuttX:
   **POSIX Compatibility:** Comparable to the POSIX interface of the same
   name.
 
-  -  The present implementation ignores the ``destructor`` argument.
+  -  When a thread exits, the destructor of each key with a value that is
+     not ``NULL`` is called with that value; the value is set to ``NULL``
+     first.  If a destructor sets a value again, the destructors are
+     called again, up to ``PTHREAD_DESTRUCTOR_ITERATIONS`` (4) times.
+  -  ``PTHREAD_KEYS_MAX`` is ``CONFIG_TLS_NELEM``.  POSIX requires at
+     least ``_POSIX_THREAD_KEYS_MAX`` (128) keys.
 
 .. c:function:: int pthread_setspecific(pthread_key_t key, void *value)
 
@@ -1711,6 +1728,29 @@ No support for the following pthread interfaces is provided by NuttX:
   -  ``oset``. Location to store the old signal mask.
 
   **Returned Value:**
+
+  **Assumptions/Limitations:**
+
+  **POSIX Compatibility:** Comparable to the POSIX interface of the same
+  name.
+
+.. c:function:: int pthread_sigqueue(pthread_t thread, int sig, const union sigval value);
+
+  This function queues a signal and data to a thread. It operates similarly to
+  ``sigqueue()``.
+
+  **Input Parameters:**
+
+  -  ``thread``. The ID of a thread in the same process as the caller.
+  -  ``sig``. The signal to be sent
+  -  ``value``. Data to accompany the signal (see ``sigqueue``)
+
+  **Returned Value:**
+
+  -  ``EAGAIN``. The limit of signals which may be queued has been reached.
+  -  ``EINVAL``. ``sig`` was invalid.
+  -  ``ENOSYS``. ``pthread_sigqueue()`` is not supported on this system.
+  -  ``ESRCH``. ``thread`` is not valid.
 
   **Assumptions/Limitations:**
 

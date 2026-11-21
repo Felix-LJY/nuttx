@@ -44,7 +44,7 @@
 #endif
 
 #ifdef CONFIG_SYSLOG_RTT
-#  include <nuttx/segger/rtt.h>
+#  include <nuttx/rtt.h>
 #endif
 
 #ifdef CONFIG_SYSLOG_CDCACM
@@ -106,7 +106,7 @@ static const struct syslog_channel_ops_s g_rpmsg_channel_ops =
 {
   syslog_rpmsg_putc,
   syslog_rpmsg_putc,
-  syslog_rpmsg_flush,
+  NULL,
   syslog_rpmsg_write,
   syslog_rpmsg_write
 };
@@ -178,6 +178,12 @@ static syslog_channel_t g_default_channel =
   &g_default_channel_ops
 #  ifdef CONFIG_SYSLOG_IOCTL
   , "default"
+#  endif
+#  ifdef CONFIG_SYSLOG_CONSOLE_LEVEL
+#    if defined(CONFIG_SYSLOG_IOCTL) || defined(CONFIG_SYSLOG_CRLF)
+  , 0
+#    endif
+  , SYSLOG_CONSOLE_DROPMASK
 #  endif
 };
 #endif
@@ -292,6 +298,7 @@ static int syslog_default_putc(FAR syslog_channel_t *channel, int ch)
        */
 
       irqstate_t flags = enter_critical_section();
+
       up_putc(ch);
       leave_critical_section(flags);
     }
@@ -316,6 +323,7 @@ static ssize_t syslog_default_write(FAR syslog_channel_t *channel,
        */
 
       irqstate_t flags = enter_critical_section();
+
       up_nputs(buffer, buflen);
       leave_critical_section(flags);
     }

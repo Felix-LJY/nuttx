@@ -26,8 +26,10 @@
 
 #include <nuttx/config.h>
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <assert.h>
+#include <errno.h>
 
 #include <nuttx/irq.h>
 #include <nuttx/addrenv.h>
@@ -41,6 +43,18 @@
 /****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
+
+/* From user mode, the only reserved system call that is allowed is the
+ * return from a signal handler that the kernel dispatched.  Without full
+ * signal support the kernel dispatches no handler, so none is allowed.
+ */
+
+#ifdef CONFIG_ENABLE_ALL_SIGNALS
+#  define USER_SIGRETURN(tcb, cmd) \
+     ((cmd) == SYS_signal_handler_return && (tcb)->xcp.sigreturn != 0)
+#else
+#  define USER_SIGRETURN(tcb, cmd) false
+#endif
 
 /****************************************************************************
  * Public Data
@@ -74,6 +88,16 @@ uintreg_t *riscv_doirq(int irq, uintreg_t *regs)
   if (irq >= RISCV_IRQ_ECALLU && irq <= RISCV_IRQ_ECALLM)
     {
       regs[REG_EPC] += 4;
+
+#ifndef CONFIG_BUILD_FLAT
+      if (irq == RISCV_IRQ_ECALLU && !USER_SIGRETURN(tcb, regs[REG_A0]))
+        {
+          regs[REG_A0] = -ENOSYS;
+          board_autoled_off(LED_INIRQ);
+          return regs;
+        }
+#endif
+
       if (regs[REG_A0] != SYS_restore_context)
         {
           (*running_task)->xcp.regs = regs;

@@ -54,9 +54,13 @@ static int chstat_recursive(FAR const char *path,
 
   /* Get an inode for this path */
 
-  SETUP_SEARCH(&desc, path, true);
+  ret = inode_search_setup(&desc, path, true);
+  if (ret < 0)
+    {
+      return ret;
+    }
 
-  ret = inode_find(&desc);
+  ret = inode_find(&desc, &inode);
   if (ret < 0)
     {
       /* This name does not refer to an inode in the pseudo file system and
@@ -68,10 +72,9 @@ static int chstat_recursive(FAR const char *path,
 
   /* Get the search results */
 
-  inode = desc.node;
   DEBUGASSERT(inode != NULL);
 
-  ret = inode_checkpathperm(inode, 0, 0);
+  ret = inode_checkpathperm(inode, INODE_PATH_AMODE(&desc), 0);
   if (ret < 0)
     {
       inode_release(inode);
@@ -91,6 +94,13 @@ static int chstat_recursive(FAR const char *path,
 
       if (inode->u.i_mops && inode->u.i_mops->chstat)
         {
+          /* lchown(), lchmod() and lutimens() change the link itself */
+
+          if (resolve == 0)
+            {
+              flags |= CH_STAT_NOFOLLOW;
+            }
+
           /* Perform the chstat() operation */
 
           ret = inode->u.i_mops->chstat(inode, desc.relpath, buf, flags);
@@ -113,7 +123,7 @@ static int chstat_recursive(FAR const char *path,
   inode_release(inode);
 
 errout_with_search:
-  RELEASE_SEARCH(&desc);
+  inode_search_release(&desc);
   return ret;
 }
 
@@ -172,6 +182,18 @@ static int chstat(FAR const char *path,
         }
     }
 
+  /* Changing the mode, owner, group or times is a status change, so mark
+   * st_ctime for update.  st_ctim already holds the current time.  This
+   * runs after the UTIME_OMIT handling, so a no-op utimens() leaves
+   * st_ctime alone.
+   */
+
+  if (flags & (CH_STAT_MODE | CH_STAT_UID | CH_STAT_GID |
+               CH_STAT_ATIME | CH_STAT_MTIME))
+    {
+      flags |= CH_STAT_CTIME;
+    }
+
   /* Perform the chstat operation */
 
   ret = chstat_recursive(path, buf, flags, resolve);
@@ -215,7 +237,7 @@ int chmod(FAR const char *path, mode_t mode)
 {
   struct stat buf;
 
-  buf.st_mode = mode & 0777;
+  buf.st_mode = mode & 07777;
 
   return chstat(path, &buf, CH_STAT_MODE, 1);
 }
@@ -241,7 +263,7 @@ int lchmod(FAR const char *path, mode_t mode)
 {
   struct stat buf;
 
-  buf.st_mode = mode & 0777;
+  buf.st_mode = mode & 07777;
 
   return chstat(path, &buf, CH_STAT_MODE, 0);
 }

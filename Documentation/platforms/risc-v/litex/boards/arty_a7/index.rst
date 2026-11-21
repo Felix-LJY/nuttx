@@ -1,8 +1,8 @@
-=======
-Arty A7
-=======
+================
+Digilent Arty A7
+================
 
-.. tags:: arch:riscv, vendor:sifive, experimental
+.. tags:: arch:risc-v, chip:litex
 
 .. todo::
 

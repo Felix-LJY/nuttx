@@ -37,6 +37,7 @@ include crypto/Make.defs
 include devfreq/Make.defs
 include devicetree/Make.defs
 include dma/Make.defs
+include dma-buf/Make.defs
 include math/Make.defs
 include motor/Make.defs
 include i2c/Make.defs
@@ -86,6 +87,7 @@ include reset/Make.defs
 include pci/Make.defs
 include coresight/Make.defs
 include aie/Make.defs
+include tee/Make.defs
 
 ifeq ($(CONFIG_SPECIFIC_DRIVERS),y)
 -include platform/Make.defs
@@ -108,8 +110,12 @@ $(AOBJS): %$(OBJEXT): %.S
 $(COBJS): %$(OBJEXT): %.c
 	$(call COMPILE, $<, $@)
 
-$(BIN): $(OBJS)
+# Pre-built static libraries needed by some drivers (PREBUILT_LIBS) are
+# merged into libdrivers.a
+
+$(BIN): $(OBJS) $(PREBUILT_LIBS)
 	$(call ARCHIVE_REBUILD, $@, $(OBJS))
+	$(foreach lib,$(PREBUILT_LIBS),$(call ARCHIVE_ADDLIB, $@, $(lib))$(NEWLINE))
 
 context::
 

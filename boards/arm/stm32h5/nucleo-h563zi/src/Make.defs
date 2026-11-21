@@ -20,8 +20,6 @@
 #
 ############################################################################
 
-include $(TOPDIR)/Make.defs
-
 CSRCS = stm32_boot.c stm32_bringup.c stm32_clockconfig.c
 
 ifeq ($(CONFIG_ARCH_LEDS),y)
@@ -42,12 +40,12 @@ ifeq ($(CONFIG_ADC),y)
 CSRCS += stm32_adc.c
 endif
 
-ifeq ($(CONFIG_STM32_DTS),y)
-CSRCS += stm32_dts.c
+ifeq ($(CONFIG_DAC),y)
+CSRCS += stm32_dac.c
 endif
 
-ifeq ($(CONFIG_STM32_FDCAN),y)
-CSRCS += stm32_can.c
+ifeq ($(CONFIG_STM32_DTS),y)
+CSRCS += stm32_dts.c
 endif
 
 ifeq ($(CONFIG_STM32_PWM),y)
@@ -56,10 +54,6 @@ endif
 
 ifeq ($(CONFIG_STM32_USBFS_HOST),y)
 CSRCS += stm32_usb.c
-endif
-
-ifeq ($(CONFIG_ARM_MPU),y)
-CSRCS += stm32_mpu.c
 endif
 
 DEPPATH += --dep-path board

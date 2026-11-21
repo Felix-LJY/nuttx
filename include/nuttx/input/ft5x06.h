@@ -37,6 +37,7 @@
  ****************************************************************************/
 
 #include <nuttx/config.h>
+#include <stdbool.h>
 
 #include <nuttx/irq.h>
 #include <nuttx/i2c/i2c_master.h>
@@ -115,11 +116,8 @@ struct ft5x06_config_s
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -144,7 +142,6 @@ extern "C"
 int ft5x06_register(FAR struct i2c_master_s *i2c,
                     FAR const struct ft5x06_config_s *config, int minor);
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

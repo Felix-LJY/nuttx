@@ -29,6 +29,7 @@
 
 #include <nuttx/irq.h>
 #include <nuttx/config.h>
+#include <stdbool.h>
 #include <nuttx/fs/ioctl.h>
 #include <nuttx/spi/spi.h>
 #include <nuttx/can/can.h>
@@ -98,11 +99,8 @@ struct mcp2515_can_s;
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -143,7 +141,6 @@ FAR struct mcp2515_can_s *mcp2515_instantiate(
 FAR struct can_dev_s *mcp2515_initialize(
                                       FAR struct mcp2515_can_s *mcp2515can);
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

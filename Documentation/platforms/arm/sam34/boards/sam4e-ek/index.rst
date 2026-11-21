@@ -1,6 +1,8 @@
-========
-SAM4E-EK
-========
+==================
+Microchip SAM4E-EK
+==================
+
+.. tags:: arch:arm, chip:sam34, vendor:microchip
 
 This README discusses issues unique to NuttX configurations for the Atmel
 SAM4E-EK development. This board features the SAM4E16 MCU running at 96 or

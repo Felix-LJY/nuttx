@@ -132,6 +132,24 @@ static int     unionfs_trychstat(FAR struct inode *inode,
                                  FAR const char *relpath,
                                  FAR const char *prefix,
                                  FAR const struct stat *buf, int flags);
+#ifdef CONFIG_FS_LINKS
+static int     unionfs_trylink(FAR struct inode *inode,
+                               FAR const char *relpath1,
+                               FAR const char *relpath2,
+                               FAR const char *prefix);
+static int     unionfs_trysymlink(FAR struct inode *inode,
+                                  FAR const char *target,
+                                  FAR const char *relpath,
+                                  FAR const char *prefix);
+static ssize_t unionfs_tryreadlink(FAR struct inode *inode,
+                                   FAR const char *relpath,
+                                   FAR const char *prefix,
+                                   FAR char *buf, size_t bufsize);
+static int     unionfs_trylstat(FAR struct inode *inode,
+                                FAR const char *relpath,
+                                FAR const char *prefix,
+                                FAR struct stat *buf);
+#endif
 static int     unionfs_trystatdir(FAR struct inode *inode,
                                   FAR const char *relpath,
                                   FAR const char *prefix);
@@ -202,6 +220,20 @@ static int     unionfs_stat(FAR struct inode *mountpt,
 static int     unionfs_chstat(FAR struct inode *mountpt,
                               FAR const char *relpath,
                               FAR const struct stat *buf, int flags);
+#ifdef CONFIG_FS_LINKS
+static int     unionfs_link(FAR struct inode *mountpt,
+                            FAR const char *relpath1,
+                            FAR const char *relpath2);
+static int     unionfs_symlink(FAR struct inode *mountpt,
+                               FAR const char *target,
+                               FAR const char *relpath);
+static ssize_t unionfs_readlink(FAR struct inode *mountpt,
+                                FAR const char *relpath,
+                                FAR char *buf, size_t bufsize);
+static int     unionfs_lstat(FAR struct inode *mountpt,
+                             FAR const char *relpath,
+                             FAR struct stat *buf);
+#endif
 
 /* Initialization */
 
@@ -255,7 +287,16 @@ const struct mountpt_operations g_unionfs_operations =
   unionfs_rmdir,       /* rmdir */
   unionfs_rename,      /* rename */
   unionfs_stat,        /* stat */
-  unionfs_chstat       /* chstat */
+  unionfs_chstat,      /* chstat */
+  NULL,                /* syncfs */
+  NULL,                /* ioctldir */
+  NULL,                /* permission */
+#ifdef CONFIG_FS_LINKS
+  unionfs_link,        /* link */
+  unionfs_symlink,     /* symlink */
+  unionfs_readlink,    /* readlink */
+  unionfs_lstat        /* lstat */
+#endif
 };
 
 /****************************************************************************
@@ -605,6 +646,159 @@ static int unionfs_trychstat(FAR struct inode *inode,
   return ops->chstat(inode, trypath, buf, flags);
 }
 
+#ifdef CONFIG_FS_LINKS
+/****************************************************************************
+ * Name: unionfs_trylink
+ ****************************************************************************/
+
+static int unionfs_trylink(FAR struct inode *mountpt,
+                           FAR const char *relpath1,
+                           FAR const char *relpath2,
+                           FAR const char *prefix)
+{
+  FAR const struct mountpt_operations *ops;
+  FAR const char *tryoldpath;
+  FAR const char *trynewpath;
+
+  /* Is source path valid on this file system? */
+
+  tryoldpath = unionfs_offsetpath(relpath1, prefix);
+  if (tryoldpath == NULL)
+    {
+      /* No.. return -ENOENT.  This should not fail because the existence
+       * of the file has already been verified.
+       */
+
+      return -ENOENT;
+    }
+
+  /* Is destination path valid on this file system?
+   * REVISIT:  There is no logic currently to link across the contained
+   * file systems.  We return -EXDEV which is the correct POSIX error for
+   * cross-device links.
+   */
+
+  trynewpath = unionfs_offsetpath(relpath2, prefix);
+  if (trynewpath == NULL)
+    {
+      return -EXDEV;
+    }
+
+  /* Yes.. Try to link the file */
+
+  ops = mountpt->u.i_mops;
+  if (!ops->link)
+    {
+      return -ENOSYS;
+    }
+
+  return ops->link(mountpt, tryoldpath, trynewpath);
+}
+
+/****************************************************************************
+ * Name: unionfs_trysymlink
+ ****************************************************************************/
+
+static int unionfs_trysymlink(FAR struct inode *inode,
+                              FAR const char *target,
+                              FAR const char *relpath,
+                              FAR const char *prefix)
+{
+  FAR const struct mountpt_operations *ops;
+  FAR const char *trypath;
+
+  /* Is the symlink path valid on this file system? */
+
+  trypath = unionfs_offsetpath(relpath, prefix);
+  if (trypath == NULL)
+    {
+      /* No.. return -ENOENT */
+
+      return -ENOENT;
+    }
+
+  /* Yes.. Try to create the symlink.  Note: target is NOT offsetpath'd.
+   * It is a relative path from the symlink location and is passed
+   * transparently to the underlying file system.
+   */
+
+  ops = inode->u.i_mops;
+  if (!ops->symlink)
+    {
+      return -ENOSYS;
+    }
+
+  return ops->symlink(inode, target, trypath);
+}
+
+/****************************************************************************
+ * Name: unionfs_tryreadlink
+ ****************************************************************************/
+
+static ssize_t unionfs_tryreadlink(FAR struct inode *inode,
+                                   FAR const char *relpath,
+                                   FAR const char *prefix,
+                                   FAR char *buf, size_t bufsize)
+{
+  FAR const struct mountpt_operations *ops;
+  FAR const char *trypath;
+
+  /* Is this path valid on this file system? */
+
+  trypath = unionfs_offsetpath(relpath, prefix);
+  if (trypath == NULL)
+    {
+      /* No.. return -ENOENT */
+
+      return -ENOENT;
+    }
+
+  /* Yes.. Try to read the link */
+
+  ops = inode->u.i_mops;
+  if (!ops->readlink)
+    {
+      return -ENOSYS;
+    }
+
+  return ops->readlink(inode, trypath, buf, bufsize);
+}
+
+/****************************************************************************
+ * Name: unionfs_trylstat
+ ****************************************************************************/
+
+static int unionfs_trylstat(FAR struct inode *inode,
+                            FAR const char *relpath,
+                            FAR const char *prefix,
+                            FAR struct stat *buf)
+{
+  FAR const struct mountpt_operations *ops;
+  FAR const char *trypath;
+
+  /* Is this path valid on this file system? */
+
+  trypath = unionfs_offsetpath(relpath, prefix);
+  if (trypath == NULL)
+    {
+      /* No.. return -ENOENT */
+
+      return -ENOENT;
+    }
+
+  /* Yes.. Try to lstat the file */
+
+  ops = inode->u.i_mops;
+  if (!ops->lstat)
+    {
+      return -ENOSYS;
+    }
+
+  return ops->lstat(inode, trypath, buf);
+}
+
+#endif
+
 /****************************************************************************
  * Name: unionfs_trystatdir
  ****************************************************************************/
@@ -912,7 +1106,7 @@ static int unionfs_open(FAR struct file *filep, FAR const char *relpath,
     }
   else
     {
-      /* Try to open the file on file system 1 */
+      /* Try to open the file on file system 2 */
 
       um  = &ui->ui_fs[1];
 
@@ -923,10 +1117,11 @@ static int unionfs_open(FAR struct file *filep, FAR const char *relpath,
                             mode);
       if (ret < 0)
         {
+          fs_heap_free(uf);
           goto errout_with_lock;
         }
 
-      /* Successfully opened on file system 1 */
+      /* Successfully opened on file system 2 */
 
       uf->uf_ndx = 1;
     }
@@ -1021,6 +1216,7 @@ static ssize_t unionfs_read(FAR struct file *filep, FAR char *buffer,
   FAR struct unionfs_file_s *uf;
   FAR struct unionfs_mountpt_s *um;
   FAR const struct mountpt_operations *ops;
+  ssize_t ret;
 
   finfo("buflen: %lu\n", (unsigned long)buflen);
 
@@ -1040,7 +1236,18 @@ static ssize_t unionfs_read(FAR struct file *filep, FAR char *buffer,
 
   /* Perform the lower level read operation */
 
-  return ops->read ? ops->read(&uf->uf_file, buffer, buflen) : -EPERM;
+  if (ops->read == NULL)
+    {
+      return -EPERM;
+    }
+
+  ret = ops->read(&uf->uf_file, buffer, buflen);
+  if (ret > 0)
+    {
+      filep->f_pos = uf->uf_file.f_pos;
+    }
+
+  return ret;
 }
 
 /****************************************************************************
@@ -1054,6 +1261,7 @@ static ssize_t unionfs_write(FAR struct file *filep, FAR const char *buffer,
   FAR struct unionfs_file_s *uf;
   FAR struct unionfs_mountpt_s *um;
   FAR const struct mountpt_operations *ops;
+  ssize_t ret;
 
   finfo("buflen: %lu\n", (unsigned long)buflen);
 
@@ -1073,7 +1281,18 @@ static ssize_t unionfs_write(FAR struct file *filep, FAR const char *buffer,
 
   /* Perform the lower level write operation */
 
-  return ops->write ? ops->write(&uf->uf_file, buffer, buflen) : -EPERM;
+  if (ops->write == NULL)
+    {
+      return -EPERM;
+    }
+
+  ret = ops->write(&uf->uf_file, buffer, buflen);
+  if (ret > 0)
+    {
+      filep->f_pos = uf->uf_file.f_pos;
+    }
+
+  return ret;
 }
 
 /****************************************************************************
@@ -1108,6 +1327,10 @@ static off_t unionfs_seek(FAR struct file *filep, off_t offset, int whence)
   if (ops->seek != NULL)
     {
       offset = ops->seek(&uf->uf_file, offset, whence);
+      if (offset >= 0)
+        {
+          filep->f_pos = offset;
+        }
     }
   else
     {
@@ -1261,7 +1484,7 @@ static int unionfs_dup(FAR const struct file *oldp, FAR struct file *newp)
       memcpy(newpriv, oldpriv, sizeof(struct unionfs_file_s));
       newpriv->uf_file.f_priv = NULL;
 
-      /* Then perform the lower lowel dup operation */
+      /* Then perform the lower level dup operation */
 
       ret = OK;
       if (ops->dup != NULL)
@@ -1314,7 +1537,7 @@ static int unionfs_fstat(FAR const struct file *filep, FAR struct stat *buf)
               um->um_node->u.i_mops != NULL);
   ops = um->um_node->u.i_mops;
 
-  /* Perform the lower level write operation */
+  /* Perform the lower level fstat operation */
 
   return ops->fstat ? ops->fstat(&uf->uf_file, buf) : -EPERM;
 }
@@ -1388,7 +1611,7 @@ static int unionfs_truncate(FAR struct file *filep, off_t length)
               um->um_node->u.i_mops != NULL);
   ops = um->um_node->u.i_mops;
 
-  /* Perform the lower level write operation */
+  /* Perform the lower level truncate operation */
 
   return ops->truncate ? ops->truncate(&uf->uf_file, length) : -EPERM;
 }
@@ -1443,6 +1666,7 @@ static int unionfs_opendir(FAR struct inode *mountpt,
       udir->fu_relpath = fs_heap_strdup(relpath);
       if (!udir->fu_relpath)
         {
+          ret = -ENOMEM;
           goto errout_with_lock;
         }
     }
@@ -1939,6 +2163,7 @@ static int unionfs_rewinddir(FAR struct inode *mountpt,
 static int unionfs_bind(FAR struct inode *blkdriver, FAR const void *data,
                         FAR void **handle)
 {
+  size_t data_size = strlen(data) + 1;
   FAR const char *fspath1 = "";
   FAR const char *prefix1 = "";
   FAR const char *fspath2 = "";
@@ -1950,11 +2175,13 @@ static int unionfs_bind(FAR struct inode *blkdriver, FAR const void *data,
 
   /* Parse options from mount syscall */
 
-  dup = tmp = fs_heap_strdup(data);
+  dup = tmp = lib_get_tempbuffer(data_size);
   if (!dup)
     {
       return -ENOMEM;
     }
+
+  memcpy(dup, data, data_size);
 
   while ((tok = strsep(&tmp, ",")))
     {
@@ -1979,7 +2206,7 @@ static int unionfs_bind(FAR struct inode *blkdriver, FAR const void *data,
   /* Call unionfs_dobind to do the real work. */
 
   ret = unionfs_dobind(fspath1, prefix1, fspath2, prefix2, handle);
-  fs_heap_free(dup);
+  lib_put_tempbuffer(dup);
 
   return ret;
 }
@@ -2128,16 +2355,14 @@ static int unionfs_statfs(FAR struct inode *mountpt, FAR struct statfs *buf)
     {
       if (buf1.f_bsize < buf2.f_bsize)
         {
-          tmp           = (((uint64_t)buf2.f_blocks *
-                            (uint64_t)buf2.f_bsize) << 16);
+          tmp           = (uint64_t)buf2.f_bsize << 16;
           ratiob16      = (uint32_t)(tmp / buf1.f_bsize);
           adj           = &buf2;
         }
       else
         {
           buf->f_bsize  = buf2.f_bsize;
-          tmp           = (((uint64_t)buf1.f_blocks *
-                            (uint64_t)buf1.f_bsize) << 16);
+          tmp           = (uint64_t)buf1.f_bsize << 16;
           ratiob16      = (uint32_t)(tmp / buf2.f_bsize);
           adj           = &buf1;
         }
@@ -2211,7 +2436,7 @@ static int unionfs_unlink(FAR struct inode *mountpt,
       ret = unionfs_trystat(um->um_node, relpath, um->um_prefix, &buf);
       if (ret >= 0)
         {
-          /* Yes.. Try to unlink the file on file system 1.  This would fail
+          /* Yes.. Try to unlink the file on file system 2.  This would fail
            * with -ENOSYS if file system 2 is a read-only only file system or
            * -EISDIR if the path is not a file.
            * */
@@ -2462,7 +2687,8 @@ static int unionfs_stat(FAR struct inode *mountpt, FAR const char *relpath,
 
       /* Claim that this is a read-only directory */
 
-      buf->st_mode = S_IFDIR | S_IROTH | S_IRGRP | S_IRUSR;
+      buf->st_mode = S_IFDIR | S_IROTH | S_IRGRP | S_IRUSR | S_IXOTH |
+                     S_IXGRP | S_IXUSR;
 
       /* Check if the user is stat'ing some "fake" node between the unionfs
        * root and the file system 1 root directory.
@@ -2526,6 +2752,178 @@ static int unionfs_chstat(FAR struct inode *mountpt, FAR const char *relpath,
   return ret;
 }
 
+#ifdef CONFIG_FS_LINKS
+/****************************************************************************
+ * Name: unionfs_link
+ ****************************************************************************/
+
+static int unionfs_link(FAR struct inode *mountpt,
+                        FAR const char *relpath1,
+                        FAR const char *relpath2)
+{
+  FAR struct unionfs_inode_s *ui;
+  FAR struct unionfs_mountpt_s *um;
+  struct stat buf;
+  int ret;
+
+  finfo("relpath1: %s relpath2: %s\n", relpath1, relpath2);
+
+  /* Recover the union file system data from the struct inode instance */
+
+  DEBUGASSERT(mountpt != NULL && mountpt->i_private != NULL &&
+              relpath1 != NULL && relpath2 != NULL);
+  ui = mountpt->i_private;
+
+  /* Is there a file with this name on file system 1 */
+
+  um  = &ui->ui_fs[0];
+  ret = unionfs_trystat(um->um_node, relpath1, um->um_prefix, &buf);
+  if (ret >= 0)
+    {
+      return unionfs_trylink(um->um_node, relpath1, relpath2,
+                             um->um_prefix);
+    }
+
+  /* File does not exist on file system 1.  Try file system 2. */
+
+  um  = &ui->ui_fs[1];
+  ret = unionfs_trystat(um->um_node, relpath1, um->um_prefix, &buf);
+  if (ret >= 0)
+    {
+      ret = unionfs_trylink(um->um_node, relpath1, relpath2,
+                            um->um_prefix);
+    }
+
+  return ret;
+}
+
+/****************************************************************************
+ * Name: unionfs_symlink
+ ****************************************************************************/
+
+static int unionfs_symlink(FAR struct inode *mountpt,
+                           FAR const char *target,
+                           FAR const char *relpath)
+{
+  FAR struct unionfs_inode_s *ui;
+  FAR struct unionfs_mountpt_s *um;
+  int ret;
+
+  finfo("target: %s relpath: %s\n", target, relpath);
+
+  /* Recover the union file system data from the struct inode instance */
+
+  DEBUGASSERT(mountpt != NULL && mountpt->i_private != NULL &&
+              relpath != NULL);
+  ui = mountpt->i_private;
+
+  /* Try to create the symlink on file system 1 */
+
+  um  = &ui->ui_fs[0];
+  ret = unionfs_trysymlink(um->um_node, target, relpath, um->um_prefix);
+  if (ret >= 0)
+    {
+      return OK;
+    }
+
+  /* symlink failed on file system 1.  Try again on file system 2. */
+
+  um  = &ui->ui_fs[1];
+  ret = unionfs_trysymlink(um->um_node, target, relpath, um->um_prefix);
+  if (ret >= 0)
+    {
+      return OK;
+    }
+
+  return ret;
+}
+
+/****************************************************************************
+ * Name: unionfs_readlink
+ ****************************************************************************/
+
+static ssize_t unionfs_readlink(FAR struct inode *mountpt,
+                                FAR const char *relpath,
+                                FAR char *buf, size_t bufsize)
+{
+  FAR struct unionfs_inode_s *ui;
+  FAR struct unionfs_mountpt_s *um;
+  struct stat st;
+  int ret;
+
+  finfo("relpath: %s\n", relpath);
+
+  /* Recover the union file system data from the struct inode instance */
+
+  DEBUGASSERT(mountpt != NULL && mountpt->i_private != NULL &&
+              relpath != NULL);
+  ui = mountpt->i_private;
+
+  /* Find which file system contains this path, then readlink on it */
+
+  um  = &ui->ui_fs[0];
+  ret = unionfs_trylstat(um->um_node, relpath, um->um_prefix, &st);
+  if (ret >= 0)
+    {
+      return unionfs_tryreadlink(um->um_node, relpath, um->um_prefix,
+                                 buf, bufsize);
+    }
+
+  /* Path was not found on file system 1.  Try file system 2. */
+
+  um  = &ui->ui_fs[1];
+  ret = unionfs_trylstat(um->um_node, relpath, um->um_prefix, &st);
+  if (ret >= 0)
+    {
+      return unionfs_tryreadlink(um->um_node, relpath, um->um_prefix,
+                                 buf, bufsize);
+    }
+
+  return ret;
+}
+
+/****************************************************************************
+ * Name: unionfs_lstat
+ ****************************************************************************/
+
+static int unionfs_lstat(FAR struct inode *mountpt, FAR const char *relpath,
+                         FAR struct stat *buf)
+{
+  FAR struct unionfs_inode_s *ui;
+  FAR struct unionfs_mountpt_s *um;
+  int ret;
+
+  finfo("relpath: %s\n", relpath);
+
+  /* Recover the union file system data from the struct inode instance */
+
+  DEBUGASSERT(mountpt != NULL && mountpt->i_private != NULL &&
+              relpath != NULL);
+  ui = mountpt->i_private;
+
+  /* lstat this path on file system 1 */
+
+  um  = &ui->ui_fs[0];
+  ret = unionfs_trylstat(um->um_node, relpath, um->um_prefix, buf);
+  if (ret >= 0)
+    {
+      return OK;
+    }
+
+  /* lstat failed on file system 1.  Try again on file system 2. */
+
+  um  = &ui->ui_fs[1];
+  ret = unionfs_trylstat(um->um_node, relpath, um->um_prefix, buf);
+  if (ret >= 0)
+    {
+      return OK;
+    }
+
+  return ret;
+}
+
+#endif
+
 /****************************************************************************
  * Name: unionfs_getmount
  ****************************************************************************/
@@ -2538,9 +2936,13 @@ static int unionfs_getmount(FAR const char *path, FAR struct inode **inode)
 
   /* Find the mountpt */
 
-  SETUP_SEARCH(&desc, path, false);
+  ret = inode_search_setup(&desc, path, false);
+  if (ret < 0)
+    {
+      return ret;
+    }
 
-  ret = inode_find(&desc);
+  ret = inode_find(&desc, &minode);
   if (ret < 0)
     {
       /* Mountpoint inode not found */
@@ -2550,7 +2952,6 @@ static int unionfs_getmount(FAR const char *path, FAR struct inode **inode)
 
   /* Get the search results */
 
-  minode = desc.node;
   DEBUGASSERT(minode != NULL);
 
   /* Verify that the inode is a mountpoint.
@@ -2571,14 +2972,14 @@ static int unionfs_getmount(FAR const char *path, FAR struct inode **inode)
   /* Success! */
 
   *inode = minode;
-  RELEASE_SEARCH(&desc);
+  inode_search_release(&desc);
   return OK;
 
 errout_with_inode:
   inode_release(minode);
 
 errout_with_search:
-  RELEASE_SEARCH(&desc);
+  inode_search_release(&desc);
   return ret;
 }
 

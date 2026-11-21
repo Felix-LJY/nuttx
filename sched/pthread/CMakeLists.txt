@@ -30,11 +30,16 @@ if(NOT CONFIG_DISABLE_PTHREAD)
       pthread_getschedparam.c
       pthread_setschedparam.c
       pthread_sigmask.c
+      pthread_sigqueue.c
       pthread_cancel.c
       pthread_completejoin.c
       pthread_findjoininfo.c
       pthread_release.c
       pthread_setschedprio.c)
+
+  if(NOT CONFIG_PTHREAD_MUTEX_UNSAFE)
+    list(APPEND SRCS pthread_mutexinconsistent.c)
+  endif()
 
   if(CONFIG_SMP)
     list(APPEND SRCS pthread_setaffinity.c pthread_getaffinity.c)

@@ -42,11 +42,8 @@
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -61,11 +58,12 @@ extern "C"
  * Name: stm32_can_setup
  ****************************************************************************/
 
-#ifdef CONFIG_STM32_CAN_CHARDRIVER
+#if (defined(CONFIG_STM32_CAN_CHARDRIVER) || \
+     defined(CONFIG_STM32_FDCAN_CHARDRIVER)) && \
+    !defined(CONFIG_STM32_HAVE_FDCAN_H7)
 int stm32_can_setup(void);
 #endif
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

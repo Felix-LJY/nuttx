@@ -53,14 +53,6 @@
  * Pre-processor Definitions
  ****************************************************************************/
 
-/* Are any UARTs enabled? */
-
-#undef HAVE_16550_UART
-#if defined(CONFIG_16550_UART0) || defined(CONFIG_16550_UART1)  \
-  || defined(CONFIG_16550_UART2) || defined(CONFIG_16550_UART3)
-#  define HAVE_16550_UART 1
-#endif
-
 /* Timeout for UART Busy Wait, in milliseconds */
 
 #define UART_TIMEOUT_MS 100
@@ -115,23 +107,29 @@ static bool u16550_txready(FAR struct uart_dev_s *dev);
 static bool u16550_txempty(FAR struct uart_dev_s *dev);
 
 /****************************************************************************
- * Private Data
+ * Public Data
  ****************************************************************************/
 
-#ifdef HAVE_16550_UART
-static const struct u16550_ops_s g_u16550_ops =
+/* Default UART 16550 ops.  These are built even when no static UART is
+ * enabled so that a board which defines its own ports can reuse them.
+ */
+
+const struct u16550_ops_s g_u16550_ops =
 {
   .isr        = u16550_interrupt,
   .getreg     = u16550_getreg,
   .putreg     = u16550_putreg,
-#  ifdef CONFIG_SERIAL_UART_ARCH_IOCTL
+#ifdef CONFIG_SERIAL_UART_ARCH_IOCTL
   .ioctl      = uart_ioctl,
-#  endif
-#  ifdef HAVE_16550_UART_DMA
-  .dmachan    = uart_dmachan,
-#  endif
-};
 #endif
+#ifdef HAVE_16550_UART_DMA
+  .dmachan    = uart_dmachan,
+#endif
+};
+
+/****************************************************************************
+ * Private Data
+ ****************************************************************************/
 
 static const struct uart_ops_s g_uart_ops =
 {
@@ -625,6 +623,7 @@ static uart_datawidth_t u16550_mmio_getreg(FAR struct u16550_s *priv,
                                            unsigned int offset)
 {
   uintptr_t addr = priv->uartbase + offset;
+
   return *((FAR volatile uart_datawidth_t *)addr);
 }
 
@@ -637,6 +636,7 @@ static void u16550_mmio_putreg(FAR struct u16550_s *priv,
                                uart_datawidth_t value)
 {
   uintptr_t addr = priv->uartbase + offset;
+
   *((FAR volatile uart_datawidth_t *)addr) = value;
 }
 #endif
@@ -795,10 +795,7 @@ static int u16550_setup(FAR struct uart_dev_s *dev)
   FAR struct u16550_s *priv = (FAR struct u16550_s *)dev->priv;
   uint32_t div;
   uint32_t lcr;
-#if defined(CONFIG_SERIAL_IFLOWCONTROL) || defined(CONFIG_SERIAL_OFLOWCONTROL) || \
-    defined(CONFIG_16550_SET_MCR_OUT2)
   uint32_t mcr;
-#endif
 
   if (priv->uartbase == 0)
     {
@@ -898,17 +895,14 @@ static int u16550_setup(FAR struct uart_dev_s *dev)
                    UART_FCR_FIFOEN |
                    (priv->rxtrigger << UART_FCR_RXTRIGGER_SHIFT));
 
-#ifdef CONFIG_16550_SET_MCR_OUT2
-  /* Set OUT2 bit in MCR register */
+  /* Set up MCR: always set OUT2 so the UART can drive its interrupt
+   * output, following the default behavior of Windows and Linux, then
+   * set up the auto flow control.
+   */
 
-  mcr = u16550_serialin(priv, UART_MCR_OFFSET);
-  u16550_serialout(priv, UART_MCR_OFFSET, mcr | UART_MCR_OUT2);
-#endif
-
-  /* Set up the auto flow control */
+  mcr = u16550_serialin(priv, UART_MCR_OFFSET) | UART_MCR_OUT2;
 
 #if defined(CONFIG_SERIAL_IFLOWCONTROL) || defined(CONFIG_SERIAL_OFLOWCONTROL)
-  mcr = u16550_serialin(priv, UART_MCR_OFFSET);
   if (priv->flow)
     {
       mcr |= UART_MCR_AFCE;
@@ -919,9 +913,9 @@ static int u16550_setup(FAR struct uart_dev_s *dev)
     }
 
   mcr |= UART_MCR_RTS;
+#endif /* defined(CONFIG_SERIAL_IFLOWCONTROL) || defined(CONFIG_SERIAL_OFLOWCONTROL) */
 
   u16550_serialout(priv, UART_MCR_OFFSET, mcr);
-#endif /* defined(CONFIG_SERIAL_IFLOWCONTROL) || defined(CONFIG_SERIAL_OFLOWCONTROL) */
 
   /* Reconfigure DMA Rx timeout value */
 
@@ -945,6 +939,7 @@ static int u16550_setup(FAR struct uart_dev_s *dev)
 static void u16550_shutdown(struct uart_dev_s *dev)
 {
   FAR struct u16550_s *priv = (FAR struct u16550_s *)dev->priv;
+
   u16550_disableuartint(priv, NULL);
 }
 
@@ -982,22 +977,35 @@ static int u16550_attach(struct uart_dev_s *dev)
 
   /* Attach and enable the IRQ */
 
-  ret = irq_attach(priv->irq, priv->ops->isr, dev);
-#ifndef CONFIG_ARCH_NOINTC
-  if (ret == OK)
+  if (priv->ops->attach != NULL)
     {
-      /* Enable the interrupt (RX and TX interrupts are still disabled
-       * in the UART
-       */
+      ret = priv->ops->attach(priv, dev);
+    }
+  else if (priv->irq < 0)
+    {
+      /* No interrupt: the board polls the UART */
 
-      up_enable_irq(priv->irq);
-
-#ifdef HAVE_16550_UART_DMA
-      if (priv->chanrx)
+      ret = OK;
+    }
+  else
+    {
+      ret = irq_attach(priv->irq, priv->ops->isr, dev);
+#ifndef CONFIG_ARCH_NOINTC
+      if (ret == OK)
         {
-          DMA_RESUME(priv->chanrx);
+          /* Enable the interrupt (RX and TX interrupts are still disabled
+           * in the UART
+           */
+
+          up_enable_irq(priv->irq);
         }
 #endif
+    }
+
+#ifdef HAVE_16550_UART_DMA
+  if (ret == OK && priv->chanrx)
+    {
+      DMA_RESUME(priv->chanrx);
     }
 #endif
 
@@ -1025,8 +1033,15 @@ static void u16550_detach(FAR struct uart_dev_s *dev)
     }
 #endif
 
-  up_disable_irq(priv->irq);
-  irqchain_detach(priv->irq, priv->ops->isr, dev);
+  if (priv->ops->detach != NULL)
+    {
+      priv->ops->detach(priv, dev);
+    }
+  else if (priv->irq >= 0)
+    {
+      up_disable_irq(priv->irq);
+      irqchain_detach(priv->irq, priv->ops->isr, dev);
+    }
 
 #ifdef CONFIG_CLK
   /* Clk disaable */
@@ -1068,151 +1083,154 @@ static int u16550_ioctl(struct file *filep, int cmd, unsigned long arg)
   switch (cmd)
     {
 #ifdef CONFIG_SERIAL_TIOCSERGSTRUCT
-    case TIOCSERGSTRUCT:
-      {
-        FAR struct u16550_s *user = (FAR struct u16550_s *)arg;
-        if (!user)
-          {
-            ret = -EINVAL;
-          }
-        else
-          {
-            memcpy(user, dev, sizeof(struct u16550_s));
-          }
-      }
-      break;
+      case TIOCSERGSTRUCT:
+        {
+          FAR struct u16550_s *user = (FAR struct u16550_s *)arg;
+
+          if (!user)
+            {
+              ret = -EINVAL;
+            }
+          else
+            {
+              memcpy(user, dev, sizeof(struct u16550_s));
+            }
+        }
+        break;
 #endif
 
-    case TIOCSBRK:  /* BSD compatibility: Turn break on, unconditionally */
-      {
-        irqstate_t flags = enter_critical_section();
-        u16550_enablebreaks(priv, true);
-        leave_critical_section(flags);
-      }
-      break;
+      case TIOCSBRK:  /* BSD compatibility: Turn break on, unconditionally */
+        {
+          irqstate_t flags = uart_spinlock(dev, false);
 
-    case TIOCCBRK:  /* BSD compatibility: Turn break off, unconditionally */
-      {
-        irqstate_t flags;
-        flags = enter_critical_section();
-        u16550_enablebreaks(priv, false);
-        leave_critical_section(flags);
-      }
-      break;
+          u16550_enablebreaks(priv, true);
+          uart_spinunlock(dev, false, flags);
+        }
+        break;
+
+      case TIOCCBRK:  /* BSD compatibility: Turn break off, unconditionally */
+        {
+          irqstate_t flags;
+
+          flags = uart_spinlock(dev, false);
+          u16550_enablebreaks(priv, false);
+          uart_spinunlock(dev, false, flags);
+        }
+        break;
 
 #if defined(CONFIG_SERIAL_TERMIOS) && !defined(CONFIG_16550_SUPRESS_CONFIG)
-    case TCGETS:
-      {
-        FAR struct termios *termiosp = (FAR struct termios *)arg;
-        irqstate_t flags;
+      case TCGETS:
+        {
+          FAR struct termios *termiosp = (FAR struct termios *)arg;
+          irqstate_t flags;
 
-        if (!termiosp)
-          {
-            ret = -EINVAL;
-            break;
-          }
+          if (!termiosp)
+            {
+              ret = -EINVAL;
+              break;
+            }
 
-        flags = enter_critical_section();
+          flags = uart_spinlock(dev, false);
 
-        cfsetispeed(termiosp, priv->baud);
-        termiosp->c_cflag = ((priv->parity != 0) ? PARENB : 0) |
-                            ((priv->parity == 1) ? PARODD : 0);
-        termiosp->c_cflag |= (priv->stopbits2) ? CSTOPB : 0;
+          cfsetispeed(termiosp, priv->baud);
+          termiosp->c_cflag = ((priv->parity != 0) ? PARENB : 0) |
+                              ((priv->parity == 1) ? PARODD : 0);
+          termiosp->c_cflag |= (priv->stopbits2) ? CSTOPB : 0;
 #if defined(CONFIG_SERIAL_IFLOWCONTROL) || defined(CONFIG_SERIAL_OFLOWCONTROL)
-        termiosp->c_cflag |= priv->flow ? CRTSCTS : 0;
+          termiosp->c_cflag |= priv->flow ? CRTSCTS : 0;
 #endif
 
-        switch (priv->bits)
-          {
-          case 5:
-            termiosp->c_cflag |= CS5;
-            break;
+          switch (priv->bits)
+            {
+              case 5:
+                termiosp->c_cflag |= CS5;
+                break;
 
-          case 6:
-            termiosp->c_cflag |= CS6;
-            break;
+              case 6:
+                termiosp->c_cflag |= CS6;
+                break;
 
-          case 7:
-            termiosp->c_cflag |= CS7;
-            break;
+              case 7:
+                termiosp->c_cflag |= CS7;
+                break;
 
-          case 8:
-          default:
-            termiosp->c_cflag |= CS8;
-            break;
-          }
+              case 8:
+              default:
+                termiosp->c_cflag |= CS8;
+                break;
+            }
 
-        leave_critical_section(flags);
-      }
-      break;
+          uart_spinunlock(dev, false, flags);
+        }
+        break;
 
-    case TCSETS:
-      {
-        FAR struct termios *termiosp = (FAR struct termios *)arg;
-        irqstate_t flags;
+      case TCSETS:
+        {
+          FAR struct termios *termiosp = (FAR struct termios *)arg;
+          irqstate_t flags;
 
-        if (!termiosp)
-          {
-            ret = -EINVAL;
-            break;
-          }
+          if (!termiosp)
+            {
+              ret = -EINVAL;
+              break;
+            }
 
-        flags = enter_critical_section();
+          flags = uart_spinlock(dev, false);
 
-        switch (termiosp->c_cflag & CSIZE)
-          {
-          case CS5:
-            priv->bits = 5;
-            break;
+          switch (termiosp->c_cflag & CSIZE)
+            {
+              case CS5:
+                priv->bits = 5;
+                break;
 
-          case CS6:
-            priv->bits = 6;
-            break;
+              case CS6:
+                priv->bits = 6;
+                break;
 
-          case CS7:
-            priv->bits = 7;
-            break;
+              case CS7:
+                priv->bits = 7;
+                break;
 
-          case CS8:
-          default:
-            priv->bits = 8;
-            break;
-          }
+              case CS8:
+              default:
+                priv->bits = 8;
+                break;
+            }
 
-        if ((termiosp->c_cflag & PARENB) != 0)
-          {
-            priv->parity = (termiosp->c_cflag & PARODD) ? 1 : 2;
-          }
-        else
-          {
-            priv->parity = 0;
-          }
+          if ((termiosp->c_cflag & PARENB) != 0)
+            {
+              priv->parity = (termiosp->c_cflag & PARODD) ? 1 : 2;
+            }
+          else
+            {
+              priv->parity = 0;
+            }
 
-        priv->baud      = cfgetispeed(termiosp);
-        priv->stopbits2 = (termiosp->c_cflag & CSTOPB) != 0;
+          priv->baud      = cfgetispeed(termiosp);
+          priv->stopbits2 = (termiosp->c_cflag & CSTOPB) != 0;
 #if defined(CONFIG_SERIAL_IFLOWCONTROL) || defined(CONFIG_SERIAL_OFLOWCONTROL)
-        priv->flow      = (termiosp->c_cflag & CRTSCTS) != 0;
+          priv->flow      = (termiosp->c_cflag & CRTSCTS) != 0;
 #endif
 
-        u16550_setup(dev);
-        leave_critical_section(flags);
+          u16550_setup(dev);
+          uart_spinunlock(dev, false, flags);
 
 #ifdef CONFIG_CLK
-        /* Clk enable */
+          /* Clk enable */
 
-        priv->mclk = clk_get(priv->clk_name);
-        if (priv->mclk)
-          {
-            clk_set_rate(priv->mclk, priv->uartclk);
-          }
+          priv->mclk = clk_get(priv->clk_name);
+          if (priv->mclk)
+            {
+              clk_set_rate(priv->mclk, priv->uartclk);
+            }
 #endif
-      }
-      break;
+        }
+        break;
 #endif
 
-    default:
-      ret = -ENOTTY;
-      break;
+      default:
+        ret = -ENOTTY;
+        break;
     }
 
   return ret;
@@ -1280,6 +1298,7 @@ static void u16550_rxint(struct uart_dev_s *dev, bool enable)
 static bool u16550_rxavailable(struct uart_dev_s *dev)
 {
   FAR struct u16550_s *priv = (FAR struct u16550_s *)dev->priv;
+
   return ((u16550_serialin(priv, UART_LSR_OFFSET) & UART_LSR_DR) != 0);
 }
 
@@ -1487,7 +1506,7 @@ static void u16550_dmarxfree(FAR struct uart_dev_s *dev)
 
   if (priv->chanrx == NULL)
     {
-      priv->chanrx = priv->ops->dmachan(priv, priv->dmarx)
+      priv->chanrx = priv->ops->dmachan(priv, priv->dmarx);
       if (priv->chanrx == NULL)
         {
           return; /* Fail to get DMA channel */
@@ -1569,6 +1588,7 @@ static void u16550_dmatxavail(FAR struct uart_dev_s *dev)
 static void u16550_send(struct uart_dev_s *dev, int ch)
 {
   FAR struct u16550_s *priv = (FAR struct u16550_s *)dev->priv;
+
   u16550_serialout(priv, UART_THR_OFFSET, (uart_datawidth_t)ch);
 }
 
@@ -1584,6 +1604,7 @@ static ssize_t u16550_sendbuf(struct uart_dev_s *dev,
                               const void *buffer, size_t size)
 {
   size_t i;
+
   for (i = 0; i < size; i++)
     {
       while (!u16550_txready(dev));
@@ -1615,7 +1636,23 @@ static void u16550_txint(struct uart_dev_s *dev, bool enable)
 
   if (enable)
     {
-#ifdef CONFIG_16550_POLLING
+#ifndef CONFIG_16550_POLLING
+      if (priv->irq >= 0)
+        {
+          flags = uart_spinlock(dev, true);
+          priv->ier |= UART_IER_ETBEI;
+          u16550_serialout(priv, UART_IER_OFFSET, priv->ier);
+
+          /* Fake a TX interrupt here by just calling uart_xmitchars() with
+           * interrupts disabled (note this may recurse).
+           */
+
+          uart_xmitchars(dev);
+          uart_spinunlock(dev, true, flags);
+          return;
+        }
+#endif
+
       /* In polling mode, we loop until the buffer is empty */
 
       while (dev->xmit.head != dev->xmit.tail)
@@ -1626,25 +1663,13 @@ static void u16550_txint(struct uart_dev_s *dev, bool enable)
 
           uart_xmitchars(dev);
         }
-#else
-      flags = enter_critical_section();
-      priv->ier |= UART_IER_ETBEI;
-      u16550_serialout(priv, UART_IER_OFFSET, priv->ier);
-
-      /* Fake a TX interrupt here by just calling uart_xmitchars() with
-       * interrupts disabled (note this may recurse).
-       */
-
-      uart_xmitchars(dev);
-      leave_critical_section(flags);
-#endif
     }
   else
     {
-      flags = enter_critical_section();
+      flags = uart_spinlock(dev, true);
       priv->ier &= ~UART_IER_ETBEI;
       u16550_serialout(priv, UART_IER_OFFSET, priv->ier);
-      leave_critical_section(flags);
+      uart_spinunlock(dev, true, flags);
     }
 }
 
@@ -1659,6 +1684,7 @@ static void u16550_txint(struct uart_dev_s *dev, bool enable)
 static bool u16550_txready(struct uart_dev_s *dev)
 {
   FAR struct u16550_s *priv = (FAR struct u16550_s *)dev->priv;
+
   return ((u16550_serialin(priv, UART_LSR_OFFSET) & UART_LSR_THRE) != 0);
 }
 
@@ -1673,6 +1699,7 @@ static bool u16550_txready(struct uart_dev_s *dev)
 static bool u16550_txempty(struct uart_dev_s *dev)
 {
   FAR struct u16550_s *priv = (FAR struct u16550_s *)dev->priv;
+
   return ((u16550_serialin(priv, UART_LSR_OFFSET) & UART_LSR_TEMT) != 0);
 }
 
@@ -1875,7 +1902,7 @@ int u16550_interrupt(int irq, FAR void *context, FAR void *arg)
         }
     }
 
-  return OK;
+  return passes > 0;
 }
 
 /****************************************************************************
@@ -1890,6 +1917,29 @@ void u16550_putc(FAR struct u16550_s *priv, int ch)
 {
   while ((u16550_serialin(priv, UART_LSR_OFFSET) & UART_LSR_THRE) == 0);
   u16550_serialout(priv, UART_THR_OFFSET, (uart_datawidth_t)ch);
+}
+
+/****************************************************************************
+ * Name: u16550_rxpoll
+ *
+ * Description:
+ *   Poll the UART for received data.  If the Data Ready bit is set in the
+ *   Line Status Register, pass the received characters to the upper half
+ *   with uart_recvchars(), exactly as the RX interrupt would do.
+ *
+ ****************************************************************************/
+
+void u16550_rxpoll(FAR uart_dev_t *dev)
+{
+  FAR struct u16550_s *priv;
+
+  DEBUGASSERT(dev != NULL && dev->priv != NULL);
+  priv = (FAR struct u16550_s *)dev->priv;
+
+  if ((u16550_serialin(priv, UART_LSR_OFFSET) & UART_LSR_DR) != 0)
+    {
+      uart_recvchars(dev);
+    }
 }
 
 #endif /* CONFIG_16550_UART */

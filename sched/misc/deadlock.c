@@ -26,6 +26,7 @@
 
 #include <nuttx/mutex.h>
 #include <nuttx/sched.h>
+#include <nuttx/spinlock.h>
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -43,28 +44,114 @@ struct deadlock_info_s
  ****************************************************************************/
 
 /****************************************************************************
- * Name: getmutex
+ * Name: getholder
  ****************************************************************************/
 
-static FAR mutex_t *getmutex(FAR struct tcb_s *tcb)
+static pid_t getholder(FAR struct tcb_s *tcb)
 {
-  FAR sem_t *sem;
-
   if (tcb == NULL)
+    {
+      return INVALID_PROCESS_ID;
+    }
+
+  /* Spinlock deadlock only occurs in RUNNING threads,
+   * while mutex deadlock only occurs in WAIT_SEM threads.
+   */
+
+  if (tcb->task_state == TSTATE_WAIT_SEM)
+    {
+      FAR sem_t *sem = tcb->waitobj;
+
+      if (sem != NULL && (sem->flags & SEM_TYPE_MUTEX) != 0)
+        {
+          return nxmutex_get_holder((FAR mutex_t *)sem);
+        }
+    }
+#ifdef CONFIG_SPINLOCK_DEBUG
+  else if (tcb->wait_spinlock)
+    {
+      return spinlock_get_holder(tcb->wait_spinlock);
+    }
+#endif
+
+  return INVALID_PROCESS_ID;
+}
+
+/****************************************************************************
+ * Name: deadlock_next
+ ****************************************************************************/
+
+static FAR struct tcb_s *deadlock_next(FAR struct tcb_s *tcb)
+{
+  pid_t holder = getholder(tcb);
+
+  if (holder == INVALID_PROCESS_ID)
     {
       return NULL;
     }
 
-  if (tcb->task_state == TSTATE_WAIT_SEM)
+  return nxsched_get_tcb(holder);
+}
+
+/****************************************************************************
+ * Name: find_deadlock_cycle
+ ****************************************************************************/
+
+static FAR struct tcb_s *find_deadlock_cycle(FAR struct tcb_s *tcb)
+{
+  FAR struct tcb_s *slow = tcb;
+  FAR struct tcb_s *fast = tcb;
+
+  /* Each thread has at most one outgoing edge in the mutex wait-for graph.
+   * Use Floyd's algorithm to determine whether the chain contains a cycle.
+   */
+
+  do
     {
-      sem = tcb->waitobj;
-      if (sem != NULL && (sem->flags & SEM_TYPE_MUTEX) != 0)
+      slow = deadlock_next(slow);
+      fast = deadlock_next(fast);
+      if (fast != NULL)
         {
-          return (FAR mutex_t *)sem;
+          fast = deadlock_next(fast);
+        }
+
+      if (slow == NULL || fast == NULL)
+        {
+          return NULL;
+        }
+    }
+  while (slow != fast);
+
+  /* Then locate the first TCB in the cycle. */
+
+  slow = tcb;
+  while (slow != fast)
+    {
+      slow = deadlock_next(slow);
+      fast = deadlock_next(fast);
+    }
+
+  return slow;
+}
+
+/****************************************************************************
+ * Name: deadlock_contains
+ ****************************************************************************/
+
+static bool deadlock_contains(FAR const struct deadlock_info_s *info,
+                              pid_t pid)
+{
+  size_t index;
+
+  for (index = 0; index < info->holdercnt; index++)
+    {
+      if (info->holders[index] == pid)
+        {
+          return true;
         }
     }
 
-  return NULL;
+  return false;
 }
 
 /****************************************************************************
@@ -74,66 +161,37 @@ static FAR mutex_t *getmutex(FAR struct tcb_s *tcb)
 static void collect_deadlock(FAR struct tcb_s *tcb, FAR void *arg)
 {
   FAR struct deadlock_info_s *info = arg;
-  FAR mutex_t *mutex;
-  size_t index;
+  FAR struct tcb_s *entry;
+  FAR struct tcb_s *current;
 
-  mutex = getmutex(tcb);
-  if (mutex == NULL)
+  if (info->holdercnt >= info->arraylen ||
+      deadlock_contains(info, tcb->pid))
     {
       return;
     }
 
-  /* Check previous deadlock holder list. */
-
-  for (index = 0; index < info->holdercnt; index++)
+  entry = find_deadlock_cycle(tcb);
+  if (entry == NULL || deadlock_contains(info, entry->pid))
     {
-      if (info->holders[index] == tcb->pid)
+      return;
+    }
+
+  /* Only copy TCBs which are members of the cycle.  Threads which merely
+   * wait on a deadlocked thread are not themselves part of the deadlock.
+   */
+
+  current = entry;
+  do
+    {
+      if (info->holdercnt >= info->arraylen)
         {
           return;
         }
+
+      info->holders[info->holdercnt++] = current->pid;
+      current = deadlock_next(current);
     }
-
-  /* Append the holders for this tcb to list. */
-
-  for (index = info->holdercnt; index < info->arraylen; index++)
-    {
-      pid_t holder;
-      size_t i;
-
-      holder = nxmutex_get_holder(mutex);
-      if (holder < 0)
-        {
-          break;
-        }
-
-      /* Check if this holder is already held. */
-
-      for (i = info->holdercnt; i < index; i++)
-        {
-          if (info->holders[i] == holder)
-            {
-              info->holdercnt = index;
-              return;
-            }
-        }
-
-      /* Add holder to list and continue to holder's holder. */
-
-      info->holders[index] = tcb->pid;
-      tcb = nxsched_get_tcb(holder);
-      mutex = getmutex(tcb);
-      if (mutex == NULL)
-        {
-          /* If this holder isn't waiting for mutex, it's over. */
-
-          break;
-        }
-    }
-
-  /* If no deadlock, clear the holders of this tcb. */
-
-  memset(&info->holders[info->holdercnt], 0,
-         (info->arraylen - info->holdercnt) * sizeof(pid_t));
+  while (current != entry);
 }
 
 /****************************************************************************
@@ -144,20 +202,26 @@ static void collect_deadlock(FAR struct tcb_s *tcb, FAR void *arg)
  * Name: nxsched_collect_deadlock
  *
  * Description:
- *   Check if there is a deadlock and get the thread pid of the deadlock.
+ *   Find mutex deadlocks and collect the IDs of participating threads.
  *
  * Input parameters:
- *   pid   - The array to store the thread pid of the deadlock.
- *   count - The size of the pid array.
+ *   pid   - The array to store deadlocked thread IDs.
+ *   count - The maximum number of thread IDs to store.
  *
  * Returned Value:
- *   The number of thread deadlocks.
+ *   The number of thread IDs stored in pid.  A return value equal to count
+ *   may indicate that the result was truncated.
  *
  ****************************************************************************/
 
 size_t nxsched_collect_deadlock(FAR pid_t *pid, size_t count)
 {
   struct deadlock_info_s info;
+
+  if (pid == NULL || count == 0)
+    {
+      return 0;
+    }
 
   info.holders = pid;
   info.arraylen = count;

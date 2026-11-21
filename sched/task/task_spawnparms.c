@@ -37,6 +37,7 @@
 #include <nuttx/spawn.h>
 #include <nuttx/fs/fs.h>
 
+#include "group/group.h"
 #include "task/spawn.h"
 #include "task/task.h"
 
@@ -164,6 +165,32 @@ int spawn_execattrs(pid_t pid, FAR const posix_spawnattr_t *attr)
     }
 #endif
 
+#ifdef CONFIG_SCHED_PROCESS_GROUPS
+  /* The new task leads a new session and a new process group */
+
+  if ((attr->flags & POSIX_SPAWN_SETSID) != 0u)
+    {
+      FAR struct tcb_s *tcb = nxsched_get_tcb(pid);
+
+      if (tcb != NULL)
+        {
+          tcb->group->tg_pgid = tcb->group->tg_pid;
+          tcb->group->tg_sid  = tcb->group->tg_pid;
+        }
+    }
+
+  /* Then it joins a process group, as setpgid(pid, pgroup) in the caller */
+
+  if ((attr->flags & POSIX_SPAWN_SETPGROUP) != 0u)
+    {
+      ret = group_setpgid(pid, attr->pgroup);
+      if (ret < 0)
+        {
+          return ret;
+        }
+    }
+#endif
+
   /* If we are only setting the priority, then call sched_setparm()
    * to set the priority of the of the new task.
    */
@@ -227,7 +254,16 @@ int spawn_execattrs(pid_t pid, FAR const posix_spawnattr_t *attr)
       param.sched_ss_init_budget.tv_sec  = attr->budget.tv_sec;
       param.sched_ss_init_budget.tv_nsec = attr->budget.tv_nsec;
 #endif
+#if CONFIG_RR_INTERVAL > 0 || defined(CONFIG_SCHED_SPORADIC)
       ret = nxsched_set_scheduler(pid, attr->policy, &param);
+#else
+      /* SCHED_FIFO is the only policy and SCHED_OTHER maps to it, so only
+       * the priority can change.
+       */
+
+      ret = attr->policy == SCHED_FIFO || attr->policy == SCHED_OTHER ?
+            nxsched_set_param(pid, &param) : -EINVAL;
+#endif
     }
 
   return ret;

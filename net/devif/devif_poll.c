@@ -30,6 +30,7 @@
 #include <nuttx/debug.h>
 
 #include <nuttx/clock.h>
+#include <nuttx/net/can.h>
 #include <nuttx/net/netconfig.h>
 #include <nuttx/net/netdev.h>
 #include <nuttx/net/net.h>
@@ -47,7 +48,7 @@
 #include "igmp/igmp.h"
 #include "icmpv6/icmpv6.h"
 #include "mld/mld.h"
-#include "ipforward/ipforward.h"
+#include "netforward/netforward.h"
 #include "sixlowpan/sixlowpan.h"
 #include "ipfilter/ipfilter.h"
 #include "ipfrag/ipfrag.h"
@@ -253,11 +254,13 @@ devif_poll_pkt_connections(FAR struct net_driver_s *dev,
 
           devif_packet_conversion(dev, DEVIF_PKT);
 
-          /* Call back into the driver */
+          /* Call back into the driver.  The loopback driver has no callback:
+           * loop the frame back as devif_poll_out() does.
+           */
 
           if (dev->d_len > 0)
             {
-              bstop = callback(dev);
+              bstop = callback != NULL ? callback(dev) : devif_loopback(dev);
             }
 
           /* pkt_poll() records the outgoing IOB in pkt_conn->pendiob so that
@@ -276,6 +279,46 @@ devif_poll_pkt_connections(FAR struct net_driver_s *dev,
   return bstop;
 }
 #endif /* CONFIG_NET_PKT */
+
+/****************************************************************************
+ * Name: can_loopback
+ *
+ * Description:
+ *   Deliver a copy of a sent CAN frame to the local CAN sockets.  The
+ *   device buffer state is saved and restored, so the driver and
+ *   devif_poll() continue with the frame exactly as if there were no
+ *   loopback.
+ *
+ * Input Parameters:
+ *   dev - The CAN device that sent the frame
+ *   iob - A copy of the sent frame, freed by this function
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_NET_CAN
+static void can_loopback(FAR struct net_driver_s *dev, FAR struct iob_s *iob)
+{
+  FAR struct iob_s *d_iob = dev->d_iob;
+  FAR uint8_t *d_buf = dev->d_buf;
+  uint16_t d_len = dev->d_len;
+  uint16_t d_sndlen = dev->d_sndlen;
+
+  dev->d_iob = iob;
+  dev->d_buf = NETLLBUF;
+  dev->d_len = iob->io_pktlen;
+
+  can_input(dev);
+
+  /* Free the copy unless a socket kept it */
+
+  netdev_iob_release(dev);
+
+  dev->d_iob    = d_iob;
+  dev->d_buf    = d_buf;
+  dev->d_len    = d_len;
+  dev->d_sndlen = d_sndlen;
+}
+#endif /* CONFIG_NET_CAN */
 
 /****************************************************************************
  * Name: devif_poll_can_connections
@@ -302,7 +345,7 @@ devif_poll_can_connections(FAR struct net_driver_s *dev,
    */
 
   can_conn_list_lock();
-  while (!bstop && (can_conn = can_nextconn(can_conn)))
+  while (!bstop && (can_conn = can_conn_next(can_conn)))
     {
       /* Skip connections that are bound to other polling devices */
 
@@ -316,7 +359,31 @@ devif_poll_can_connections(FAR struct net_driver_s *dev,
 
           if (dev->d_len > 0)
             {
-              bstop = callback(dev);
+              if (!IFF_IS_LOOPBACK(dev->d_flags)
+#ifdef CONFIG_NET_CANPROTO_OPTIONS
+                  && _SO_GETOPT(can_conn->sconn.s_options, CAN_RAW_LOOPBACK)
+#endif
+                 )
+                {
+                  FAR struct iob_s *iob = can_iob_clone(dev);
+
+                  /* The frame is always sent: the callback either sends it
+                   * or, for drivers with a flat buffer, leaves it in d_iob
+                   * for devif_poll() to send.  Its return value only tells
+                   * whether to stop the poll.
+                   */
+
+                  bstop = callback(dev);
+
+                  if (iob != NULL)
+                    {
+                      can_loopback(dev, iob);
+                    }
+                }
+              else
+                {
+                  bstop = callback(dev);
+                }
             }
         }
     }
@@ -483,7 +550,9 @@ static inline_function int devif_poll_icmpv6(FAR struct net_driver_s *dev,
     {
       /* Skip ICMPv6 connections that are bound to other polling devices */
 
+#ifdef CONFIG_NET_ICMPv6_SOCKET
       if (conn == NULL || dev == conn->dev)
+#endif
         {
           /* Perform the ICMPV6 poll
            * Note: conn equal NULL in the first iteration means poll dev's
@@ -516,13 +585,13 @@ static inline_function int devif_poll_icmpv6(FAR struct net_driver_s *dev,
  *
  ****************************************************************************/
 
-#ifdef CONFIG_NET_IPFORWARD
+#ifdef CONFIG_NET_FORWARD
 static inline_function int devif_poll_forward(FAR struct net_driver_s *dev,
                                               devif_poll_callback_t callback)
 {
   /* Perform the forwarding poll */
 
-  ipfwd_poll(dev);
+  netfwd_poll(dev);
 
   /* NOTE: that 6LoWPAN packet conversions are handled differently for
    * forwarded packets.  That is because we don't know what the packet
@@ -748,11 +817,11 @@ static int devif_poll_queue(FAR struct iob_queue_s *iobq,
 
       devif_out(dev);
 
-      /* Call back into the driver */
+      /* Call back into the driver, or loop back if there is no callback */
 
       if (dev->d_len > 0)
         {
-          bstop = callback(dev);
+          bstop = callback != NULL ? callback(dev) : devif_loopback(dev);
         }
     }
 
@@ -991,7 +1060,7 @@ static int devif_poll_connections(FAR struct net_driver_s *dev,
             bstop = devif_poll_icmpv6(dev, callback);
             break;
 #endif
-#ifdef CONFIG_NET_IPFORWARD
+#ifdef CONFIG_NET_FORWARD
 
           /* Traverse all of the tasks waiting to forward a packet to this
            * device.
@@ -1284,7 +1353,7 @@ int devif_poll_out(FAR struct net_driver_s *dev,
   devif_out(dev);
 
   bstop = devif_loopback(dev);
-  if (bstop)
+  if (bstop || dev->d_len == 0)
     {
       return bstop;
     }

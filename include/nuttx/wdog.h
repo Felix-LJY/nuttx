@@ -98,11 +98,8 @@ struct wdog_s
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -282,10 +279,10 @@ int wd_start_realtime(FAR struct wdog_s *wdog,
   clock_t ticks;
   int ret;
 
-  flags = up_irq_save();
+  flags = irq_save();
   clock_abstime2ticks(CLOCK_REALTIME, realtime, &ticks);
   ret = wd_start(wdog, ticks, wdentry, arg);
-  up_irq_restore(flags);
+  irq_restore(flags);
 
   return ret;
 #else
@@ -309,7 +306,7 @@ int wd_start_realtime(FAR struct wdog_s *wdog,
  *
  * Input Parameters:
  *   wdog     - Pointer of the periodic watchdog.
- *   delay    - Delayed time in system ticks.
+ *   delay    - Positive delay in system ticks.
  *   wdentry  - Function to call on timeout.
  *   arg      - Parameter to pass to wdentry.
  *
@@ -331,7 +328,7 @@ int wd_start_next(FAR struct wdog_s *wdog, clock_t delay,
 {
   /* Ensure delay is within the range the wdog can handle. */
 
-  if (delay < 0 || delay > WDOG_MAX_DELAY)
+  if (delay <= 0 || delay > WDOG_MAX_DELAY)
     {
       return -EINVAL;
     }
@@ -376,7 +373,6 @@ int wd_cancel(FAR struct wdog_s *wdog);
 
 clock_t wd_gettime(FAR struct wdog_s *wdog);
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

@@ -109,6 +109,7 @@ void pm_idle_unlock(void)
 bool pm_idle_lock(int cpu)
 {
   bool first;
+
   spin_lock(&g_pm_idle.lock);
   first = (g_pm_idle.running == 0);
   CPU_SET(cpu, &g_pm_idle.running);
@@ -150,7 +151,7 @@ void pm_idle(pm_idle_handler_t handler)
    * be delayed after WFI until next sched unlock. which is not acceptable.
    */
 
-  flags = up_irq_save();
+  flags = irq_save();
   sched_lock();
 
   oldstate = pm_querystate(domain);
@@ -204,7 +205,7 @@ void pm_idle(pm_idle_handler_t handler)
    * execution will be better decrease scheduler context switch times.
    */
 
-  up_irq_restore(flags);
+  irq_restore(flags);
   sched_unlock();
 }
 
@@ -235,7 +236,7 @@ void pm_idle(pm_idle_handler_t handler)
    * be delayed after WFI until next sched unlock. which is not acceptable.
    */
 
-  flags = up_irq_save();
+  flags = irq_save();
   sched_lock();
 
   newstate = pm_checkstate(PM_IDLE_DOMAIN);
@@ -253,7 +254,7 @@ void pm_idle(pm_idle_handler_t handler)
    * will be better decrease scheduler context switch times.
    */
 
-  up_irq_restore(flags);
+  irq_restore(flags);
   sched_unlock();
 }
 

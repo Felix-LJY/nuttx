@@ -1,6 +1,8 @@
-===============
-ez80f0910200zco
-===============
+====================================
+Zilog eZ80F910200ZCO Development Kit
+====================================
+
+.. tags:: arch:z80, chip:ez80, vendor:zilog
 
 ez80Acclaim! Microcontroller.  This port use the Zilog ez80f0910200zco
 development kit, eZ80F091 part, and the Zilog ZDS-II Windows command line

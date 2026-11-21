@@ -1,3 +1,24 @@
+############################################################################
+# net/arp/Kconfig
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.  The
+# ASF licenses this file to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance with the
+# License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
+############################################################################
 #
 # For a description of the syntax of this configuration file,
 # see the file kconfig-language.txt in the NuttX tools repository.
@@ -25,16 +46,16 @@ config NET_ARP_MAXAGE
 	int "Max ARP entry age"
 	default 120
 	---help---
-		The maximum age of ARP table entries measured in deciseconds.  The
+		The maximum age of ARP table entries in units of 10 seconds.  The
 		default value of 120 corresponds to 20 minutes (BSD default).
 
 config NET_ARP_MAXAGE_UNREACHABLE
 	int "Max unreachable ARP entry age"
 	default 1
 	---help---
-		The maximum age of unreachable ARP table entries measured in
-		deciseconds. During unreachable period not send a retry ARP
-		request for the same destination.
+		The maximum age of unreachable ARP table entries in units of 10
+		seconds.  The default value of 1 corresponds to 10 seconds.  During
+		this time, no new ARP request is sent for the same destination.
 
 config NET_ARP_IPIN
 	bool "ARP address harvesting"
@@ -91,6 +112,46 @@ config ARP_SEND_DELAYMSEC
 		table.  This time should be related to the maximum round trip time
 		on the network since it is basically the time from when an ARP
 		request is sent until the response is received.
+
+config NET_ARP_PREALLOC_STATES
+	int "Preallocated ARP send states"
+	default 2
+	---help---
+		Number of ARP send states (all tasks).
+
+		This number of connections will be pre-allocated during system boot.
+		If dynamic connections allocation is enabled, more connections may
+		be allocated at a later time, as the system needs them. Else this
+		will be the maximum number of connections available to the system
+		at all times.
+
+		Set to 0 to disable (and rely only on dynamic allocations).
+
+config NET_ARP_ALLOC_STATES
+	int "Dynamic ARP send states allocation"
+	default 1
+	---help---
+		Dynamic memory allocations for ARP send states.
+
+		When set to 0 all dynamic allocations are disabled.
+
+		When set to 1 a new connection will be allocated every time,
+		and it will be free'd when no longer needed.
+
+		Setting this to 2 or more will allocate the connections in
+		batches (with batch size equal to this config). When a
+		connection is no longer needed, it will be returned to the
+		free connections pool, and it will never be deallocated!
+
+config NET_ARP_MAX_STATES
+	int "Maximum number of ARP/IP connections"
+	default 0
+	---help---
+		If dynamic connections allocation is selected (NET_ARP_ALLOC_STATES > 0)
+		this will limit the number of connections that can be allocated.
+
+		This is useful in case the system is under very heavy load (or
+		under attack), ensuring that the heap will not be exhausted.
 
 endif # NET_ARP_SEND
 

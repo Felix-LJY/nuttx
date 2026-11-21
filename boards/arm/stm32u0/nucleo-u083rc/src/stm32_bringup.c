@@ -38,14 +38,6 @@
 #  include <nuttx/leds/userled.h>
 #endif
 
-#ifdef CONFIG_STM32_IWDG
-#  include <stm32_wdg.h>
-#endif
-
-#ifdef CONFIG_TIMER
-#  include <stm32_tim.h>
-#endif
-
 #ifdef CONFIG_SENSORS_QENCODER
 #  include "board_qencoder.h"
 #endif
@@ -57,6 +49,7 @@
 #include <arch/board/board.h>
 
 #include "nucleo-u083rc.h"
+#include "board_common.h"
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -81,21 +74,14 @@ int stm32_bringup(void)
 {
   int ret;
 
-#ifdef CONFIG_STM32_IWDG
-  /* Initialize the watchdog timer */
+  /* Initialize the board features common to all STM32 boards */
 
-  stm32_iwdginitialize("/dev/watchdog0", STM32_LSI_FREQUENCY);
-#endif
-
-#if defined(CONFIG_TIMER) && defined(CONFIG_STM32_TIM6)
-  /* Initialize and register the timer driver - TIM6 */
-
-  ret = stm32_timer_initialize("/dev/timer0", 6);
+  ret = stm32_common_initialize();
   if (ret < 0)
     {
-      syslog(LOG_ERR, "ERROR: stm32_timer_initialize failed: %d\n", ret);
+      syslog(LOG_ERR, "ERROR: stm32_common_initialize() failed: %d\n",
+             ret);
     }
-#endif
 
 #if !defined(CONFIG_ARCH_LEDS) && defined(CONFIG_USERLED_LOWER)
   /* Register the LED driver */

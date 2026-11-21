@@ -210,11 +210,8 @@ struct mld_group_s
  ****************************************************************************/
 
 #ifdef __cplusplus
-#  define EXTERN extern "C"
 extern "C"
 {
-#else
-#  define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -289,7 +286,8 @@ int mld_done(FAR struct net_driver_s *dev,
  * Name:  mld_grpalloc
  *
  * Description:
- *   Allocate a new group from heap memory.
+ *   Allocate a new group from heap memory.  The new group has njoins == 0;
+ *   the caller must account for a local member, if any.
  *
  ****************************************************************************/
 
@@ -514,7 +512,6 @@ void mld_addmcastmac(FAR struct net_driver_s *dev,
 void mld_removemcastmac(FAR struct net_driver_s *dev,
                         FAR const net_ipv6addr_t ipaddr);
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

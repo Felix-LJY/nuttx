@@ -44,10 +44,6 @@
 #  include <nuttx/nx/nxterm.h>
 #endif
 
-#ifdef CONFIG_BOARDCTL_SPINLOCK
-#  include <nuttx/spinlock.h>
-#endif
-
 #ifdef CONFIG_BOARDCTL_MACADDR
 #  include <net/if.h>
 #  include <nuttx/net/netdev.h>
@@ -113,24 +109,6 @@
  * CONFIGURATION: CONFIG_BOARDCTL_OS_SYMTAB
  * DEPENDENCIES:  None
  *
- * CMD:           BOARDIOC_BUILTINS
- * DESCRIPTION:   Provide the user-space list of built-in applications for
- *                use by BINFS in protected mode.  Normally this is small
- *                set of globals provided by user-space logic.  It provides
- *                name-value pairs for associating built-in application
- *                names with user-space entry point addresses.  These
- *                globals are only needed for use by BINFS which executes
- *                built-in applications from kernel-space in PROTECTED mode.
- *                In the FLAT build, the user space globals are readily
- *                available.  (BINFS is not supportable in KERNEL mode since
- *                user-space address have no general meaning that
- *                configuration).
- * ARG:           A pointer to an instance of struct boardioc_builtin_s
- * CONFIGURATION: This BOARDIOC command is always available when
- *                CONFIG_BUILTIN is enabled, but does nothing unless
- *                CONFIG_BUILD_PROTECTED is also selected.
- * DEPENDENCIES:  None
- *
  * CMD:           BOARDIOC_USBDEV_CONTROL
  * DESCRIPTION:   Manage USB device classes
  * ARG:           A pointer to an instance of struct boardioc_usbdev_ctrl_s
@@ -167,13 +145,6 @@
  * CONFIGURATION: CONFIG_NXTERM
  * DEPENDENCIES:  Base NX terminal logic provides nxterm_ioctl_tap()
  *
- * CMD:           BOARDIOC_SPINLOCK
- * DESCRIPTION:   spinlock specific operation
- * ARG:           A pointer to a write-able boardioc_spinlock_s
- *
- * CONFIGURATION: CONFIG_BOARDCTL_SPINLOCK
- * DEPENDENCIES:  spinlock specific logic
- *
  * CMD:           BOARDIOC_RESET_CAUSE
  * DESCRIPTION:   Get the cause of last-time board reset
  * ARG:           A pointer to an instance of struct boardioc_reset_cause_s
@@ -190,20 +161,19 @@
 #define BOARDIOC_ROMDISK           _BOARDIOC(0x0007)
 #define BOARDIOC_APP_SYMTAB        _BOARDIOC(0x0008)
 #define BOARDIOC_OS_SYMTAB         _BOARDIOC(0x0009)
-#define BOARDIOC_BUILTINS          _BOARDIOC(0x000a)
-#define BOARDIOC_USBDEV_CONTROL    _BOARDIOC(0x000b)
-#define BOARDIOC_NX_START          _BOARDIOC(0x000c)
-#define BOARDIOC_VNC_START         _BOARDIOC(0x000d)
-#define BOARDIOC_NXTERM            _BOARDIOC(0x000e)
-#define BOARDIOC_NXTERM_IOCTL      _BOARDIOC(0x000f)
-#define BOARDIOC_SPINLOCK          _BOARDIOC(0x0010)
-#define BOARDIOC_UNIQUEKEY         _BOARDIOC(0x0011)
-#define BOARDIOC_SWITCH_BOOT       _BOARDIOC(0x0012)
-#define BOARDIOC_BOOT_IMAGE        _BOARDIOC(0x0013)
-#define BOARDIOC_RESET_CAUSE       _BOARDIOC(0x0014)
-#define BOARDIOC_IRQ_AFFINITY      _BOARDIOC(0x0015)
-#define BOARDIOC_START_CPU         _BOARDIOC(0x0016)
-#define BOARDIOC_MACADDR           _BOARDIOC(0x0017)
+#define BOARDIOC_USBDEV_CONTROL    _BOARDIOC(0x000a)
+#define BOARDIOC_NX_START          _BOARDIOC(0x000b)
+#define BOARDIOC_VNC_START         _BOARDIOC(0x000c)
+#define BOARDIOC_NXTERM            _BOARDIOC(0x000d)
+#define BOARDIOC_NXTERM_IOCTL      _BOARDIOC(0x000e)
+                                   /* 0x000f was BOARDIOC_SPINLOCK */
+#define BOARDIOC_UNIQUEKEY         _BOARDIOC(0x0010)
+#define BOARDIOC_SWITCH_BOOT       _BOARDIOC(0x0011)
+#define BOARDIOC_BOOT_IMAGE        _BOARDIOC(0x0012)
+#define BOARDIOC_RESET_CAUSE       _BOARDIOC(0x0013)
+#define BOARDIOC_IRQ_AFFINITY      _BOARDIOC(0x0014)
+#define BOARDIOC_START_CPU         _BOARDIOC(0x0015)
+#define BOARDIOC_MACADDR           _BOARDIOC(0x0016)
 
 /* If CONFIG_BOARDCTL_IOCTL=y, then board-specific commands will be support.
  * In this case, all commands not recognized by boardctl() will be forwarded
@@ -274,22 +244,6 @@ struct boardioc_romdisk_s
 };
 #endif
 
-#ifdef CONFIG_BOARDCTL_SPINLOCK
-enum boardioc_spinlock_e
-{
-  BOARDIOC_SPINLOCK_LOCK    = 0, /* call up_irq_save or/and spin_lock */
-  BOARDIOC_SPINLOCK_TRYLOCK = 1, /* call up_irq_save or/and spin_trylock */
-  BOARDIOC_SPINLOCK_UNLOCK  = 2, /* call up_irq_restore or/and spin_unlock */
-};
-
-struct boardioc_spinlock_s
-{
-  enum boardioc_spinlock_e action; /* see enum boardioc_spinlock_e */
-  FAR irqstate_t *flags;           /* whether we need to disable int */
-  FAR volatile spinlock_t *lock;   /* whether we need to call spinlock */
-};
-#endif
-
 /* In order to full describe a symbol table, a vector containing the address
  * of the symbol table and the number of elements in the symbol table is
  * required.
@@ -301,17 +255,6 @@ struct boardioc_symtab_s
   FAR const struct symtab_s *symtab;
   int nsymbols;
 };
-
-#ifdef CONFIG_BUILTIN
-/* Arguments passed with the BOARDIOC_BUILTIN command */
-
-struct builtin_s;  /* Forward reference */
-struct boardioc_builtin_s
-{
-  FAR const struct builtin_s *builtins;
-  int count;
-};
-#endif
 
 #ifdef CONFIG_BOARDCTL_USBDEVCTRL
 /* This structure provides the argument BOARDIOC_USBDEV_CONTROL and
@@ -428,8 +371,11 @@ struct boardioc_boot_info_s
 };
 #endif
 
-#if defined(CONFIG_BOARDCTL_RESET) || defined(CONFIG_BOARDCTL_RESET_CAUSE)
-/* Describes the reason of last reset */
+#endif /* CONFIG_BOARDCTL */
+
+/* Describes the reason of last reset.  rptun also exchanges these with its
+ * peer as the reset reason, so they do not depend on CONFIG_BOARDCTL.
+ */
 
 enum boardioc_reset_cause_e
 {
@@ -458,8 +404,12 @@ enum boardioc_softreset_subreason_e
   BOARDIOC_SOFTRESETCAUSE_ENTER_RECOVERY,
   BOARDIOC_SOFTRESETCAUSE_RESTORE_FACTORY,
   BOARDIOC_SOFTRESETCAUSE_RESTORE_FACTORY_INQUIRY,
-  BOARDIOC_SOFTRESETCAUSE_THERMAL
+  BOARDIOC_SOFTRESETCAUSE_THERMAL,
+  BOARDIOC_SOFTRESETCAUSE_POWEROFF,
+  BOARDIOC_SOFTRESETCAUSE_MAX
 };
+
+#ifdef CONFIG_BOARDCTL
 
 struct boardioc_reset_cause_s
 {
@@ -467,7 +417,6 @@ struct boardioc_reset_cause_s
   uint32_t flag;                      /* watchdog number when watchdog reset,
                                        * or soft-reset subreason */
 };
-#endif
 
 #ifdef CONFIG_BOARDCTL_MACADDR
 struct boardioc_macaddr_s
@@ -481,13 +430,9 @@ struct boardioc_macaddr_s
  * Public Data
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -525,7 +470,6 @@ extern "C"
 
 int boardctl(unsigned int cmd, uintptr_t arg);
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

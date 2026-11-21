@@ -20,8 +20,6 @@
 #
 ############################################################################
 
-include $(TOPDIR)/Make.defs
-
 CSRCS = nrf53_boot.c nrf53_bringup.c nrf53_sensors.c
 
 ifeq ($(CONFIG_NRF53_APPCORE),y)
@@ -50,6 +48,14 @@ endif
 
 ifeq ($(CONFIG_RGBLED),y)
 CSRCS += nrf53_rgbled.c
+endif
+
+ifeq ($(CONFIG_ADC),y)
+CSRCS += nrf53_adc.c
+endif
+
+ifeq ($(CONFIG_NPM1100),y)
+CSRCS += nrf53_npm1100.c
 endif
 
 DEPPATH += --dep-path board

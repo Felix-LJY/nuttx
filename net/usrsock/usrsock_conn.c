@@ -103,13 +103,16 @@ FAR struct usrsock_conn_s *usrsock_alloc(void)
       /* Make sure that the connection is marked as uninitialized */
 
       nxsem_init(&conn->resp.sem, 0, 1);
-      nxrmutex_init(&conn->sconn.s_lock);
+
+      /* Use conn_init to initialize the connection structure */
+
+      conn_init(&conn->sconn);
       conn->usockid = USRSOCK_USOCKID_INVALID;
       conn->state = USRSOCK_CONN_STATE_UNINITIALIZED;
 
       /* Enqueue the connection into the active list */
 
-      dq_addlast(&conn->sconn.node, &g_active_usrsock_connections);
+      dq_addlast(&conn->sconn.s_node, &g_active_usrsock_connections);
     }
 
   NET_BUFPOOL_UNLOCK(g_usrsock_connections);
@@ -135,12 +138,15 @@ void usrsock_free(FAR struct usrsock_conn_s *conn)
 
   /* Remove the connection from the active list */
 
-  dq_rem(&conn->sconn.node, &g_active_usrsock_connections);
+  dq_rem(&conn->sconn.s_node, &g_active_usrsock_connections);
 
   /* Reset structure */
 
   nxsem_destroy(&conn->resp.sem);
-  nxrmutex_destroy(&conn->sconn.s_lock);
+
+  /* Use conn_uninit to release all connection resources */
+
+  conn_uninit(&conn->sconn);
 
   /* Free the connection. */
 
@@ -168,7 +174,7 @@ FAR struct usrsock_conn_s *usrsock_nextconn(FAR struct usrsock_conn_s *conn)
     }
   else
     {
-      return (FAR struct usrsock_conn_s *)conn->sconn.node.flink;
+      return (FAR struct usrsock_conn_s *)conn->sconn.s_node.flink;
     }
 }
 
@@ -216,8 +222,8 @@ int usrsock_setup_request_callback(FAR struct usrsock_conn_s *conn,
 
   /* Set up the callback in the connection */
 
-  pstate->cb = devif_callback_alloc(NULL, &conn->sconn.list,
-                                    &conn->sconn.list_tail);
+  pstate->cb = devif_callback_alloc(NULL, &conn->sconn.s_list,
+                                    &conn->sconn.s_listtail);
   if (pstate->cb)
     {
       /* Take a lock since only one outstanding request is allowed */
@@ -271,8 +277,8 @@ void usrsock_teardown_request_callback(FAR struct usrsock_reqstate_s *pstate)
 
   /* Make sure that no further events are processed */
 
-  devif_conn_callback_free(NULL, pstate->cb, &conn->sconn.list,
-                           &conn->sconn.list_tail);
+  devif_conn_callback_free(NULL, pstate->cb, &conn->sconn.s_list,
+                           &conn->sconn.s_listtail);
   nxsem_destroy(&pstate->recvsem);
 
   pstate->cb = NULL;

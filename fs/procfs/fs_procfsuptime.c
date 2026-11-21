@@ -47,7 +47,6 @@
 
 #include "fs_heap.h"
 
-#if !defined(CONFIG_DISABLE_MOUNTPOINT) && defined(CONFIG_FS_PROCFS)
 #ifndef CONFIG_FS_PROCFS_EXCLUDE_UPTIME
 
 /****************************************************************************
@@ -191,14 +190,9 @@ static ssize_t uptime_read(FAR struct file *filep, FAR char *buffer,
   off_t offset;
   ssize_t ret;
   clock_t ticktime;
-
-#if defined(CONFIG_HAVE_DOUBLE) && defined(CONFIG_LIBC_FLOATINGPOINT)
-  double now;
-#else
   uint64_t sec;
   unsigned int remainder;
   unsigned int csec;
-#endif
 
   finfo("buffer=%p buflen=%d\n", buffer, (int)buflen);
 
@@ -218,21 +212,13 @@ static ssize_t uptime_read(FAR struct file *filep, FAR char *buffer,
     {
       /* System time */
 
-      ticktime = clock_systime_ticks() - INITIAL_SYSTEM_TIMER_TICKS;
+      ticktime = clock_systime_ticks();
 
-#if defined(CONFIG_HAVE_DOUBLE) && defined(CONFIG_LIBC_FLOATINGPOINT)
-      /* Convert the up time to a seconds + hundredths of seconds string */
-
-      now       = (double)ticktime / (double)CLOCKS_PER_SEC;
-      linesize  = procfs_snprintf(attr->line, UPTIME_LINELEN,
-                                  "%10.2f\n", now);
-
-#else
       /* Convert the system up time to seconds + hundredths of seconds */
 
-      sec       = ticktime / CLOCKS_PER_SEC;
-      remainder = (unsigned int)(ticktime % CLOCKS_PER_SEC);
-      csec      = (100 * remainder + (CLOCKS_PER_SEC / 2)) / CLOCKS_PER_SEC;
+      sec       = ticktime / CLK_TCK;
+      remainder = (unsigned int)(ticktime % CLK_TCK);
+      csec      = (100 * remainder + (CLK_TCK / 2)) / CLK_TCK;
 
       /* Make sure that rounding did not force the hundredths of
        * a second above 99
@@ -249,7 +235,6 @@ static ssize_t uptime_read(FAR struct file *filep, FAR char *buffer,
       linesize = procfs_snprintf(attr->line, UPTIME_LINELEN,
                                  "%7" PRIu64 ".%02u\n", sec, csec);
 
-#endif
       /* Save the linesize in case we are re-entered with f_pos > 0 */
 
       attr->linesize = linesize;
@@ -329,5 +314,4 @@ static int uptime_stat(FAR const char *relpath, FAR struct stat *buf)
  * Public Functions
  ****************************************************************************/
 
-#endif /* CONFIG_FS_PROCFS_EXCLUDE_PROCESS */
-#endif /* !CONFIG_DISABLE_MOUNTPOINT && CONFIG_FS_PROCFS */
+#endif /* CONFIG_FS_PROCFS_EXCLUDE_UPTIME */

@@ -33,6 +33,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <errno.h>
+#include <limits.h>
 #include <assert.h>
 #include <nuttx/debug.h>
 
@@ -331,7 +332,7 @@ static uint32_t ieee802154_sendto_eventhandler(FAR struct net_driver_s *dev,
 
       /* Allocate an IOB to hold the frame data */
 
-      iob = net_ioballoc(false);
+      iob = conn_dev_ioballoc(false, pstate->is_sock->s_conn, dev);
       if (iob == NULL)
         {
           nwarn("WARNING: Failed to allocate IOB\n");
@@ -354,6 +355,7 @@ static uint32_t ieee802154_sendto_eventhandler(FAR struct net_driver_s *dev,
       if (ret < 0)
         {
           nerr("ERROR: r_req_data() failed: %d\n", ret);
+          iob_free_chain(iob);
           goto errout;
         }
 
@@ -630,16 +632,38 @@ static ssize_t ieee802154_send(FAR struct socket *psock, FAR const void *buf,
 ssize_t ieee802154_sendmsg(FAR struct socket *psock,
                            FAR const struct msghdr *msg, int flags)
 {
-  FAR const void *buf = msg->msg_iov->iov_base;
-  size_t len = msg->msg_iov->iov_len;
-  FAR const struct sockaddr *to = msg->msg_name;
-  socklen_t tolen = msg->msg_namelen;
+  FAR const struct sockaddr *to;
+  FAR const void *buf;
+  socklen_t tolen;
+  size_t len;
+
+  /* POSIX: fail with EMSGSIZE if msg_iovlen <= 0 or > IOV_MAX */
+
+  if (msg->msg_iovlen == 0 || msg->msg_iovlen > IOV_MAX)
+    {
+      return -EMSGSIZE;
+    }
 
   /* Validity check, only single iov supported */
 
   if (msg->msg_iovlen != 1)
     {
       return -ENOTSUP;
+    }
+
+  if (msg->msg_iov == NULL)
+    {
+      return -EINVAL;
+    }
+
+  buf   = msg->msg_iov[0].iov_base;
+  len   = msg->msg_iov[0].iov_len;
+  to    = msg->msg_name;
+  tolen = msg->msg_namelen;
+
+  if (len > 0 && buf == NULL)
+    {
+      return -EINVAL;
     }
 
   return to ? ieee802154_sendto(psock, buf, len, flags, to, tolen) :

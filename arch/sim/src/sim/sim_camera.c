@@ -45,7 +45,7 @@
  * Pre-processor Definitions
  ****************************************************************************/
 
-#define SIM_CAMERA_PERIOD    MSEC2TICK(CONFIG_SIM_LOOP_INTERVAL)
+#define SIM_CAMERA_PERIOD    MSEC2TICK(CONFIG_SIM_CAMERA_LOOP_INTERVAL)
 
 /****************************************************************************
  * Private Types
@@ -66,6 +66,12 @@ struct sim_camera_priv_s
   bool capture_started;
   int index;
   char devpath[32];
+
+  /* Simulated sensor controls */
+
+  int32_t brightness;
+  int32_t exposure_time;
+  int32_t gain;
 };
 
 /****************************************************************************
@@ -90,6 +96,16 @@ static int sim_camera_start_capture(struct imgsensor_s *sensor,
                                     imgsensor_interval_t *interval);
 static int sim_camera_stop_capture(struct imgsensor_s *sensor,
                                    imgsensor_stream_type_t type);
+
+static int sim_camera_get_supported_value(struct imgsensor_s *sensor,
+                                          uint32_t id,
+                                          imgsensor_supported_value_t *val);
+static int sim_camera_get_value(struct imgsensor_s *sensor,
+                                uint32_t id, uint32_t size,
+                                imgsensor_value_t *val);
+static int sim_camera_set_value(struct imgsensor_s *sensor,
+                                uint32_t id, uint32_t size,
+                                imgsensor_value_t val);
 
 /* Video image data operations */
 
@@ -126,6 +142,9 @@ static const struct imgsensor_ops_s g_sim_camera_ops =
   .validate_frame_setting = sim_camera_validate_frame_setting,
   .start_capture          = sim_camera_start_capture,
   .stop_capture           = sim_camera_stop_capture,
+  .get_supported_value    = sim_camera_get_supported_value,
+  .get_value              = sim_camera_get_value,
+  .set_value              = sim_camera_set_value,
 };
 
 static const struct imgdata_ops_s g_sim_camera_data_ops =
@@ -159,6 +178,7 @@ static const struct v4l2_frmsizeenum g_frmsizes[] =
 static uint32_t imgdata_fmt_to_v4l2(uint32_t pixelformat)
 {
   uint32_t fourcc;
+
   switch (pixelformat)
     {
       case IMGDATA_PIX_FMT_NV12:
@@ -204,6 +224,7 @@ static uint32_t imgdata_fmt_to_v4l2(uint32_t pixelformat)
 static bool sim_camera_is_available(struct imgsensor_s *sensor)
 {
   sim_camera_priv_t *priv = container_of(sensor, sim_camera_priv_t, sensor);
+
   return host_video_is_available(priv->devpath);
 }
 
@@ -264,6 +285,90 @@ static int sim_camera_stop_capture(struct imgsensor_s *sensor,
   return 0;
 }
 
+static int sim_camera_get_supported_value(struct imgsensor_s *sensor,
+                                          uint32_t id,
+                                          imgsensor_supported_value_t *val)
+{
+  switch (id)
+    {
+      case IMGSENSOR_ID_BRIGHTNESS:
+        val->type = IMGSENSOR_CTRL_TYPE_INTEGER;
+        val->u.range.minimum = -100;
+        val->u.range.maximum = 100;
+        val->u.range.step = 1;
+        val->u.range.default_value = 0;
+        return 0;
+
+      case IMGSENSOR_ID_EXPOSURE_ABSOLUTE:
+        val->type = IMGSENSOR_CTRL_TYPE_INTEGER;
+        val->u.range.minimum = 1;
+        val->u.range.maximum = 10000;
+        val->u.range.step = 1;
+        val->u.range.default_value = 100;
+        return 0;
+
+      case IMGSENSOR_ID_EXPOSURE_AUTO:
+        val->type = IMGSENSOR_CTRL_TYPE_INTEGER;
+        val->u.range.minimum = 0;
+        val->u.range.maximum = 3;
+        val->u.range.step = 1;
+        val->u.range.default_value = 0;
+        return 0;
+
+      default:
+        return -EINVAL;
+    }
+}
+
+static int sim_camera_get_value(struct imgsensor_s *sensor,
+                                uint32_t id, uint32_t size,
+                                imgsensor_value_t *val)
+{
+  sim_camera_priv_t *priv = container_of(sensor, sim_camera_priv_t, sensor);
+
+  switch (id)
+    {
+      case IMGSENSOR_ID_BRIGHTNESS:
+        val->value32 = priv->brightness;
+        return 0;
+
+      case IMGSENSOR_ID_EXPOSURE_ABSOLUTE:
+        val->value32 = priv->exposure_time;
+        return 0;
+
+      case IMGSENSOR_ID_EXPOSURE_AUTO:
+        val->value32 = 0;
+        return 0;
+
+      default:
+        return -EINVAL;
+    }
+}
+
+static int sim_camera_set_value(struct imgsensor_s *sensor,
+                                uint32_t id, uint32_t size,
+                                imgsensor_value_t val)
+{
+  sim_camera_priv_t *priv = container_of(sensor, sim_camera_priv_t, sensor);
+
+  switch (id)
+    {
+      case IMGSENSOR_ID_BRIGHTNESS:
+        priv->brightness = val.value32;
+        return 0;
+
+      case IMGSENSOR_ID_EXPOSURE_ABSOLUTE:
+        priv->exposure_time = val.value32;
+        return 0;
+
+      case IMGSENSOR_ID_EXPOSURE_AUTO:
+        return 0;
+
+      default:
+        return -EINVAL;
+    }
+}
+
 /* Data op functions do all the real work */
 
 static int sim_camera_data_init(struct imgdata_s *data)
@@ -298,7 +403,14 @@ static int sim_camera_data_uninit(struct imgdata_s *data)
 
 static int sim_camera_data_validate_buf(uint8_t *addr, uint32_t size)
 {
-  if (!addr || ((uintptr_t)(addr) & 0x1f))
+  /* NULL addr is valid: signals drop-frame mode (size must be 0) */
+
+  if (addr == NULL)
+    {
+      return size == 0 ? 0 : -EINVAL;
+    }
+
+  if ((uintptr_t)(addr) & 0x1f)
     {
       return -EINVAL;
     }
@@ -376,6 +488,8 @@ static int sim_camera_data_start_capture(struct imgdata_s *data,
   ret = host_video_start_capture(priv->vdev);
   if (ret < 0)
     {
+      priv->capture_cb = NULL;
+      priv->capture_arg = NULL;
       return ret;
     }
 
@@ -389,10 +503,15 @@ static int sim_camera_data_stop_capture(struct imgdata_s *data)
 {
   sim_camera_priv_t *priv = container_of(data, sim_camera_priv_t, data);
 
-  priv->next_buf = NULL;
   priv->capture_started = false;
   wd_cancel(&priv->wdog);
-  return host_video_stop_capture(priv->vdev);
+
+  priv->capture_cb = NULL;
+  priv->capture_arg = NULL;
+  priv->next_buf = NULL;
+  priv->buf_size = 0;
+  host_video_stop_capture(priv->vdev);
+  return 0;
 }
 
 static void sim_camera_interrupt(wdparm_t arg)
@@ -402,23 +521,21 @@ static void sim_camera_interrupt(wdparm_t arg)
   struct timeval tv;
   int ret;
 
-  if (priv == NULL)
+  if (priv == NULL || priv->capture_cb == NULL)
     {
       return;
     }
 
-  if (priv->next_buf != NULL)
+  ret = host_video_dqbuf(priv->vdev, priv->next_buf, priv->buf_size);
+  if (ret >= 0)
     {
-      ret = host_video_dqbuf(priv->vdev, priv->next_buf, priv->buf_size);
-      if (ret > 0)
-        {
-          clock_gettime(CLOCK_MONOTONIC, &ts);
-          TIMESPEC_TO_TIMEVAL(&tv, &ts);
-          priv->capture_cb(0, ret, &tv, priv->capture_arg);
-        }
+      clock_gettime(CLOCK_MONOTONIC, &ts);
+      TIMESPEC_TO_TIMEVAL(&tv, &ts);
+      priv->capture_cb(0, priv->next_buf ? ret : 0,
+                       &tv, priv->capture_arg);
     }
 
-  if (priv->capture_started && priv->next_buf != NULL)
+  if (priv->capture_started)
     {
       wd_start(&priv->wdog, SIM_CAMERA_PERIOD, sim_camera_interrupt,
                (wdparm_t)priv);
@@ -454,6 +571,7 @@ int sim_camera_initialize(void)
       int ret;
 
       priv->data.ops = &g_sim_camera_data_ops;
+      priv->data.caps = IMGDATA_CAP_DROP_FRAME;
       priv->sensor.ops = &g_sim_camera_ops;
       priv->sensor.frmsizes_num = 1;
       priv->sensor.frmsizes = g_frmsizes;

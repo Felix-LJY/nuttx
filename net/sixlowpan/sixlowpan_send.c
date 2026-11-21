@@ -138,12 +138,21 @@ static uint32_t send_eventhandler(FAR struct net_driver_s *dev,
     {
       DEBUGASSERT((flags & UDP_POLL) != 0);
 
-      /* Transfer the frame list to the IEEE802.15.4 MAC device */
+      /* Copy the data to the device IOB and transfer the frame list to
+       * the IEEE802.15.4 MAC device.
+       */
 
-      sinfo->s_result =
-        sixlowpan_queue_frames((FAR struct radio_driver_s *)dev,
-                               sinfo->s_ipv6hdr, sinfo->s_buf, sinfo->s_len,
-                               sinfo->s_destmac);
+      sinfo->s_result = devif_send(dev, sinfo->s_buf, sinfo->s_len,
+                                   IPv6_HDRLEN + UDP_HDRLEN);
+      if (sinfo->s_result > 0)
+        {
+          sinfo->s_result =
+            sixlowpan_queue_frames((FAR struct radio_driver_s *)dev,
+                                   sinfo->s_ipv6hdr, dev->d_iob,
+                                   IPv6_HDRLEN + UDP_HDRLEN, sinfo->s_len,
+                                   sinfo->s_destmac);
+          dev->d_sndlen = 0;
+        }
 
       flags &= ~UDP_POLL;
       neighbor_reachable(dev);
@@ -233,8 +242,8 @@ int sixlowpan_send(FAR struct net_driver_s *dev, FAR struct udp_conn_s *conn,
        * device related events, no connect-related events.
        */
 
-      sinfo.s_cb = devif_callback_alloc(dev, &conn->sconn.list,
-                                        &conn->sconn.list_tail);
+      sinfo.s_cb = devif_callback_alloc(dev, &conn->sconn.s_list,
+                                        &conn->sconn.s_listtail);
       if (sinfo.s_cb != NULL)
         {
           int ret;
@@ -272,8 +281,8 @@ int sixlowpan_send(FAR struct net_driver_s *dev, FAR struct udp_conn_s *conn,
 
           /* Make sure that no further events are processed */
 
-          devif_conn_callback_free(dev, sinfo.s_cb, &conn->sconn.list,
-                                   &conn->sconn.list_tail);
+          devif_conn_callback_free(dev, sinfo.s_cb, &conn->sconn.s_list,
+                                   &conn->sconn.s_listtail);
         }
     }
 

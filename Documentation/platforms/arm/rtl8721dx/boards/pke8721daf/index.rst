@@ -1,8 +1,8 @@
-==========
-PKE8721DAF
-==========
+==================
+Realtek PKE8721DAF
+==================
 
-.. tags:: chip:rtl8721dx, arch:arm, vendor:realtek
+.. tags:: arch:arm, chip:rtl8721dx, vendor:realtek
 
 .. figure:: PKE8721DAF.png
    :scale: 50 %

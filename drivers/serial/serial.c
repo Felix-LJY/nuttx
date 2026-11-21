@@ -45,9 +45,11 @@
 #include <nuttx/ascii.h>
 #include <nuttx/arch.h>
 #include <nuttx/clock.h>
+#include <nuttx/init.h>
 #include <nuttx/sched.h>
 #include <nuttx/signal.h>
 #include <nuttx/fs/fs.h>
+#include <nuttx/fs/uio.h>
 #include <nuttx/cancelpt.h>
 #include <nuttx/serial/serial.h>
 #include <nuttx/fs/ioctl.h>
@@ -120,13 +122,15 @@ static void    uart_poll_notify(FAR uart_dev_t *dev, unsigned int min,
 
 /* Write support */
 
+static ssize_t uart_putxmitbuf(FAR uart_dev_t *dev, FAR const char *buf,
+                               size_t len, bool oktoblock);
 static int     uart_putxmitchar(FAR uart_dev_t *dev, int ch,
                                 bool oktoblock);
 static inline ssize_t uart_irqwrite(FAR uart_dev_t *dev,
                                     FAR const char *buffer,
-                                    size_t buflen);
+                                    size_t buflen, bool oktoblock);
 static inline ssize_t uart_irqwritev(FAR uart_dev_t *dev,
-                                     FAR struct uio *uio);
+                                     FAR struct uio *uio, bool oktoblock);
 static int     uart_tcdrain(FAR uart_dev_t *dev,
                             bool cancelable, clock_t timeout);
 
@@ -143,7 +147,7 @@ static ssize_t uart_writev(FAR struct file *filep, FAR struct uio *uio);
 static int     uart_ioctl(FAR struct file *filep,
                           int cmd, unsigned long arg);
 static int     uart_poll(FAR struct file *filep,
-                         FAR struct pollfd *fds, bool setup);
+                         FAR struct pollfd_s *fds, bool setup);
 #ifndef CONFIG_DISABLE_PSEUDOFS_OPERATIONS
 static int     uart_unlink(FAR struct inode *inode);
 #endif
@@ -238,187 +242,288 @@ static void uart_poll_notify(FAR uart_dev_t *dev, unsigned int min,
 
   DEBUGASSERT(max > min && max - min <= CONFIG_SERIAL_NPOLLWAITERS);
 
-  flags = enter_critical_section();
-  sched_lock();
+  flags = uart_spinlock(dev, true);
 
   /* Notify the fds in range dev->fds[min] - dev->fds[max] */
 
   poll_notify(&dev->fds[min], max - min, eventset);
 
-  sched_unlock();
-  leave_critical_section(flags);
+  uart_spinunlock(dev, true, flags);
+}
+
+/****************************************************************************
+ * Name: uart_putxmitbuf
+ *
+ * Description:
+ *   Copy up to 'len' bytes from 'buf' into the TX ring buffer,
+ *   blocking (when 'oktoblock' is true) to wait for free space.  Data is
+ *   moved in bulk with memcpy over the contiguous free region, removing the
+ *   per-byte call/branch overhead of adding one character at a time.  This
+ *   dominates large raw-mode writes (e.g. block transfers to USB CDC/ACM).
+ *
+ *   Concurrency: dev->xmit.head is owned by the writer under xmit.lock,
+ *   which the caller must hold.  dev->xmit.tail only advances on the drain
+ *   side, so reading a stale tail only underestimates the free space (safe,
+ *   never overwrites unread data).
+ *
+ * Returned Value:
+ *   The number of bytes copied into the TX buffer.  If no byte at all could
+ *   be copied, a negated errno value is returned instead (-EINTR if a signal
+ *   was received, -ENOTCONN if a removable device was disconnected, or
+ *   -EAGAIN if non-blocking and the buffer is full).
+ *
+ ****************************************************************************/
+
+static ssize_t uart_putxmitbuf(FAR uart_dev_t *dev, FAR const char *buf,
+                               size_t len, bool oktoblock)
+{
+  size_t nwritten = 0;
+  irqstate_t flags;
+  int nexthead;
+  int ret;
+
+  /* Loop until all data has been added to the TX buffer (or we stop early
+   * because of an error or a full buffer in non-blocking mode).
+   */
+
+  while (nwritten < len)
+    {
+      int head = dev->xmit.head;
+      int tail = dev->xmit.tail;
+      size_t space;
+      size_t chunk;
+
+      /* Determine the contiguous free space at the head of the ring
+       * buffer.
+       */
+
+      if (dev->xmit.buffer == NULL)
+        {
+          space = 0;
+        }
+      else if (head >= tail)
+        {
+          /* Contiguous space up to the physical end of the buffer.  If tail
+           * is at 0, leave the final slot free so that head == tail keeps
+           * meaning "empty".
+           */
+
+          space = dev->xmit.size - head;
+          if (tail == 0)
+            {
+              space -= 1;
+            }
+        }
+      else
+        {
+          space = tail - head - 1;
+        }
+
+      if (space > 0)
+        {
+          /* Copy as much as fits into the contiguous region, then advance
+           * (and wrap) the head pointer.
+           */
+
+          chunk = MIN(space, len - nwritten);
+          memcpy(&dev->xmit.buffer[head], &buf[nwritten], chunk);
+
+          head += chunk;
+          if (head >= dev->xmit.size)
+            {
+              head = 0;
+            }
+
+          dev->xmit.head = head;
+          nwritten      += chunk;
+          continue;
+        }
+
+      /* The TX buffer is full (or not yet available).  Should we block,
+       * waiting for the hardware to remove some data from the TX buffer?
+       */
+
+      if (!oktoblock)
+        {
+          /* The caller has requested that we not block for data.  Return the
+           * count copied so far, or -EAGAIN if nothing was copied.
+           */
+
+          return nwritten > 0 ? nwritten : -EAGAIN;
+        }
+
+      /* The following steps must be atomic with respect to serial interrupt
+       * handling.
+       */
+
+      flags = uart_spinlock(dev, true);
+
+      /* Check again...  In certain race conditions an interrupt may have
+       * occurred between the test at the top of the loop and entering the
+       * critical section and the TX buffer may no longer be full.
+       *
+       * NOTE: On certain devices, such as USB CDC/ACM, the entire TX buffer
+       * may have been emptied in this race condition.  In that case, the
+       * logic would hang below waiting for space in the TX buffer without
+       * this test.
+       */
+
+      if (dev->xmit.buffer == NULL)
+        {
+          nexthead = dev->xmit.tail;
+        }
+      else
+        {
+          nexthead = dev->xmit.head + 1;
+          if (nexthead >= dev->xmit.size)
+            {
+              nexthead = 0;
+            }
+        }
+
+      if (nexthead != dev->xmit.tail)
+        {
+          /* Space is available again; retry the copy. */
+
+          uart_spinunlock(dev, true, flags);
+          continue;
+        }
+
+#ifdef CONFIG_SERIAL_REMOVABLE
+      /* Check if the removable device is no longer connected while we have
+       * interrupts off.  We do not want the transition to occur as a race
+       * condition before we begin the wait.
+       */
+
+      if (dev->disconnected)
+        {
+          uart_spinunlock(dev, true, flags);
+          return nwritten > 0 ? nwritten : -ENOTCONN;
+        }
+#endif
+
+      /* Wait for some characters to be sent from the buffer with the TX
+       * interrupt enabled.  When the TX interrupt is enabled,
+       * uart_xmitchars() should execute and remove some of the data from
+       * the TX buffer.
+       *
+       * NOTE that interrupts will be re-enabled while we wait for the
+       * semaphore.
+       */
+
+#ifdef CONFIG_SERIAL_TXDMA
+      uart_dmatxavail(dev);
+#endif
+      uart_enabletxint(dev);
+      uart_spinunlock(dev, true, flags);
+      ret = nxsem_wait(&dev->xmitsem);
+      flags = uart_spinlock(dev, true);
+      uart_disabletxint(dev);
+      uart_spinunlock(dev, true, flags);
+
+#ifdef CONFIG_SERIAL_REMOVABLE
+      /* Check if the removable device was disconnected while we were
+       * waiting.
+       */
+
+      if (dev->disconnected)
+        {
+          return nwritten > 0 ? nwritten : -ENOTCONN;
+        }
+#endif
+
+      /* Check if we were awakened by signal. */
+
+      if (ret < 0)
+        {
+          /* A signal received while waiting for the xmit buffer to become
+           * non-full will abort the transfer.
+           */
+
+          return nwritten > 0 ? nwritten : ret;
+        }
+    }
+
+  return nwritten;
 }
 
 /****************************************************************************
  * Name: uart_putxmitchar
  ****************************************************************************/
 
-static int uart_putxmitchar(FAR uart_dev_t *dev, int ch, bool oktoblock)
+static inline
+int uart_putxmitchar(FAR uart_dev_t *dev, int ch, bool oktoblock)
 {
-  irqstate_t flags;
-  int nexthead;
-  int ret;
+  ssize_t nsent;
+  char c = ch;
 
-  /* Loop until we are able to add the character to the TX buffer. */
+  /* Forward the single character to the batch helper. */
 
-  for (; ; )
-    {
-      /* Increment to see what the next head pointer will be.
-       * We need to use the "next" head pointer to determine when the
-       * circular buffer would overrun
-       */
-
-      nexthead = dev->xmit.head + 1;
-      if (nexthead >= dev->xmit.size)
-        {
-          nexthead = 0;
-        }
-
-      /* Check if the TX buffer is full */
-
-      if (nexthead != dev->xmit.tail)
-        {
-          /* No.. not full.  Add the character to the TX buffer and return. */
-
-          dev->xmit.buffer[dev->xmit.head] = ch;
-          dev->xmit.head = nexthead;
-          break;
-        }
-
-      /* The TX buffer is full.  Should be block, waiting for the hardware
-       * to remove some data from the TX buffer?
-       */
-
-      else if (oktoblock)
-        {
-          /* The following steps must be atomic with respect to serial
-           * interrupt handling.
-           *
-           * This critical section is also used for the serialization
-           * with the up_putc-based syslog channels.
-           * See https://github.com/apache/nuttx/issues/14662
-           */
-
-          flags = enter_critical_section();
-
-          /* Check again...  In certain race conditions an interrupt may
-           * have occurred between the test at the top of the loop and
-           * entering the critical section and the TX buffer may no longer
-           * be full.
-           *
-           * NOTE: On certain devices, such as USB CDC/ACM, the entire TX
-           * buffer may have been emptied in this race condition.  In that
-           * case, the logic would hang below waiting for space in the TX
-           * buffer without this test.
-           */
-
-          if (nexthead != dev->xmit.tail)
-            {
-              ret = OK;
-            }
-
-#ifdef CONFIG_SERIAL_REMOVABLE
-          /* Check if the removable device is no longer connected while we
-           * have interrupts off.  We do not want the transition to occur
-           * as a race condition before we begin the wait.
-           */
-
-          else if (dev->disconnected)
-            {
-              ret = -ENOTCONN;
-            }
-#endif
-          else
-            {
-              /* Wait for some characters to be sent from the buffer with
-               * the TX interrupt enabled.  When the TX interrupt is enabled,
-               * uart_xmitchars() should execute and remove some of the data
-               * from the TX buffer.
-               *
-               * NOTE that interrupts will be re-enabled while we wait for
-               * the semaphore.
-               */
-
-#ifdef CONFIG_SERIAL_TXDMA
-              uart_dmatxavail(dev);
-#endif
-              uart_enabletxint(dev);
-              ret = nxsem_wait(&dev->xmitsem);
-              uart_disabletxint(dev);
-            }
-
-          leave_critical_section(flags);
-
-#ifdef CONFIG_SERIAL_REMOVABLE
-          /* Check if the removable device was disconnected while we were
-           * waiting.
-           */
-
-          if (dev->disconnected)
-            {
-              return -ENOTCONN;
-            }
-#endif
-
-          /* Check if we were awakened by signal. */
-
-          if (ret < 0)
-            {
-              /* A signal received while waiting for the xmit buffer to
-               * become non-full will abort the transfer.
-               */
-
-              return -EINTR;
-            }
-        }
-
-      /* The caller has request that we not block for data.  So return the
-       * EAGAIN error to signal this situation.
-       */
-
-      else
-        {
-          return -EAGAIN;
-        }
-    }
-
-  /* We won't get here.  Some compilers may complain that this code is
-   * unreachable.
-   */
-
-  return OK;
+  nsent = uart_putxmitbuf(dev, &c, 1, oktoblock);
+  return nsent < 0 ? nsent : OK;
 }
 
 /****************************************************************************
  * Name: uart_putc
  ****************************************************************************/
 
-static inline void uart_putchars(FAR uart_dev_t *dev,
-                                 FAR const void *buf, size_t len)
+static inline size_t uart_putchars(FAR uart_dev_t *dev,
+                                   FAR const void *buf, size_t len,
+                                   bool oktoblock)
 {
   FAR const char *pbuf = buf;
+  size_t remaining = len;
 
-  while (len > 0)
+  while (remaining > 0)
     {
-      while (!uart_txready(dev))
+      if (!uart_txready(dev))
         {
+          /* Not ready.  When the caller cannot block (a non-blocking
+           * drain, e.g. from a wdog callback), stop and report the short
+           * write rather than busy-poll with interrupts masked.
+           */
+
+          if (!oktoblock)
+            {
+              break;
+            }
+
+          continue;
         }
 
       if (dev->ops->sendbuf)
         {
-          ssize_t ret = uart_sendbuf(dev, pbuf, len);
+          ssize_t ret = uart_sendbuf(dev, pbuf, remaining);
+
           if (ret > 0)
             {
               pbuf += ret;
-              len -= ret;
+              remaining -= ret;
+            }
+          else if (!oktoblock)
+            {
+              /* txready raced and sendbuf took nothing; stop rather than
+               * spin, since !oktoblock means a bounded call.
+               */
+
+              break;
             }
         }
       else
         {
           uart_send(dev, *pbuf++);
-          len--;
+          remaining--;
         }
     }
+
+#ifdef CONFIG_SERIAL_TXDMA
+  if (dev->xmit.head != dev->xmit.tail)
+    {
+      uart_dmatxavail(dev);
+    }
+#endif
+
+  return len - remaining;
 }
 
 /****************************************************************************
@@ -427,43 +532,74 @@ static inline void uart_putchars(FAR uart_dev_t *dev,
 
 static inline ssize_t uart_irqwrite(FAR uart_dev_t *dev,
                                     FAR const char *buffer,
-                                    size_t buflen)
+                                    size_t buflen, bool oktoblock)
 {
-  size_t tail = 0;
-  size_t head = buflen;
+  bool opost = (dev->termios.oflag & OPOST) != 0;
+  size_t offset = 0;
+  size_t nput;
 
-  /* Do output post-processing */
+  /* Do output post-processing: locate the next character that requires
+   * translation (CR under OCRNL, NL under ONLCR), emit the run of ordinary
+   * bytes before it in one go, then emit the translation.  When no
+   * translation is enabled the whole buffer is written in a single call.
+   */
 
-  if ((dev->tc_oflag & OPOST) != 0)
+  while (offset < buflen)
     {
-      for (head = 0; head < buflen; head++)
+      FAR const char *special = NULL;
+      size_t nsent = buflen - offset;
+      char out[2];
+
+      if (opost && (dev->termios.oflag & OCRNL) != 0)
         {
-          int ch = buffer[head];
+          special = memchr(&buffer[offset], '\r', nsent);
+        }
 
-          /* Mapping CR to NL? */
+      if (opost && (dev->termios.oflag & ONLCR) != 0)
+        {
+          FAR const char *nl = memchr(&buffer[offset], '\n', nsent);
 
-          if ((ch == '\r') && (dev->tc_oflag & OCRNL) != 0)
+          if (nl != NULL && (special == NULL || nl < special))
             {
-              uart_putchars(dev, &buffer[tail], head - tail);
-              uart_putchars(dev, "\n", 1);
-              tail = head + 1;
-            }
-
-          /* Are we interested in newline processing? */
-
-          if ((ch == '\n') && (dev->tc_oflag & (ONLCR | ONLRET)) != 0)
-            {
-              uart_putchars(dev, &buffer[tail], head - tail);
-              uart_putchars(dev, "\r", 1);
-              tail = head;
+              special = nl;
             }
         }
+
+      if (special != NULL)
+        {
+          nsent = special - &buffer[offset];
+        }
+
+      nput = uart_putchars(dev, &buffer[offset], nsent, oktoblock);
+      offset += nput;
+      if (nput < nsent)
+        {
+          /* !oktoblock stall partway; report what got out. */
+
+          return offset > 0 ? offset : -EAGAIN;
+        }
+
+      if (special == NULL)
+        {
+          break;
+        }
+
+      nsent = uart_termios_out_char(&dev->termios, buffer[offset],
+                                    out, sizeof(out));
+      if (uart_putchars(dev, out, nsent, oktoblock) != nsent)
+        {
+          return offset > 0 ? offset : -EAGAIN;
+        }
+
+      offset += 1;
     }
 
-  /* Output the character, using the low-level direct UART interfaces */
+  if (offset == 0 && buflen > 0)
+    {
+      return -EAGAIN;
+    }
 
-  uart_putchars(dev, &buffer[tail], head - tail);
-  return buflen;
+  return offset;
 }
 
 /****************************************************************************
@@ -471,7 +607,7 @@ static inline ssize_t uart_irqwrite(FAR uart_dev_t *dev,
  ****************************************************************************/
 
 static inline ssize_t uart_irqwritev(FAR uart_dev_t *dev,
-                                     FAR struct uio *uio)
+                                     FAR struct uio *uio, bool oktoblock)
 {
   ssize_t error = 0;
   ssize_t total = 0;
@@ -481,12 +617,15 @@ static inline ssize_t uart_irqwritev(FAR uart_dev_t *dev,
   for (i = 0; i < iovcnt; i++)
     {
       const struct iovec *iov = &uio->uio_iov[i];
+      ssize_t written;
+
       if (iov->iov_len == 0)
         {
           continue;
         }
 
-      ssize_t written = uart_irqwrite(dev, iov->iov_base, iov->iov_len);
+      written = uart_irqwrite(dev, iov->iov_base, iov->iov_len, oktoblock);
+
       if (written < 0)
         {
           error = written;
@@ -500,6 +639,13 @@ static inline ssize_t uart_irqwritev(FAR uart_dev_t *dev,
         }
 
       total += written;
+
+      if (written < iov->iov_len)
+        {
+          /* !oktoblock stall; stop rather than reorder later iovecs. */
+
+          break;
+        }
     }
 
   if (error != 0 && total == 0)
@@ -562,7 +708,7 @@ static int uart_tcdrain(FAR uart_dev_t *dev,
 
       /* Trigger emission to flush the contents of the tx buffer */
 
-      flags = enter_critical_section();
+      flags = uart_spinlock(dev, true);
 
 #ifdef CONFIG_SERIAL_REMOVABLE
       /* Check if the removable device is no longer connected while we have
@@ -602,6 +748,7 @@ static int uart_tcdrain(FAR uart_dev_t *dev,
               uart_dmatxavail(dev);
 #endif
               uart_enabletxint(dev);
+              uart_spinunlock(dev, true, flags);
 
               elapsed = clock_systime_ticks() - start;
               if (elapsed >= timeout)
@@ -613,11 +760,12 @@ static int uart_tcdrain(FAR uart_dev_t *dev,
                   ret = nxsem_tickwait(&dev->xmitsem, timeout - elapsed);
                 }
 
+              flags = uart_spinlock(dev, true);
               uart_disabletxint(dev);
             }
         }
 
-      leave_critical_section(flags);
+      uart_spinunlock(dev, true, flags);
 
       /* The TX buffer is empty (or an error occurred).  But there still may
        * be data in the UART TX FIFO.  We get no asynchronous indication of
@@ -740,7 +888,7 @@ static int uart_open(FAR struct file *filep)
 {
   FAR struct inode *inode = filep->f_inode;
   FAR uart_dev_t   *dev   = inode->i_private;
-  uint8_t           tmp;
+  uint16_t          tmp;
   int               ret;
 
   /* If the port is the middle of closing, wait until the close is finished.
@@ -775,7 +923,7 @@ static int uart_open(FAR struct file *filep)
   tmp = dev->open_count + 1;
   if (tmp == 0)
     {
-      /* More than 255 opens; uint8_t overflows to zero */
+      /* More than 65535 opens; uint16_t overflows to zero */
 
       ret = -EMFILE;
       goto errout_with_lock;
@@ -785,7 +933,7 @@ static int uart_open(FAR struct file *filep)
 
   if (tmp == 1)
     {
-      irqstate_t flags = enter_critical_section();
+      irqstate_t flags = uart_spinlock(dev, false);
 
       /* If this is the console, then the UART has already been
        * initialized.
@@ -798,7 +946,7 @@ static int uart_open(FAR struct file *filep)
           ret = uart_setup(dev);
           if (ret < 0)
             {
-              leave_critical_section(flags);
+              uart_spinunlock(dev, false, flags);
               goto errout_with_lock;
             }
         }
@@ -817,7 +965,7 @@ static int uart_open(FAR struct file *filep)
               uart_shutdown(dev);
             }
 
-          leave_critical_section(flags);
+          uart_spinunlock(dev, false, flags);
           goto errout_with_lock;
         }
 
@@ -830,7 +978,7 @@ static int uart_open(FAR struct file *filep)
       /* Enable the RX interrupt */
 
       uart_enablerxint(dev);
-      leave_critical_section(flags);
+      uart_spinunlock(dev, false, flags);
     }
 
   /* Save the new open count on success */
@@ -892,7 +1040,7 @@ static int uart_close(FAR struct file *filep)
 
   /* Free the IRQ and disable the UART */
 
-  flags = enter_critical_section();  /* Disable interrupts */
+  flags = uart_spinlock(dev, false);
   uart_detach(dev);                  /* Detach interrupts */
 
   /* Check for the serial console UART */
@@ -902,7 +1050,7 @@ static int uart_close(FAR struct file *filep)
       uart_shutdown(dev);            /* Disable the UART */
     }
 
-  leave_critical_section(flags);
+  uart_spinunlock(dev, false, flags);
 
   /* Wake up read and poll functions */
 
@@ -943,12 +1091,13 @@ static ssize_t uart_readv(FAR struct file *filep, FAR struct uio *uio)
 #ifdef CONFIG_SERIAL_IFLOWCONTROL_WATERMARKS
   unsigned int nbuffered;
   unsigned int watermark;
-  sbuf_size_t head;
 #endif
   irqstate_t flags;
   ssize_t recvd = 0;
   ssize_t buflen;
   bool echoed = false;
+  bool rawmode;
+  sbuf_size_t head;
   sbuf_size_t tail;
   char ch;
   int ret;
@@ -972,6 +1121,9 @@ static ssize_t uart_readv(FAR struct file *filep, FAR struct uio *uio)
    */
 
   buflen = uio->uio_resid;
+  rawmode = (dev->termios.iflag & (INLCR | IGNCR | ICRNL)) == 0 &&
+            (dev->termios.lflag & (ICANON | ECHO)) == 0;
+
   while (recvd < buflen)
     {
 #ifdef CONFIG_SERIAL_REMOVABLE
@@ -1006,8 +1158,40 @@ static ssize_t uart_readv(FAR struct file *filep, FAR struct uio *uio)
        */
 
       tail = rxbuf->tail;
-      if (rxbuf->head != tail)
+      head = rxbuf->head;
+      if (head != tail)
         {
+          if (rawmode)
+            {
+              ssize_t ncopy;
+
+              if (head > tail)
+                {
+                  ncopy = head - tail;
+                }
+              else
+                {
+                  ncopy = rxbuf->size - tail;
+                }
+
+              if (ncopy > buflen - recvd)
+                {
+                  ncopy = buflen - recvd;
+                }
+
+              uio_copyfrom(uio, recvd, &rxbuf->buffer[tail], ncopy);
+              recvd += ncopy;
+
+              tail += ncopy;
+              if (tail >= rxbuf->size)
+                {
+                  tail = 0;
+                }
+
+              rxbuf->tail = tail;
+              continue;
+            }
+
           /* Take the next character from the tail of the buffer */
 
           ch = rxbuf->buffer[tail];
@@ -1026,36 +1210,21 @@ static ssize_t uart_readv(FAR struct file *filep, FAR struct uio *uio)
 
           /* Do input processing if any is enabled */
 
-          if (dev->tc_iflag & (INLCR | IGNCR | ICRNL))
+          if (!uart_termios_in_char(&dev->termios, &ch))
             {
-              /* \n -> \r or \r -> \n translation? */
-
-              if ((ch == '\n') && (dev->tc_iflag & INLCR))
-                {
-                  ch = '\r';
-                }
-              else if ((ch == '\r') && (dev->tc_iflag & ICRNL))
-                {
-                  ch = '\n';
-                }
-
-              /* Discarding \r ? */
-
-              if ((ch == '\r') && (dev->tc_iflag & IGNCR))
-                {
-                  continue;
-                }
+              continue;
             }
 
-          if ((dev->tc_lflag & ICANON) &&
+          if ((dev->termios.lflag & ICANON) &&
               (ch == ASCII_BS || ch == ASCII_DEL))
             {
               if (recvd > 0)
                 {
                   static const char zero = '\0';
+
                   uio_copyfrom(uio, recvd, &zero, 1);
                   recvd--;
-                  if (dev->tc_lflag & ECHO)
+                  if (dev->termios.lflag & ECHO)
                     {
                       nxmutex_lock(&dev->xmit.lock);
                       uart_putxmitchar(dev, '\b', true);
@@ -1064,13 +1233,15 @@ static ssize_t uart_readv(FAR struct file *filep, FAR struct uio *uio)
                       nxmutex_unlock(&dev->xmit.lock);
 
 #ifdef CONFIG_SERIAL_TXDMA
+                      flags = uart_spinlock(dev, true);
                       uart_dmatxavail(dev);
+                      uart_spinunlock(dev, true, flags);
 #endif
                       uart_enabletxint(dev);
                     }
                 }
 
-                continue;
+              continue;
             }
 
           /* Specifically not handled:
@@ -1087,7 +1258,7 @@ static ssize_t uart_readv(FAR struct file *filep, FAR struct uio *uio)
           uio_copyfrom(uio, recvd, &ch, 1);
           recvd++;
 
-          if (dev->tc_lflag & ECHO)
+          if (dev->termios.lflag & ECHO)
             {
               if (ch == ASCII_ESC)
                 {
@@ -1162,10 +1333,12 @@ static ssize_t uart_readv(FAR struct file *filep, FAR struct uio *uio)
                    * sequence received, but enable the tx interrupt.
                    */
 
-                  if (dev->tc_lflag & ICANON)
+                  if (dev->termios.lflag & ICANON)
                     {
 #ifdef CONFIG_SERIAL_TXDMA
+                      flags = uart_spinlock(dev, true);
                       uart_dmatxavail(dev);
+                      uart_spinunlock(dev, true, flags);
 #endif
                       uart_enabletxint(dev);
                     }
@@ -1176,7 +1349,7 @@ static ssize_t uart_readv(FAR struct file *filep, FAR struct uio *uio)
                 }
             }
 
-          if ((dev->tc_lflag & ICANON) && ch == '\n')
+          if ((dev->termios.lflag & ICANON) && ch == '\n')
             {
               break;
             }
@@ -1188,7 +1361,7 @@ static ssize_t uart_readv(FAR struct file *filep, FAR struct uio *uio)
         {
           /* Disable all interrupts and test again... */
 
-          flags = enter_critical_section();
+          flags = uart_spinlock(dev, false);
 
           /* Disable Rx interrupts and test again... */
 
@@ -1229,7 +1402,7 @@ static ssize_t uart_readv(FAR struct file *filep, FAR struct uio *uio)
 
               if (rxbuf->head != rxbuf->tail)
                 {
-                  leave_critical_section(flags);
+                  uart_spinunlock(dev, false, flags);
                   continue;
                 }
 
@@ -1250,7 +1423,7 @@ static ssize_t uart_readv(FAR struct file *filep, FAR struct uio *uio)
                       recvd = -EAGAIN;
                     }
 
-                  leave_critical_section(flags);
+                  uart_spinunlock(dev, false, flags);
                   break;
                 }
 #else
@@ -1258,13 +1431,13 @@ static ssize_t uart_readv(FAR struct file *filep, FAR struct uio *uio)
                * anything to the caller?
                */
 
-              else if (recvd > 0 && !(dev->tc_lflag & ICANON))
+              else if (recvd > 0 && !(dev->termios.lflag & ICANON))
                 {
                   /* Yes.. break out of the loop and return the number
                    * of bytes received up to the wait condition.
                    */
 
-                  leave_critical_section(flags);
+                  uart_spinunlock(dev, false, flags);
                   break;
                 }
 
@@ -1275,7 +1448,7 @@ static ssize_t uart_readv(FAR struct file *filep, FAR struct uio *uio)
                    */
 
                   recvd = -EBADFD;
-                  leave_critical_section(flags);
+                  uart_spinunlock(dev, false, flags);
                   break;
                 }
 
@@ -1289,7 +1462,7 @@ static ssize_t uart_readv(FAR struct file *filep, FAR struct uio *uio)
                   /* Break out of the loop returning -EAGAIN */
 
                   recvd = -EAGAIN;
-                  leave_critical_section(flags);
+                  uart_spinunlock(dev, false, flags);
                   break;
                 }
 #endif
@@ -1312,42 +1485,47 @@ static ssize_t uart_readv(FAR struct file *filep, FAR struct uio *uio)
                    * thread goes to sleep.
                    */
 
-                  if (dev->tc_lflag & ICANON)
+                  if (dev->termios.lflag & ICANON)
                     {
 #ifdef CONFIG_SERIAL_TERMIOS
                       dev->minrecv = 0;
 #endif
+                      uart_spinunlock(dev, false, flags);
                       nxmutex_unlock(&dev->recv.lock);
                       ret = nxsem_wait(&dev->recvsem);
                       nxmutex_lock(&dev->recv.lock);
+                      flags = uart_spinlock(dev, false);
                     }
                   else
                     {
 #ifdef CONFIG_SERIAL_TERMIOS
                       dev->minrecv = MIN(buflen - recvd,
-                                         dev->minread - recvd);
-                      if (dev->timeout)
+                                         dev->termios.vmin - recvd);
+                      if (dev->termios.vtime)
                         {
+                          uart_spinunlock(dev, false, flags);
                           nxmutex_unlock(&dev->recv.lock);
                           ret = nxsem_tickwait(&dev->recvsem,
-                                              DSEC2TICK(dev->timeout));
+                                  DSEC2TICK(dev->termios.vtime));
                         }
                       else
 #endif
                         {
+                          uart_spinunlock(dev, false, flags);
                           nxmutex_unlock(&dev->recv.lock);
                           ret = nxsem_wait(&dev->recvsem);
                         }
 
                       nxmutex_lock(&dev->recv.lock);
+                      flags = uart_spinlock(dev, false);
 
 #ifdef CONFIG_SERIAL_TERMIOS
-                      dev->minrecv = dev->minread;
+                      dev->minrecv = dev->termios.vmin;
 #endif
                     }
                 }
 
-              leave_critical_section(flags);
+              uart_spinunlock(dev, false, flags);
 
               /* Was a signal received while waiting for data to be
                * received?  Was a removable device disconnected while
@@ -1391,7 +1569,7 @@ static ssize_t uart_readv(FAR struct file *filep, FAR struct uio *uio)
                * the loop.
                */
 
-              leave_critical_section(flags);
+              uart_spinunlock(dev, false, flags);
 
               uart_enablerxint(dev);
             }
@@ -1401,7 +1579,9 @@ static ssize_t uart_readv(FAR struct file *filep, FAR struct uio *uio)
   if (echoed)
     {
 #ifdef CONFIG_SERIAL_TXDMA
+      flags = uart_spinlock(dev, true);
       uart_dmatxavail(dev);
+      uart_spinunlock(dev, true, flags);
 #endif
       uart_enabletxint(dev);
     }
@@ -1409,9 +1589,9 @@ static ssize_t uart_readv(FAR struct file *filep, FAR struct uio *uio)
 #ifdef CONFIG_SERIAL_RXDMA
   /* Notify DMA that there is free space in the RX buffer */
 
-  flags = enter_critical_section();
+  flags = uart_spinlock(dev, false);
   uart_dmarxfree(dev);
-  leave_critical_section(flags);
+  uart_spinunlock(dev, false, flags);
 #endif
 
   /* RX interrupt could be disabled by RX buffer overflow. Enable it now. */
@@ -1486,8 +1666,19 @@ static ssize_t uart_writev(FAR struct file *filep, FAR struct uio *uio)
   ssize_t           nwritten;
   ssize_t           buflen;
   bool              oktoblock;
+  bool              opost;
+  irqstate_t        flags;
   int               ret;
-  char              ch;
+  char              out[2];
+  size_t            nout;
+  size_t            i;
+
+  /* Can the caller block waiting for TX space?  Computed here because the
+   * interrupt-context branch below needs it too: an O_NONBLOCK note sink
+   * must not spin in a wdog drain with interrupts masked.
+   */
+
+  oktoblock = ((filep->f_oflags & O_NONBLOCK) == 0);
 
   /* We may receive serial writes through this path from interrupt handlers
    * and from debug output in the IDLE task!  In these cases, we will need to
@@ -1496,8 +1687,6 @@ static ssize_t uart_writev(FAR struct file *filep, FAR struct uio *uio)
 
   if (up_interrupt_context() || sched_idletask())
     {
-      irqstate_t flags;
-
 #ifdef CONFIG_SERIAL_REMOVABLE
       /* If the removable device is no longer connected, refuse to write to
        * the device.
@@ -1509,9 +1698,31 @@ static ssize_t uart_writev(FAR struct file *filep, FAR struct uio *uio)
         }
 #endif
 
-      flags = enter_critical_section();
-      ret = uart_irqwritev(dev, uio);
-      leave_critical_section(flags);
+      flags = uart_spinlock(dev, false);
+
+      /* In panic state, drain xmit buffer first to preserve log order.
+       * Earlier buffered output must appear before new direct-write data.
+       * Skip in normal interrupt context to avoid excessive latency.
+       */
+
+      if (OSINIT_IS_PANIC())
+        {
+          while (dev->xmit.tail != dev->xmit.head)
+            {
+              while (!uart_txready(dev))
+                {
+                }
+
+              uart_send(dev, dev->xmit.buffer[dev->xmit.tail]);
+              if (++(dev->xmit.tail) >= dev->xmit.size)
+                {
+                  dev->xmit.tail = 0;
+                }
+            }
+        }
+
+      ret = uart_irqwritev(dev, uio, oktoblock);
+      uart_spinunlock(dev, false, flags);
 
       return ret;
     }
@@ -1545,20 +1756,29 @@ static ssize_t uart_writev(FAR struct file *filep, FAR struct uio *uio)
     }
 #endif
 
-  /* Can the following loop block, waiting for space in the TX
-   * buffer?
-   */
-
-  oktoblock = ((filep->f_oflags & O_NONBLOCK) == 0);
-
   /* Loop while we still have data to copy to the transmit buffer.
    * we add data to the head of the buffer; uart_xmitchars takes the
    * data from the end of the buffer.
    */
 
   uart_disabletxint(dev);
-  for (; buflen; buflen--, nseg++)
+
+  /* Copy the payload into the TX buffer.  Output post-processing only needs
+   * to translate CR (when OCRNL is set) and NL (when ONLCR is set);
+   * every other byte is copied verbatim.  So within each iovec segment,
+   * locate the next byte that needs translation, bulk-copy everything before
+   * it with uart_putxmitbuf(), then handle that one byte.  When no
+   * translation is enabled (the common raw-mode case, e.g. block transfers
+   * to USB CDC/ACM) each segment is copied in a single bulk operation.
+   */
+
+  opost = (dev->termios.oflag & OPOST) != 0;
+
+  while (buflen > 0)
     {
+      FAR const char *special = NULL;
+      size_t          nsent;
+
       if (nseg >= seglen)
         {
           /* Consume the current segment and take a pointer to the next.
@@ -1572,79 +1792,117 @@ static ssize_t uart_writev(FAR struct file *filep, FAR struct uio *uio)
           nseg   = 0;
         }
 
-      ch  = segbuf[nseg];
-      ret = OK;
+      /* Number of contiguous bytes remaining in the current segment. */
 
-      /* Do output post-processing */
+      nsent = seglen - nseg;
 
-      if ((dev->tc_oflag & OPOST) != 0)
+      /* Locate the next character in this segment that requires output
+       * post-processing.
+       */
+
+      if (opost && (dev->termios.oflag & OCRNL) != 0)
         {
-          /* Mapping CR to NL? */
-
-          if ((ch == '\r') && (dev->tc_oflag & OCRNL) != 0)
-            {
-              ch = '\n';
-            }
-
-          /* Are we interested in newline processing? */
-
-          if ((ch == '\n') && (dev->tc_oflag & (ONLCR | ONLRET)) != 0)
-            {
-              ret = uart_putxmitchar(dev, '\r', oktoblock);
-            }
-
-          /* Specifically not handled:
-           *
-           * OXTABS - primarily a full-screen terminal optimization
-           * ONOEOT - Unix interoperability hack
-           * OLCUC  - Not specified by POSIX
-           * ONOCR  - low-speed interactive optimization
-           */
+          special = memchr(&segbuf[nseg], '\r', nsent);
         }
 
-      /* Put the character into the transmit buffer */
-
-      if (ret >= 0)
+      if (opost && (dev->termios.oflag & ONLCR) != 0)
         {
-          ret = uart_putxmitchar(dev, ch, oktoblock);
+          FAR const char *nl = memchr(&segbuf[nseg], '\n', nsent);
+
+          if (nl != NULL && (special == NULL || nl < special))
+            {
+              special = nl;
+            }
         }
 
-      /* uart_putxmitchar() might return an error under one of two
+      if (special != NULL)
+        {
+          nsent = special - &segbuf[nseg];
+        }
+
+      /* Bulk-copy the run of ordinary bytes that precede the special
+       * character (or the rest of the segment when there is none).
+       */
+
+      if (nsent > 0)
+        {
+          ret = uart_putxmitbuf(dev, &segbuf[nseg], nsent, oktoblock);
+          if (ret < 0)
+            {
+              break;
+            }
+
+          nseg   += ret;
+          buflen -= ret;
+          if (ret < nsent)
+            {
+              break;
+            }
+        }
+
+      /* Copy entire segment, no special characters, goto next segment */
+
+      if (special == NULL)
+        {
+          continue;
+        }
+
+      /* 'special' points at the current byte.  Translate and
+       * emit that single character.
+       *
+       * Specifically not handled:
+       *   OXTABS - primarily a full-screen terminal optimization
+       *   ONOEOT - Unix interoperability hack
+       *   OLCUC  - Not specified by POSIX
+       *   ONOCR  - low-speed interactive optimization
+       */
+
+      nout = uart_termios_out_char(&dev->termios, segbuf[nseg],
+                                   out, sizeof(out));
+      for (i = 0, ret = 0; i < nout && ret >= 0; i++)
+        {
+          ret = uart_putxmitchar(dev, out[i], oktoblock);
+        }
+
+      /* uart_putxmitchar() might return an error under one of three
        * conditions:  (1) The wait for buffer space might have been
        * interrupted by a signal (ret should be -EINTR), (2) if
        * CONFIG_SERIAL_REMOVABLE is defined, then uart_putxmitchar()
        * might also return if the serial device was disconnected
        * (with -ENOTCONN), or (3) if O_NONBLOCK is specified, then
-       * then uart_putxmitchar() might return -EAGAIN if the output
+       * uart_putxmitchar() might return -EAGAIN if the output
        * TX buffer is full.
        */
 
       if (ret < 0)
         {
-          /* POSIX requires that we return -1 and errno set if no data was
-           * transferred.  Otherwise, we return the number of bytes in the
-           * interrupted transfer.
-           */
-
-          if (buflen < (size_t)nwritten)
-            {
-              /* Some data was transferred.  Return the number of bytes that
-               * were successfully transferred.
-               */
-
-              nwritten -= buflen;
-            }
-          else
-            {
-              /* No data was transferred. Return the negated errno value.
-               * The VFS layer will set the errno value appropriately).
-               */
-
-              nwritten = ret;
-            }
-
           break;
         }
+
+      nseg++;
+      buflen--;
+    }
+
+  /* POSIX requires that we return -1 and errno set if no data was
+   * transferred.  Otherwise, we return the number of bytes in the
+   * interrupted transfer.
+   */
+
+  if (nwritten > buflen)
+    {
+      /* Some data was transferred. Return the number of bytes that
+       * were successfully transferred.
+       */
+
+      nwritten -= buflen;
+    }
+  else
+    {
+      /* No data was transferred.  Return the negated errno value.  The VFS
+       * layer will set the errno value appropriately.
+       */
+
+      nwritten = ret;
     }
 
   /* Consume the bytes that were successfully queued */
@@ -1654,7 +1912,9 @@ static ssize_t uart_writev(FAR struct file *filep, FAR struct uio *uio)
   if (dev->xmit.head != dev->xmit.tail)
     {
 #ifdef CONFIG_SERIAL_TXDMA
+      flags = uart_spinlock(dev, true);
       uart_dmatxavail(dev);
+      uart_spinunlock(dev, true, flags);
 #endif
       uart_enabletxint(dev);
     }
@@ -1701,7 +1961,7 @@ static int uart_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
           case FIONREAD:
             {
               int count;
-              irqstate_t flags = enter_critical_section();
+              irqstate_t flags = uart_spinlock(dev, false);
 
               /* Determine the number of bytes available in the RX buffer */
 
@@ -1714,7 +1974,7 @@ static int uart_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
                   count = dev->recv.size - (dev->recv.tail - dev->recv.head);
                 }
 
-              leave_critical_section(flags);
+              uart_spinunlock(dev, false, flags);
 
               *(FAR int *)((uintptr_t)arg) = count;
               ret = 0;
@@ -1728,7 +1988,7 @@ static int uart_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
           case FIONWRITE:
             {
               int count;
-              irqstate_t flags = enter_critical_section();
+              irqstate_t flags = uart_spinlock(dev, false);
 
               /* Determine the number of bytes waiting in the TX buffer */
 
@@ -1741,7 +2001,7 @@ static int uart_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
                   count = dev->xmit.size - (dev->xmit.tail - dev->xmit.head);
                 }
 
-              leave_critical_section(flags);
+              uart_spinunlock(dev, false, flags);
 
               *(FAR int *)((uintptr_t)arg) = count;
               ret = 0;
@@ -1753,7 +2013,7 @@ static int uart_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
           case FIONSPACE:
             {
               int count;
-              irqstate_t flags = enter_critical_section();
+              irqstate_t flags = uart_spinlock(dev, false);
 
               /* Determine the number of bytes free in the TX buffer */
 
@@ -1767,7 +2027,7 @@ static int uart_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
                          (dev->xmit.head - dev->xmit.tail) - 1;
                 }
 
-              leave_critical_section(flags);
+              uart_spinunlock(dev, false, flags);
 
               *(FAR int *)((uintptr_t)arg) = count;
               ret = 0;
@@ -1778,7 +2038,7 @@ static int uart_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
             {
               /* Empty the tx/rx buffers */
 
-              irqstate_t flags = enter_critical_section();
+              irqstate_t flags = uart_spinlock(dev, true);
 
               if (arg == TCIFLUSH || arg == TCIOFLUSH)
                 {
@@ -1800,7 +2060,7 @@ static int uart_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
                   uart_datasent(dev);
                 }
 
-              leave_critical_section(flags);
+              uart_spinunlock(dev, true, flags);
               ret = 0;
             }
             break;
@@ -1827,11 +2087,50 @@ static int uart_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
             }
             break;
 
+          case TIOCGWINSZ:
+            {
+              FAR struct winsize *ws = (FAR struct winsize *)(uintptr_t)arg;
+
+              if (ws == NULL)
+                {
+                  ret = -EINVAL;
+                  break;
+                }
+
+              *ws = dev->winsize;
+              ret = 0;
+            }
+            break;
+
+          case TIOCSWINSZ:
+            {
+              FAR const struct winsize *ws =
+                (FAR const struct winsize *)(uintptr_t)arg;
+
+              if (ws == NULL)
+                {
+                  ret = -EINVAL;
+                  break;
+                }
+
+              ret = 0;
+              if (memcmp(&dev->winsize, ws, sizeof(*ws)) != 0)
+                {
+                  dev->winsize = *ws;
+#if defined(CONFIG_TTY_SIGINT) || defined(CONFIG_TTY_SIGTSTP)
+                  if (dev->pid > 0)
+                    {
+                      nxsig_kill_foreground(dev->pid, SIGWINCH);
+                    }
+#endif
+                }
+            }
+            break;
+
 #if defined(CONFIG_TTY_SIGINT) || defined(CONFIG_TTY_SIGTSTP)
           /* Make the controlling terminal of the calling process */
 
           case TIOCSCTTY:
-          case TIOCSPGRP:
             {
               /* Save the PID of the foreground process group that is to
                * receive tty-generated signals (SIGINT/SIGTSTP).
@@ -1850,6 +2149,26 @@ static int uart_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
               else
                 {
                   dev->pid = arg > 0 ? (pid_t)arg : nxsched_getpid();
+                  ret = 0;
+                }
+            }
+            break;
+
+          /* Set the foreground process group: as tcsetpgrp() passes it,
+           * 'arg' points to the process group ID.
+           */
+
+          case TIOCSPGRP:
+            {
+              FAR const pid_t *pgrp = (FAR const pid_t *)((uintptr_t)arg);
+
+              if (pgrp == NULL || *pgrp <= 0)
+                {
+                  ret = -EINVAL;
+                }
+              else
+                {
+                  dev->pid = *pgrp;
                   ret = 0;
                 }
             }
@@ -1901,13 +2220,14 @@ static int uart_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
 
               /* And update with flags from this layer */
 
-              termiosp->c_iflag = dev->tc_iflag;
-              termiosp->c_oflag = dev->tc_oflag;
-              termiosp->c_lflag = dev->tc_lflag;
-#ifdef CONFIG_SERIAL_TERMIOS
-              termiosp->c_cc[VTIME] = dev->timeout;
-              termiosp->c_cc[VMIN] = dev->minread;
-#endif
+              uart_termios_getattr(&dev->termios, termiosp);
+
+              /* The special characters that this layer acts on besides
+               * the ones of the helpers.  ERASE cannot be changed: ICANON
+               * erases with DEL and with BS.
+               */
+
+              termiosp->c_cc[VERASE] = ASCII_DEL;
 
               ret = 0;
             }
@@ -1923,13 +2243,9 @@ static int uart_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
 
               /* Update the flags we keep at this layer */
 
-              dev->tc_iflag = termiosp->c_iflag;
-              dev->tc_oflag = termiosp->c_oflag;
-              dev->tc_lflag = termiosp->c_lflag;
+              uart_termios_setattr(&dev->termios, termiosp);
 #ifdef CONFIG_SERIAL_TERMIOS
-              dev->timeout = termiosp->c_cc[VTIME];
-              dev->minread = termiosp->c_cc[VMIN];
-              dev->minrecv = dev->minread;
+              dev->minrecv = dev->termios.vmin;
 #endif
               ret = 0;
             }
@@ -1945,7 +2261,7 @@ static int uart_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
  ****************************************************************************/
 
 static int uart_poll(FAR struct file *filep,
-                     FAR struct pollfd *fds, bool setup)
+                     FAR struct pollfd_s *fds, bool setup)
 {
   FAR struct inode *inode = filep->f_inode;
   FAR uart_dev_t   *dev   = inode->i_private;
@@ -1964,7 +2280,7 @@ static int uart_poll(FAR struct file *filep,
     }
 #endif
 
-  flags = enter_critical_section();
+  flags = uart_spinlock(dev, false);
 
   /* Are we setting up the poll?  Or tearing it down? */
 
@@ -1995,7 +2311,7 @@ static int uart_poll(FAR struct file *filep,
           goto errout;
         }
 
-      leave_critical_section(flags);
+      uart_spinunlock(dev, false, flags);
 
       /* Should we immediately notify on any of the requested events?
        * First, check if the xmit buffer is full.
@@ -2041,7 +2357,7 @@ static int uart_poll(FAR struct file *filep,
 
       if (dev->disconnected)
         {
-           eventset |= (POLLERR | POLLHUP);
+          eventset |= (POLLERR | POLLHUP);
         }
 #endif
 
@@ -2051,7 +2367,7 @@ static int uart_poll(FAR struct file *filep,
     {
       /* This is a request to tear down the poll. */
 
-      FAR struct pollfd **slot = (FAR struct pollfd **)fds->priv;
+      FAR struct pollfd_s **slot = (FAR struct pollfd_s **)fds->priv;
 
 #ifdef CONFIG_DEBUG_FEATURES
       if (!slot)
@@ -2066,13 +2382,13 @@ static int uart_poll(FAR struct file *filep,
       *slot     = NULL;
       fds->priv = NULL;
 
-      leave_critical_section(flags);
+      uart_spinunlock(dev, false, flags);
     }
 
   return ret;
 
 errout:
-  leave_critical_section(flags);
+  uart_spinunlock(dev, false, flags);
   return ret;
 }
 
@@ -2194,6 +2510,43 @@ static void uart_wakeup(FAR sem_t *sem)
  ****************************************************************************/
 
 /****************************************************************************
+ * Name: uart_spinlock
+ *
+ * Description:
+ *   Enter critical section for this uart.
+ *
+ ****************************************************************************/
+
+irqstate_t uart_spinlock(FAR uart_dev_t *dev, bool nopreempt)
+{
+  if (nopreempt)
+    {
+      return rspin_lock_irqsave_nopreempt(&dev->lock);
+    }
+
+  return rspin_lock_irqsave(&dev->lock);
+}
+
+/****************************************************************************
+ * Name: uart_spinunlock
+ *
+ * Description:
+ *   Leave critical section for this uart.
+ *
+ ****************************************************************************/
+
+void uart_spinunlock(FAR uart_dev_t *dev, bool nopreempt, irqstate_t flags)
+{
+  if (nopreempt)
+    {
+      rspin_unlock_irqrestore_nopreempt(&dev->lock, flags);
+      return;
+    }
+
+  rspin_unlock_irqrestore(&dev->lock, flags);
+}
+
+/****************************************************************************
  * Name: uart_register
  *
  * Description:
@@ -2203,6 +2556,8 @@ static void uart_wakeup(FAR sem_t *sem)
 
 int uart_register(FAR const char *path, FAR uart_dev_t *dev)
 {
+  int ret;
+
 #if defined(CONFIG_TTY_SIGINT) || defined(CONFIG_TTY_SIGTSTP)
   /* Initialize  of the task that will receive SIGINT signals. */
 
@@ -2217,21 +2572,20 @@ int uart_register(FAR const char *path, FAR uart_dev_t *dev)
 
   if (dev->isconsole)
     {
-      /* Enable signals and echo by default */
+      /* Convert CR to LF, enable \n -> \r\n translation, and enable
+       * signals, echo and canonical input by default for the console.
+       */
 
-      dev->tc_lflag |= ISIG | ECHO | ICANON;
-
-      /* Enable \n -> \r\n translation for the console */
-
-      dev->tc_oflag = OPOST | ONLCR;
-
-      /* Convert CR to LF by default for console */
-
-      dev->tc_iflag |= ICRNL;
+      uart_termios_init(&dev->termios, ICRNL, OPOST | ONLCR,
+                        ISIG | ECHO | ICANON);
 
       /* Clear escape counter */
 
       dev->escape = 0;
+    }
+  else
+    {
+      uart_termios_init(&dev->termios, 0, 0, 0);
     }
 
   /* Initialize mutex & semaphores */
@@ -2241,25 +2595,21 @@ int uart_register(FAR const char *path, FAR uart_dev_t *dev)
   nxmutex_init(&dev->closelock);
   nxsem_init(&dev->xmitsem, 0, 0);
   nxsem_init(&dev->recvsem, 0, 0);
-
-#ifdef CONFIG_SERIAL_TERMIOS
-  dev->timeout = 0;
-  dev->minread = 1;
-#endif
+  rspin_lock_init(&dev->lock);
 
   /* Register the serial driver */
 
-#ifdef CONFIG_SERIAL_GDBSTUB
-  if (uart_gdbstub_register(dev, path) == 0)
-    {
-      /* No need register the device if it is used by gdbstub */
-
-      return 0;
-    }
-#endif
-
   sinfo("Registering %s\n", path);
-  return register_driver(path, &g_serialops, 0600, dev);
+  ret = register_driver(path, &g_serialops, 0600, dev);
+  if (ret < 0)
+    {
+      return ret;
+    }
+
+#ifdef CONFIG_SERIAL_GDBSTUB
+  ret = uart_gdbstub_register(dev, path);
+#endif
+  return ret;
 }
 
 /****************************************************************************
@@ -2348,8 +2698,7 @@ void uart_connected(FAR uart_dev_t *dev, bool connected)
    * function may be called from interrupt handling logic.
    */
 
-  flags = enter_critical_section();
-  sched_lock();
+  flags = uart_spinlock(dev, true);
   dev->disconnected = !connected;
   if (!connected)
     {
@@ -2370,8 +2719,7 @@ void uart_connected(FAR uart_dev_t *dev, bool connected)
       uart_wakeup(&dev->recvsem);
     }
 
-  sched_unlock();
-  leave_critical_section(flags);
+  uart_spinunlock(dev, true, flags);
 }
 #endif
 
@@ -2397,72 +2745,130 @@ void uart_reset_sem(FAR uart_dev_t *dev)
  * Name: uart_check_special
  *
  * Description:
- *   Check if the SIGINT or SIGTSTP character is in the contiguous Rx DMA
- *   buffer region.  The first signal associated with the first such
- *   character is returned.
- *
- *   If there multiple such characters in the buffer, only the signal
- *   associated with the first is returned (this a bug!)
+ *   Act on the special characters in the *size characters at buf and
+ *   remove them: the INTR and SUSP characters that send a signal (POSIX:
+ *   the terminal discards them), the launch character and the panic
+ *   character.  *size returns the number of characters that are left.
  *
  * Returned Value:
- *   0 if a signal-related character does not appear in the.  Otherwise,
- *   SIGKILL or SIGTSTP may be returned to indicate the appropriate signal
- *   action.
+ *   SIGINT or SIGTSTP for the first INTR or SUSP character, else 0.
  *
  ****************************************************************************/
 
 #if defined(CONFIG_TTY_SIGINT) || defined(CONFIG_TTY_SIGTSTP) || \
     defined(CONFIG_TTY_FORCE_PANIC) || defined(CONFIG_TTY_LAUNCH)
-int uart_check_special(FAR uart_dev_t *dev, FAR const char *buf, size_t size)
+int uart_check_special(FAR uart_dev_t *dev, FAR char *buf,
+                       FAR size_t *size)
 {
-  size_t i;
+  FAR char *src = buf;
+  FAR char *end = buf + *size;
+  size_t kept = 0;
+  int signo = 0;
 
-  if ((dev->tc_lflag & ISIG) == 0)
+  if ((dev->termios.lflag & ISIG) == 0)
     {
       return 0;
     }
 
-  for (i = 0; i < size; i++)
+  /* Walk the buffer, jumping to the next special character with memchr
+   * instead of testing every byte.  The ordinary bytes before it are kept
+   * in one move, then the special character is acted on and dropped.
+   */
+
+  while (src < end)
     {
+      FAR char *special = NULL;
+#if defined(CONFIG_TTY_FORCE_PANIC) || defined(CONFIG_TTY_LAUNCH)
+      FAR char *tmp;
+#endif
+#if defined(CONFIG_TTY_SIGINT) || defined(CONFIG_TTY_SIGTSTP)
+      FAR char *isig = NULL;
+      int sig = 0;
+#endif
+      size_t n;
+
 #ifdef CONFIG_TTY_FORCE_PANIC
-      if (buf[i] == CONFIG_TTY_FORCE_PANIC_CHAR)
+      tmp = memchr(src, CONFIG_TTY_FORCE_PANIC_CHAR, end - src);
+      if (tmp != NULL && (special == NULL || tmp < special))
+        {
+          special = tmp;
+        }
+#endif
+
+#ifdef CONFIG_TTY_LAUNCH
+      tmp = memchr(src, CONFIG_TTY_LAUNCH_CHAR, end - src);
+      if (tmp != NULL && (special == NULL || tmp < special))
+        {
+          special = tmp;
+        }
+#endif
+
+#if defined(CONFIG_TTY_SIGINT) || defined(CONFIG_TTY_SIGTSTP)
+      if (dev->pid > 0)
+        {
+          isig = (FAR char *)uart_termios_isig_find(&dev->termios, src,
+                                                    end - src, &sig);
+          if (isig != NULL && (special == NULL || isig < special))
+            {
+              special = isig;
+            }
+        }
+#endif
+
+      n = (special != NULL ? special : end) - src;
+      if (n > 0)
+        {
+          if (&buf[kept] != src)
+            {
+              memmove(&buf[kept], src, n);
+            }
+
+          kept += n;
+#ifdef CONFIG_TTY_FORCE_PANIC
+          dev->panic_count = 0;
+#endif
+        }
+
+      if (special == NULL)
+        {
+          break;
+        }
+
+      src = special + 1;
+
+      /* One action per special character, in this order, then drop it */
+
+#ifdef CONFIG_TTY_FORCE_PANIC
+      if (*special == CONFIG_TTY_FORCE_PANIC_CHAR)
         {
           if (++dev->panic_count >= CONFIG_TTY_FORCE_PANIC_REPEAT_COUNT)
             {
               PANIC_WITH_REGS("Force panic by user.", NULL);
             }
 
-          return 0;
+          continue;
         }
-      else
-        {
-          dev->panic_count = 0;
-        }
+
+      dev->panic_count = 0;
 #endif
 
 #ifdef CONFIG_TTY_LAUNCH
-      if (buf[i] == CONFIG_TTY_LAUNCH_CHAR)
+      if (*special == CONFIG_TTY_LAUNCH_CHAR)
         {
           uart_launch();
-          return 0;
+          continue;
         }
 #endif
 
-#ifdef CONFIG_TTY_SIGINT
-      if (dev->pid > 0 && buf[i] == CONFIG_TTY_SIGINT_CHAR)
+#if defined(CONFIG_TTY_SIGINT) || defined(CONFIG_TTY_SIGTSTP)
+      if (special == isig && signo == 0)
         {
-          return SIGINT;
-        }
-#endif
-
-#ifdef CONFIG_TTY_SIGTSTP
-      if (dev->pid > 0 && buf[i] == CONFIG_TTY_SIGTSTP_CHAR)
-        {
-          return SIGTSTP;
+          signo = sig;
         }
 #endif
     }
 
-  return 0;
+  *size = kept;
+  return signo;
 }
 #endif

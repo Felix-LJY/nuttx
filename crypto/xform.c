@@ -66,6 +66,7 @@
  ****************************************************************************/
 
 #include <errno.h>
+#include <stdbool.h>
 #include <string.h>
 #include <strings.h>
 #include <sys/param.h>
@@ -80,6 +81,7 @@
 #include <crypto/rijndael.h>
 #include <crypto/aes.h>
 #include <crypto/cryptodev.h>
+#include <crypto/gmac.h>
 #include <crypto/xform.h>
 #include <crypto/gmac.h>
 #include <crypto/cmac.h>
@@ -95,6 +97,12 @@
 
 #define CRC32_XOR_VALUE 0xFFFFFFFFUL
 
+/* Reverse the bits of an 8-bit value */
+
+#define REFLECT8(data)                                  \
+  ((((data) * 0x0802U & 0x22110U) |                     \
+    ((data) * 0x8020U & 0x88440U)) * 0x10101U >> 16)
+
 /****************************************************************************
  * Public Functions
  ****************************************************************************/
@@ -108,6 +116,7 @@ int blf_setkey(FAR void *, FAR uint8_t *, int);
 int cast5_setkey(FAR void *, FAR uint8_t *, int);
 int aes_setkey_xform(FAR void *, FAR uint8_t *, int);
 int aes_ctr_setkey(FAR void *, FAR uint8_t *, int);
+int aes_gcm_setkey(FAR void *, FAR uint8_t *, int);
 int aes_ctr_ssh_setkey(FAR void *, FAR uint8_t *, int);
 int aes_xts_setkey(FAR void *, FAR uint8_t *, int);
 int aes_ofb_setkey(FAR void *, FAR uint8_t *, int);
@@ -135,11 +144,12 @@ void aes_cfb128_decrypt(caddr_t, FAR uint8_t *, size_t);
 void aes_ctr_crypt(caddr_t, FAR uint8_t *, size_t);
 void aes_ctr_ssh_crypt(caddr_t, FAR uint8_t *, size_t);
 
-void aes_ctr_reinit(caddr_t, FAR uint8_t *);
-void aes_ctr_ssh_reinit(caddr_t, FAR uint8_t *);
-void aes_xts_reinit(caddr_t, FAR uint8_t *);
-void aes_gcm_reinit(caddr_t, FAR uint8_t *);
-void aes_ofb_reinit(caddr_t, FAR uint8_t *);
+void aes_reinit_xform(caddr_t, FAR uint8_t *, uint16_t);
+void aes_ctr_reinit(caddr_t, FAR uint8_t *, uint16_t);
+void aes_ctr_ssh_reinit(caddr_t, FAR uint8_t *, uint16_t);
+void aes_xts_reinit(caddr_t, FAR uint8_t *, uint16_t);
+void aes_gcm_reinit(caddr_t, FAR uint8_t *, uint16_t);
+void aes_ofb_reinit(caddr_t, FAR uint8_t *, uint16_t);
 
 void null_init(FAR void *);
 void poly1305_setkey(FAR void *, FAR const uint8_t *, uint16_t);
@@ -152,6 +162,15 @@ int sha224update_int(FAR void *, FAR const uint8_t *, size_t);
 int sha256update_int(FAR void *, FAR const uint8_t *, size_t);
 int sha384update_int(FAR void *, FAR const uint8_t *, size_t);
 int sha512update_int(FAR void *, FAR const uint8_t *, size_t);
+void crc8init(FAR void *);
+void crc8setkey(FAR void *, FAR const uint8_t *, uint16_t);
+int crc8update(FAR void *, FAR const uint8_t *, size_t);
+void crc8final(FAR uint8_t *, FAR void *);
+void crc16init(FAR void *);
+void crc16setkey(FAR void *, FAR const uint8_t *, uint16_t);
+int crc16update(FAR void *, FAR const uint8_t *, size_t);
+void crc16final(FAR uint8_t *, FAR void *);
+void crc32init(FAR void *);
 void crc32setkey(FAR void *, FAR const uint8_t *, uint16_t);
 int crc32update(FAR void *, FAR const uint8_t *, size_t);
 void crc32final(FAR uint8_t *, FAR void *);
@@ -160,6 +179,8 @@ struct aes_ctr_ctx
 {
   AES_CTX ac_key;
   uint8_t ac_block[AESCTR_BLOCKSIZE];
+  uint8_t ac_ks[AESCTR_BLOCKSIZE];
+  uint8_t ac_ksoff;
 };
 
 struct aes_xts_ctx
@@ -172,7 +193,36 @@ struct aes_xts_ctx
 struct aes_ofb_ctx
 {
   AES_CTX ac_key;
-  FAR uint8_t *iv;
+  uint8_t iv[AESOFB_IVSIZE];
+};
+
+struct crc8_ctx
+{
+  uint8_t polynomial;
+  uint8_t initial;
+  uint8_t xorout;
+  bool reflect_in;
+  bool reflect_out;
+};
+
+struct crc16_ctx
+{
+  uint16_t polynomial;
+  uint16_t initial;
+  uint16_t xorout;
+  bool reflect_in;
+  bool reflect_out;
+};
+
+/* polynomial 0 selects the standard reflected CRC-32 */
+
+struct crc32_ctx
+{
+  uint32_t polynomial;
+  uint32_t initial;
+  uint32_t xorout;
+  bool reflect_in;
+  bool reflect_out;
 };
 
 /* Helper */
@@ -221,7 +271,7 @@ const struct enc_xform enc_xform_aes =
   aes_encrypt_xform,
   aes_decrypt_xform,
   aes_setkey_xform,
-  NULL
+  aes_reinit_xform
 };
 
 const struct enc_xform enc_xform_aes_ctr =
@@ -249,11 +299,11 @@ const struct enc_xform enc_xform_aes_ctr_ssh =
 const struct enc_xform enc_xform_aes_gcm =
 {
   CRYPTO_AES_GCM_16, "AES-GCM",
-  1, 8, 16 + 4, 32 + 4,
+  1, 12, 16, 32,
   sizeof(struct aes_ctr_ctx),
   aes_ctr_crypt,
   aes_ctr_crypt,
-  aes_ctr_setkey,
+  aes_gcm_setkey,
   aes_gcm_reinit
 };
 
@@ -432,7 +482,7 @@ const struct auth_hash auth_hash_hmac_sha2_512_256 =
 const struct auth_hash auth_hash_gmac_aes_128 =
 {
   CRYPTO_AES_128_GMAC, "GMAC-AES-128",
-  16 + 4, GMAC_BLOCK_LEN, GMAC_DIGEST_LEN, sizeof(AES_GMAC_CTX),
+  16, GMAC_BLOCK_LEN, GMAC_DIGEST_LEN, sizeof(AES_GMAC_CTX),
   AESCTR_BLOCKSIZE, aes_gmac_init, aes_gmac_setkey, aes_gmac_reinit,
   aes_gmac_update, aes_gmac_final
 };
@@ -440,7 +490,7 @@ const struct auth_hash auth_hash_gmac_aes_128 =
 const struct auth_hash auth_hash_gmac_aes_192 =
 {
   CRYPTO_AES_192_GMAC, "GMAC-AES-192",
-  24 + 4, GMAC_BLOCK_LEN, GMAC_DIGEST_LEN, sizeof(AES_GMAC_CTX),
+  24, GMAC_BLOCK_LEN, GMAC_DIGEST_LEN, sizeof(AES_GMAC_CTX),
   AESCTR_BLOCKSIZE, aes_gmac_init, aes_gmac_setkey, aes_gmac_reinit,
   aes_gmac_update, aes_gmac_final
 };
@@ -448,7 +498,7 @@ const struct auth_hash auth_hash_gmac_aes_192 =
 const struct auth_hash auth_hash_gmac_aes_256 =
 {
   CRYPTO_AES_256_GMAC, "GMAC-AES-256",
-  32 + 4, GMAC_BLOCK_LEN, GMAC_DIGEST_LEN, sizeof(AES_GMAC_CTX),
+  32, GMAC_BLOCK_LEN, GMAC_DIGEST_LEN, sizeof(AES_GMAC_CTX),
   AESCTR_BLOCKSIZE, aes_gmac_init, aes_gmac_setkey, aes_gmac_reinit,
   aes_gmac_update, aes_gmac_final
 };
@@ -467,6 +517,16 @@ const struct auth_hash auth_hash_cmac_aes_128 =
 {
   CRYPTO_AES_128_CMAC, "CMAC-AES-128",
   16, AES_CMAC_KEY_LENGTH, AES_CMAC_DIGEST_LENGTH, sizeof(AES_CMAC_CTX),
+  AESCTR_BLOCKSIZE, (void (*)(FAR void *)) aes_cmac_init,
+  (void (*)(FAR void *, FAR const uint8_t *, uint16_t)) aes_cmac_setkey,
+  NULL, (int (*)(FAR void *, FAR const uint8_t *, size_t)) aes_cmac_update,
+  (void (*) (FAR uint8_t *, FAR void *)) aes_cmac_final
+};
+
+const struct auth_hash auth_hash_cmac_aes_256 =
+{
+  CRYPTO_AES_256_CMAC, "CMAC-AES-256",
+  32, AES_CMAC_KEY_LENGTH, AES_CMAC_DIGEST_LENGTH, sizeof(AES_CMAC_CTX),
   AESCTR_BLOCKSIZE, (void (*)(FAR void *)) aes_cmac_init,
   (void (*)(FAR void *, FAR const uint8_t *, uint16_t)) aes_cmac_setkey,
   NULL, (int (*)(FAR void *, FAR const uint8_t *, size_t)) aes_cmac_update,
@@ -545,11 +605,25 @@ const struct auth_hash auth_hash_sha2_512 =
   (void (*)(FAR uint8_t *, FAR void *)) sha512final
 };
 
+const struct auth_hash auth_hash_crc8 =
+{
+  CRYPTO_CRC8, "CRC8",
+  0, 8, 0, sizeof(struct crc8_ctx), 1,
+  crc8init, crc8setkey, NULL, crc8update, crc8final
+};
+
+const struct auth_hash auth_hash_crc16 =
+{
+  CRYPTO_CRC16, "CRC16",
+  0, 16, 0, sizeof(struct crc16_ctx), 1,
+  crc16init, crc16setkey, NULL, crc16update, crc16final
+};
+
 const struct auth_hash auth_hash_crc32 =
 {
   CRYPTO_CRC32, "CRC32",
-  0, 32, 0, sizeof(uint32_t), 1,
-  null_init, crc32setkey, NULL, crc32update, crc32final
+  0, 32, 0, sizeof(struct crc32_ctx), 1,
+  crc32init, crc32setkey, NULL, crc32update, crc32final
 };
 
 /* Encryption wrapper routines. */
@@ -624,12 +698,35 @@ int cast5_setkey(FAR void *sched, FAR uint8_t *key, int len)
 
 void aes_encrypt_xform(caddr_t key, FAR uint8_t *blk, size_t len)
 {
-  aes_encrypt((FAR AES_CTX *)key, blk, blk);
+  FAR AES_CTX *ctx;
+  int i;
+
+  ctx = (FAR AES_CTX *)key;
+  for (i = 0; i < RIJNDAEL128_BLOCK_LEN; i++)
+    {
+      blk[i] ^= ctx->iv[i];
+    }
+
+  aes_encrypt(ctx, blk, blk);
+  bcopy(blk, ctx->iv, RIJNDAEL128_BLOCK_LEN);
 }
 
 void aes_decrypt_xform(caddr_t key, FAR uint8_t *blk, size_t len)
 {
-  aes_decrypt((FAR AES_CTX *)key, blk, blk);
+  FAR AES_CTX *ctx;
+  uint8_t tmp[RIJNDAEL128_BLOCK_LEN];
+  int i;
+
+  ctx = (FAR AES_CTX *)key;
+  bcopy(blk, tmp, RIJNDAEL128_BLOCK_LEN);
+
+  aes_decrypt(ctx, blk, blk);
+  for (i = 0; i < RIJNDAEL128_BLOCK_LEN; i++)
+    {
+      blk[i] ^= ctx->iv[i];
+    }
+
+  bcopy(tmp, ctx->iv, RIJNDAEL128_BLOCK_LEN);
 }
 
 int aes_setkey_xform(FAR void *sched, FAR uint8_t *key, int len)
@@ -637,7 +734,15 @@ int aes_setkey_xform(FAR void *sched, FAR uint8_t *key, int len)
   return aes_setkey((FAR AES_CTX *)sched, key, len);
 }
 
-void aes_ctr_reinit(caddr_t key, FAR uint8_t *iv)
+void aes_reinit_xform(caddr_t key, FAR uint8_t *iv, uint16_t ivlen)
+{
+  FAR AES_CTX *ctx;
+
+  ctx = (FAR AES_CTX *)key;
+  bcopy(iv, ctx->iv, RIJNDAEL128_BLOCK_LEN);
+}
+
+void aes_ctr_reinit(caddr_t key, FAR uint8_t *iv, uint16_t ivlen)
 {
   FAR struct aes_ctr_ctx *ctx;
 
@@ -647,49 +752,70 @@ void aes_ctr_reinit(caddr_t key, FAR uint8_t *iv)
   /* reset counter */
 
   bzero(ctx->ac_block + AESCTR_NONCESIZE + AESCTR_IVSIZE, 4);
+  ctx->ac_ksoff = AESCTR_BLOCKSIZE;
 }
 
-void aes_gcm_reinit(caddr_t key, FAR uint8_t *iv)
+void aes_gcm_reinit(caddr_t key, FAR uint8_t *iv, uint16_t ivlen)
 {
   FAR struct aes_ctr_ctx *ctx;
+  uint8_t h[AESCTR_BLOCKSIZE];
 
   ctx = (FAR struct aes_ctr_ctx *)key;
-  bcopy(iv, ctx->ac_block + AESCTR_NONCESIZE, AESCTR_IVSIZE);
 
-  /* reset counter */
+  /* The tag uses J0; the payload GCTR starts at inc32(J0). */
 
-  bzero(ctx->ac_block + AESCTR_NONCESIZE + AESCTR_IVSIZE, 4);
-  ctx->ac_block[AESCTR_BLOCKSIZE - 1] = 1; /* GCM starts with 1 */
+  memset(h, 0, sizeof(h));
+  if (ivlen != 12)
+    {
+      aes_encrypt(&ctx->ac_key, h, h);
+    }
+
+  aes_gcm_j0(h, iv, ivlen, ctx->ac_block);
+  explicit_bzero(h, sizeof(h));
+
+  /* The tag uses J0; the payload GCTR starts at inc32(J0), which
+   * aes_ctr_crypt() produces by incrementing the counter block before
+   * generating each keystream block.
+   */
+
+  ctx->ac_ksoff = AESCTR_BLOCKSIZE;
 }
+
+/* Keep the unused tail of the keystream block, so that a request ending
+ * mid-block is continued by the next request on the same session.
+ */
 
 void aes_ctr_crypt(caddr_t key, FAR uint8_t *data, size_t len)
 {
   FAR struct aes_ctr_ctx *ctx;
-  uint8_t keystream[AESCTR_BLOCKSIZE];
+  size_t n;
   int i;
 
   ctx = (FAR struct aes_ctr_ctx *)key;
 
-  /* increment counter */
-
-  for (i = AESCTR_BLOCKSIZE - 1;
-        i >= AESCTR_NONCESIZE + AESCTR_IVSIZE; i--)
+  for (n = 0; n < len; n++)
     {
-      /* continue on overflow */
-
-      if (++ctx->ac_block[i])
+      if (ctx->ac_ksoff >= AESCTR_BLOCKSIZE)
         {
-          break;
+          /* increment counter */
+
+          for (i = AESCTR_BLOCKSIZE - 1;
+                i >= AESCTR_NONCESIZE + AESCTR_IVSIZE; i--)
+            {
+              /* continue on overflow */
+
+              if (++ctx->ac_block[i])
+                {
+                  break;
+                }
+            }
+
+          aes_encrypt(&ctx->ac_key, ctx->ac_block, ctx->ac_ks);
+          ctx->ac_ksoff = 0;
         }
-    }
 
-  aes_encrypt(&ctx->ac_key, ctx->ac_block, keystream);
-  for (i = 0; i < AESCTR_BLOCKSIZE; i++)
-    {
-      data[i] ^= keystream[i];
+      data[n] ^= ctx->ac_ks[ctx->ac_ksoff++];
     }
-
-  explicit_bzero(keystream, sizeof(keystream));
 }
 
 int aes_ctr_setkey(FAR void *sched, FAR uint8_t *key, int len)
@@ -708,6 +834,25 @@ int aes_ctr_setkey(FAR void *sched, FAR uint8_t *key, int len)
     }
 
   bcopy(key + len - AESCTR_NONCESIZE, ctx->ac_block, AESCTR_NONCESIZE);
+  ctx->ac_ksoff = AESCTR_BLOCKSIZE;
+  return 0;
+}
+
+/* Unlike AES-CTR the GCM key carries no embedded nonce: the counter block
+ * is derived from the IV alone by aes_gcm_reinit().
+ */
+
+int aes_gcm_setkey(FAR void *sched, FAR uint8_t *key, int len)
+{
+  FAR struct aes_ctr_ctx *ctx;
+
+  ctx = (FAR struct aes_ctr_ctx *)sched;
+  if (aes_setkey(&ctx->ac_key, key, len) != 0)
+    {
+      return -1;
+    }
+
+  ctx->ac_ksoff = AESCTR_BLOCKSIZE;
   return 0;
 }
 
@@ -757,7 +902,7 @@ int aes_ctr_ssh_setkey(FAR void *sched, FAR uint8_t *key, int len)
   return 0;
 }
 
-void aes_ctr_ssh_reinit(caddr_t key, FAR uint8_t *iv)
+void aes_ctr_ssh_reinit(caddr_t key, FAR uint8_t *iv, uint16_t ivlen)
 {
   FAR struct aes_ctr_ctx *ctx;
 
@@ -765,7 +910,7 @@ void aes_ctr_ssh_reinit(caddr_t key, FAR uint8_t *iv)
   bcopy(iv, ctx->ac_block, AESCTR_BLOCKSIZE);
 }
 
-void aes_xts_reinit(caddr_t key, FAR uint8_t *iv)
+void aes_xts_reinit(caddr_t key, FAR uint8_t *iv, uint16_t ivlen)
 {
   FAR struct aes_xts_ctx *ctx = (FAR struct aes_xts_ctx *)key;
   uint64_t blocknum;
@@ -885,12 +1030,12 @@ int aes_ofb_setkey(FAR void *sched, FAR uint8_t *key, int len)
   return 0;
 }
 
-void aes_ofb_reinit(caddr_t key, FAR uint8_t *iv)
+void aes_ofb_reinit(caddr_t key, FAR uint8_t *iv, uint16_t ivlen)
 {
   FAR struct aes_ofb_ctx *ctx;
 
   ctx = (FAR struct aes_ofb_ctx *)key;
-  ctx->iv = iv;
+  bcopy(iv, ctx->iv, AESOFB_IVSIZE);
 }
 
 void aes_cfb8_encrypt(caddr_t key, FAR uint8_t *data, size_t len)
@@ -1029,23 +1174,227 @@ int sha512update_int(FAR void *ctx, FAR const uint8_t *buf, size_t len)
   return 0;
 }
 
+void crc8init(FAR void *ctx)
+{
+  FAR struct crc8_ctx *crc = (FAR struct crc8_ctx *)ctx;
+
+  memset(crc, 0, sizeof(struct crc8_ctx));
+}
+
+void crc8setkey(FAR void *ctx, FAR const uint8_t *key, uint16_t len)
+{
+  memcpy(ctx, key, MIN(len, sizeof(struct crc8_ctx)));
+}
+
+int crc8update(FAR void *ctx, FAR const uint8_t *buf, size_t len)
+{
+  FAR struct crc8_ctx *crc = (FAR struct crc8_ctx *)ctx;
+  int i;
+  int j;
+
+  for (i = 0; i < len; i++)
+    {
+      uint8_t byte = buf[i];
+
+      if (crc->reflect_in)
+        {
+          byte = REFLECT8(buf[i]);
+        }
+
+      crc->initial ^= byte;
+      for (j = 0; j < 8; j++)
+        {
+          if (crc->initial & 0x80)
+            {
+              crc->initial = (crc->initial << 1) ^ crc->polynomial;
+            }
+          else
+            {
+              crc->initial = crc->initial << 1;
+            }
+        }
+    }
+
+  return 0;
+}
+
+void crc8final(FAR uint8_t *digest, FAR void *ctx)
+{
+  FAR struct crc8_ctx *crc = (FAR struct crc8_ctx *)ctx;
+  uint8_t result = crc->initial;
+
+  if (crc->reflect_out)
+    {
+      result = ((result & 0xf0) >> 4) | ((result & 0x0f) << 4);
+      result = ((result & 0xcc) >> 2) | ((result & 0x33) << 2);
+      result = ((result & 0xaa) >> 1) | ((result & 0x55) << 1);
+    }
+
+  result ^= crc->xorout;
+  memcpy(digest, &result, sizeof(uint8_t));
+}
+
+void crc16init(FAR void *ctx)
+{
+  FAR struct crc16_ctx *crc = (FAR struct crc16_ctx *)ctx;
+
+  memset(crc, 0, sizeof(struct crc16_ctx));
+}
+
+void crc16setkey(FAR void *ctx, FAR const uint8_t *key, uint16_t len)
+{
+  memcpy(ctx, key, MIN(len, sizeof(struct crc16_ctx)));
+}
+
+int crc16update(FAR void *ctx, FAR const uint8_t *buf, size_t len)
+{
+  FAR struct crc16_ctx *crc = (FAR struct crc16_ctx *)ctx;
+  int i;
+  int j;
+
+  for (i = 0; i < len; i++)
+    {
+      uint16_t byte = buf[i];
+
+      if (crc->reflect_in)
+        {
+          byte = REFLECT8(buf[i]);
+        }
+
+      crc->initial ^= byte << 8;
+      for (j = 0; j < 8; j++)
+        {
+          if (crc->initial & 0x8000)
+            {
+              crc->initial = (crc->initial << 1) ^ crc->polynomial;
+            }
+          else
+            {
+              crc->initial = crc->initial << 1;
+            }
+        }
+    }
+
+  return 0;
+}
+
+void crc16final(FAR uint8_t *digest, FAR void *ctx)
+{
+  FAR struct crc16_ctx *crc = (FAR struct crc16_ctx *)ctx;
+  uint16_t result = crc->initial;
+
+  if (crc->reflect_out)
+    {
+      result = ((result & 0x5555) << 1) | ((result & 0xaaaa) >> 1);
+      result = ((result & 0x3333) << 2) | ((result & 0xcccc) >> 2);
+      result = ((result & 0x0f0f) << 4) | ((result & 0xf0f0) >> 4);
+      result = ((result & 0x00ff) << 8) | ((result & 0xff00) >> 8);
+    }
+
+  result ^= crc->xorout;
+  memcpy(digest, &result, sizeof(uint16_t));
+}
+
+void crc32init(FAR void *ctx)
+{
+  FAR struct crc32_ctx *crc = (FAR struct crc32_ctx *)ctx;
+
+  memset(crc, 0, sizeof(struct crc32_ctx));
+}
+
 void crc32setkey(FAR void *ctx, FAR const uint8_t *key, uint16_t len)
 {
-  FAR uint32_t *val = (FAR uint32_t *)key;
-  uint32_t tmp = (*val) ^ CRC32_XOR_VALUE;
-  memcpy(ctx, &tmp, len);
+  FAR struct crc32_ctx *crc = (FAR struct crc32_ctx *)ctx;
+  uint32_t keyval = 0;
+
+  if (len >= sizeof(struct crc32_ctx))
+    {
+      /* Parameter form:
+       * {polynomial, initial, xorout, reflect_in, reflect_out}
+       */
+
+      memcpy(crc, key, sizeof(struct crc32_ctx));
+      return;
+    }
+
+  if (len >= 3 * sizeof(uint32_t))
+    {
+      /* Extended form: {polynomial, initial, xorout} */
+
+      FAR const uint32_t *param = (FAR const uint32_t *)key;
+
+      crc->polynomial = param[0];
+      crc->initial    = param[1];
+      crc->xorout     = param[2];
+      return;
+    }
+
+  /* Legacy form: pre-inverted start value of the standard CRC-32 */
+
+  if (len >= sizeof(uint32_t))
+    {
+      keyval = *(FAR const uint32_t *)key;
+    }
+
+  crc->polynomial = 0;
+  crc->initial    = keyval ^ CRC32_XOR_VALUE;
+  crc->xorout     = CRC32_XOR_VALUE;
 }
 
 int crc32update(FAR void *ctx, FAR const uint8_t *buf, size_t len)
 {
-  FAR uint32_t *startval = (FAR uint32_t *)ctx;
-  *startval = crc32part(buf, len, *startval);
+  FAR struct crc32_ctx *crc = (FAR struct crc32_ctx *)ctx;
+  int i;
+  int j;
+
+  if (crc->polynomial == 0)
+    {
+      /* The legacy key form keeps the table-driven reflected CRC-32 */
+
+      crc->initial = crc32part(buf, len, crc->initial);
+      return 0;
+    }
+
+  for (i = 0; i < len; i++)
+    {
+      uint32_t byte = buf[i];
+
+      if (crc->reflect_in)
+        {
+          byte = REFLECT8(buf[i]);
+        }
+
+      crc->initial ^= byte << 24;
+      for (j = 0; j < 8; j++)
+        {
+          if (crc->initial & 0x80000000)
+            {
+              crc->initial = (crc->initial << 1) ^ crc->polynomial;
+            }
+          else
+            {
+              crc->initial = crc->initial << 1;
+            }
+        }
+    }
+
   return 0;
 }
 
 void crc32final(FAR uint8_t *digest, FAR void *ctx)
 {
-  FAR uint32_t *val = (FAR uint32_t *)ctx;
-  uint32_t result = (*val) ^ CRC32_XOR_VALUE;
+  FAR struct crc32_ctx *crc = (FAR struct crc32_ctx *)ctx;
+  uint32_t result = crc->initial;
+
+  if (crc->reflect_out)
+    {
+      result = ((result & 0x55555555) << 1) | ((result & 0xaaaaaaaa) >> 1);
+      result = ((result & 0x33333333) << 2) | ((result & 0xcccccccc) >> 2);
+      result = ((result & 0x0f0f0f0f) << 4) | ((result & 0xf0f0f0f0) >> 4);
+      result = ((result & 0x00ff00ff) << 8) | ((result & 0xff00ff00) >> 8);
+      result = ((result & 0x0000ffff) << 16) | ((result & 0xffff0000) >> 16);
+    }
+
+  result ^= crc->xorout;
   memcpy(digest, &result, sizeof(uint32_t));
 }

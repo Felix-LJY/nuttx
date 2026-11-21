@@ -702,6 +702,18 @@ static inline_function void write_gsbase(unsigned long val)
                    : "memory");
 }
 
+/* Return program counter */
+
+static inline_function uint64_t up_getpc(void)
+{
+  uint64_t rip;
+
+  __asm__ volatile (
+    "leaq (%%rip), %0"
+    : "=r" (rip));
+  return rip;
+}
+
 /* Return stack pointer */
 
 static inline_function uint64_t up_getsp(void)
@@ -907,14 +919,10 @@ void up_ioapic_pin_set_vector(unsigned int pin,
                               unsigned int vector);
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

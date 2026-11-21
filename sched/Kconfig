@@ -1,3 +1,24 @@
+############################################################################
+# sched/Kconfig
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.  The
+# ASF licenses this file to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance with the
+# License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
+############################################################################
 #
 # For a description of the syntax of this configuration file,
 # see the file kconfig-language.txt in the NuttX tools repository.
@@ -130,15 +151,16 @@ config USEC_PER_TICK
 		This value should never be less than the underlying resolution of
 		the timer.  Error may ensue.
 
-config TIMER_ADJUST_USEC
-	int "System timer tick adjustment (microseconds)"
+config TIMER_ADJUST_NSEC
+	int "System timer tick adjustment (nanoseconds)"
 	default 0
 	---help---
-		This value is added to the absolute tick set to the system timer.
-		This is used to compensate for interrupt latency in real-time
+		This value is subtracted from the hrtimer expiration time in
+		nanoseconds to compensate for interrupt latency in real-time
 		systems where the event required to be triggered on exact time.
 		The default value of 0 means that no adjustment is made. E.g.
-		5 means for each timer being set will be fired 5 microseconds earlier.
+		5000 means for each timer being set will be fired 5 microseconds
+		earlier.
 
 if !SCHED_TICKLESS
 
@@ -296,6 +318,54 @@ config RW_SPINLOCK
 		Spinlocks are spilit into read and write lock.
 		Reader can take read lock simultaneously and only one writer
 		can take write lock.
+
+config SPINLOCK_DEBUG
+	bool "Support debugging safe use of spinlock"
+	depends on DEBUG_FEATURES
+	default n
+	---help---
+		Enable to support debug tools for spinlock.
+
+config SPINLOCK_INLINE
+	bool "Inline spinlock helpers"
+	default !DEFAULT_SMALL
+	---help---
+		Inline spinlock helper functions to improve performance.  Disable
+		this option to emit callable non-inline versions and reduce
+		header-inline code growth.
+
+choice
+	prompt "Spinlock wait policy"
+	default SPINWAIT_PM if PM
+	default SPINWAIT_RELAX
+
+config SPINWAIT_RELAX
+	bool "Relax hint wait"
+	---help---
+		Spinlock waiters poll the lock with the architecture relax
+		hint (PAUSE on x86_64, YIELD on arm64, armv7-a and armv7-r) and unlocking sends
+		no wake event.  The hint reduces bus and pipeline
+		contention without sleeping, and the unlock stays a plain
+		release store.
+
+config SPINWAIT_PM
+	bool "WFE/SEV wait (power saving)"
+	---help---
+		Spinlock waiters may sleep in the spin loop (WFE on Arm)
+		and unlocking sends a wake event (DSB+SEV).  Waiting CPUs
+		can enter a low-power state instead of hammering the
+		interconnect while a lock is held, at the cost of a more
+		expensive unlock.
+
+		On Arm, SEV is not ordered with memory accesses, so the
+		unlock needs a DSB before SEV to make the release store
+		visible before the event (ARM DDI 0406C, "Use of WFE and
+		SEV with Locks"); expect lower lock/unlock throughput.
+
+		On architectures without WFE/SEV semantics this policy
+		degrades to busy wait.
+
+endchoice
 
 endif # SPINLOCK
 
@@ -614,6 +684,14 @@ config ETC_FATMOUNTPT
 
 endif # ETC_ROMFS
 
+config SCHED_INLINE_ADDPRIORITIZED
+	bool "Inline nxsched_add_prioritized()"
+	default !DEFAULT_SMALL
+	---help---
+		Inline nxsched_add_prioritized() into every scheduler, semaphore and
+		message queue caller for speed.  Disable to emit one shared copy
+		instead and save code space.
+
 config RR_INTERVAL
 	int "Round robin timeslice (MSEC)"
 	default 0
@@ -664,9 +742,32 @@ config TASK_NAME_SIZE
 		will be TASK_NAME_SIZE + 1.  The default of 31 then results in
 		a align-able 32-byte allocation.
 
+config TASK_ARG_MAX
+	int "Maximum size of the arguments and environment of a new task"
+	default 4096
+	range 4096 2097152
+	---help---
+		_POSIX_ARG_MAX and ARG_MAX in limits.h, and sysconf(_SC_ARG_MAX): the
+		length in bytes of the arguments plus the environment that
+		programs may pass to exec() or posix_spawn().  POSIX requires at
+		least 4096.  Programs such as xargs size their command lines from
+		it.  exec() and posix_spawn() fail with E2BIG for a larger list.
+		The arguments are copied to the stack of the new task, so its
+		stack must be large enough for them (else also E2BIG).
+
+config TASK_MAX_ARGS
+	int "Maximum number of arguments of a new task"
+	default 256
+	range 16 65536
+	---help---
+		The maximum number of arguments that a new task can get from
+		exec(), posix_spawn() or task_create().  A longer list fails with
+		E2BIG.
+
 config SCHED_HAVE_PARENT
 	bool "Support parent/child task relationships"
 	default n
+	depends on !DISABLE_ALL_SIGNALS
 	---help---
 		Remember the ID of the parent task when a new child task is
 		created.  This support enables some additional features (such as
@@ -677,7 +778,7 @@ config SCHED_HAVE_PARENT
 
 config SCHED_CHILD_STATUS
 	bool "Retain child exit status"
-	default n
+	default BUILD_KERNEL
 	depends on SCHED_HAVE_PARENT
 	---help---
 		If this option is selected, then the exit status of the child task
@@ -701,6 +802,11 @@ config SCHED_CHILD_STATUS
 		this case the exit status of the child task is retained after the
 		child exits and the wait will successful obtain the child task's
 		exit status whether it is called before the child task exits or not.
+
+		This option is on by default in a kernel build (BUILD_KERNEL).
+		There, programs start other programs with posix_spawn(), vfork()
+		and exec(), and POSIX requires that a parent can get the exit
+		status of a child that exited before the parent waits for it.
 
 		Warning:  If you enable this feature, then your application must
 		either (1) take responsibility for reaping the child status with wait(),
@@ -757,6 +863,27 @@ config DEBUG_CHILDSTATUS
 
 endif # SCHED_CHILD_STATUS
 
+config SCHED_PROCESS_GROUPS
+	bool "Process groups and sessions"
+	default n
+	depends on SCHED_HAVE_PARENT
+	---help---
+		Keep a process group ID and a session ID in each task group, as
+		POSIX job control defines them.  setpgid(), getpgid(), setsid()
+		and getsid() move from the C library to the kernel.  kill() with
+		a pid of 0 or less than -1, and killpg(), send the signal to each
+		process of the process group.  posix_spawn() supports
+		POSIX_SPAWN_SETPGROUP and POSIX_SPAWN_SETSID.  A terminal sends
+		SIGINT, SIGTSTP and SIGWINCH to its foreground process group.
+
+		A task that a user task starts gets the process group and the
+		session of that task, and exec() keeps them.  A task that the
+		kernel starts (for example the init task) is the leader of a new
+		session.
+
+		Without this option, a process group and a session contain one
+		process: their IDs are the process ID.
+
 config SCHED_WAITPID
 	bool "Enable waitpid() API"
 	default n
@@ -783,6 +910,12 @@ config SCHED_DUMP_ON_EXIT
 	default n
 	---help---
 		Dump all tasks state on exit()
+
+config SCHED_DUMP_FDLIST
+	bool "Dump fd list on assert"
+	default n
+	---help---
+		Dump all tasks fd list when assert is triggered.
 
 config SCHED_USER_IDENTITY
 	bool "Support per-task User Identity"
@@ -816,6 +949,17 @@ config SCHED_NGROUPS
 		The effective GID is separate and available via getegid().
 
 endif # SCHED_USER_IDENTITY
+
+config SCHED_CAPABILITIES
+	bool "Process capabilities"
+	default n
+	---help---
+		Task groups hold PR_CAP_RAWIO, PR_CAP_SPAWN and PR_CAP_ADMIN,
+		inherit them from their creator and can drop them with
+		prctl(PR_CAPS_DROP). Raw storage, mount, spawn, reset and
+		power-off then need the matching capability. Without this
+		option every check passes and prctl() refuses PR_CAPS_DROP and
+		PR_CAPS_GET.
 
 config SCHED_THREAD_LOCAL
 	bool "Support __thread/thread_local keyword"
@@ -972,7 +1116,8 @@ config SCHED_CRITMONITOR_MAXTIME_BUSYWAIT
 		Busy waiting time to enter critical section or
 		get spinlock should be smaller than
 		SCHED_CRITMONITOR_MAXTIME_BUSYWAIT, or system will give a warning.
-		For debugging system latency, -1 means disabled.
+		For debugging system latency, 0 means disabled, -1 means not
+		configured (feature off, no statistics collected).
 
 config SCHED_CRITMONITOR_MAXTIME_IRQ
 	int "IRQ max execution time"
@@ -1173,9 +1318,10 @@ config SCHED_PROFILE_TICKSPERSEC
 		This is the frequency at which the profil function will sample the
 		running program. The default is 1000Hz.
 
-menuconfig SCHED_INSTRUMENTATION
-	bool "System performance monitor hooks"
-	default n
+menu "System performance monitor hooks"
+
+config SCHED_INSTRUMENTATION
+	bool
 	---help---
 		Enables instrumentation in scheduler to monitor system performance.
 		If enabled, then the board-specific logic must provide the following
@@ -1190,18 +1336,10 @@ menuconfig SCHED_INSTRUMENTATION
 			void sched_note_cpu_start(FAR struct tcb_s *tcb, int cpu);
 			void sched_note_cpu_started(FAR struct tcb_s *tcb);
 
-if SCHED_INSTRUMENTATION
-
-config SCHED_INSTRUMENTATION_CPUSET
-	hex "CPU bit set"
-	default 0xffff
-	depends on SMP && SCHED_INSTRUMENTATION_FILTER
-	---help---
-		Monitor only CPUs in the bitset.  Bit 0=CPU0, Bit1=CPU1, etc.
-
 config SCHED_INSTRUMENTATION_FILTER
 	bool "Instrumentation filter"
-	default n
+	depends on SCHED_INSTRUMENTATION
+	default y
 	---help---
 		Enables the filter logic for the instrumentation. If this option
 		is enabled, the instrumentation data passed to sched_note_add()
@@ -1222,9 +1360,17 @@ config SCHED_INSTRUMENTATION_FILTER_DEFAULT_MODE
 			Bit 4 = Enable dump instrumentation
 			Bit 5 = Enable collecting syscall arguments
 
+config SCHED_INSTRUMENTATION_CPUSET
+	hex "CPU bit set"
+	default 0xffff
+	depends on SMP && SCHED_INSTRUMENTATION_FILTER
+	---help---
+		Monitor only CPUs in the bitset.  Bit 0=CPU0, Bit1=CPU1, etc.
+
 config SCHED_INSTRUMENTATION_SWITCH
 	bool "Use note switch for instrumentation"
 	default n
+	select SCHED_INSTRUMENTATION
 	---help---
 		Use note switch for instrumentation.
 
@@ -1247,6 +1393,7 @@ config SCHED_INSTRUMENTATION_SWITCH
 config SCHED_INSTRUMENTATION_PREEMPTION
 	bool "Preemption monitor hooks"
 	default n
+	select SCHED_INSTRUMENTATION
 	---help---
 		Enables additional hooks for changes to pre-emption state.  Board-
 		specific logic must provide this additional logic.
@@ -1256,6 +1403,7 @@ config SCHED_INSTRUMENTATION_PREEMPTION
 config SCHED_INSTRUMENTATION_CSECTION
 	bool "Critical section monitor hooks"
 	default n
+	select SCHED_INSTRUMENTATION
 	select IRQCOUNT
 	---help---
 		Enables additional hooks for entry and exit from critical sections.
@@ -1267,6 +1415,7 @@ config SCHED_INSTRUMENTATION_CSECTION
 config SCHED_INSTRUMENTATION_SPINLOCKS
 	bool "Spinlock monitor hooks"
 	default n
+	select SCHED_INSTRUMENTATION
 	---help---
 		Enables additional hooks for spinlock state.  Board-specific logic
 		must provide this additional logic.
@@ -1276,6 +1425,7 @@ config SCHED_INSTRUMENTATION_SPINLOCKS
 config SCHED_INSTRUMENTATION_SYSCALL
 	bool "System call monitor hooks"
 	default n
+	select SCHED_INSTRUMENTATION
 	depends on ARCH_HAVE_SYSCALL_HOOKS
 	---help---
 		Enables additional hooks for entry and exit from system call.
@@ -1287,6 +1437,7 @@ config SCHED_INSTRUMENTATION_SYSCALL
 config SCHED_INSTRUMENTATION_IRQHANDLER
 	bool "Interrupt handler monitor hooks"
 	default n
+	select SCHED_INSTRUMENTATION
 	---help---
 		Enables additional hooks for interrupt handler. Board-specific logic
 		must provide this additional logic.
@@ -1296,6 +1447,7 @@ config SCHED_INSTRUMENTATION_IRQHANDLER
 config SCHED_INSTRUMENTATION_HEAP
 	bool "Heap monitor hooks"
 	default n
+	select SCHED_INSTRUMENTATION
 	---help---
 		Enables additional hooks for heap allocation.
 
@@ -1304,6 +1456,7 @@ config SCHED_INSTRUMENTATION_HEAP
 config SCHED_INSTRUMENTATION_WDOG
 	bool "Watchdog timer monitor hooks"
 	default n
+	select SCHED_INSTRUMENTATION
 	---help---
 		Enables additional hooks for watchdog timer.
 
@@ -1312,6 +1465,7 @@ config SCHED_INSTRUMENTATION_WDOG
 config SCHED_INSTRUMENTATION_DUMP
 	bool "Use note dump for instrumentation"
 	default n
+	select SCHED_INSTRUMENTATION
 	---help---
 		Use note dump for instrumentation.
 
@@ -1319,9 +1473,26 @@ config SCHED_INSTRUMENTATION_DUMP
 			void sched_note_vprintf_ip(uint32_t tag, uintptr_t ip, FAR const char *fmt, uint32_t type, va_list va) printf_like(3, 0);
 			void sched_note_printf_ip(uint32_t tag, uintptr_t ip, FAR const char *fmt, uint32_t type, ...) printf_like(3, 5);
 
+config SCHED_INSTRUMENTATION_THREADTIME
+	bool "Enable thread runtime instrumentation"
+	depends on SCHED_INSTRUMENTATION_DUMP
+	depends on SCHED_CRITMONITOR
+	select SCHED_INSTRUMENTATION
+	default n
+	---help---
+		Enable thread runtime instrumentation.
+
+config SCHED_INSTRUMENTATION_THREAD_RUNTIME_DURATION
+	int "Record thread runtime minimum duration (us)"
+	depends on SCHED_INSTRUMENTATION_THREADTIME
+	default 0
+	---help---
+		The minimum duration of thread runtime to be recorded.
+
 config SCHED_INSTRUMENTATION_FUNCTION
 	bool "Enable function auto-tracing"
 	default n
+	select SCHED_INSTRUMENTATION
 	---help---
 		After enabling this option, you can automatically trace the function instrumentation without adding tracepoint manually.
 		This is similar to the Function Trace effect of the linux kernel
@@ -1333,7 +1504,8 @@ config SCHED_INSTRUMENTATION_FUNCTION
 		For a more detailed description of compilation options,
 		refer to the "Program Instrumentation Options" chapter in the gcc documentation
 
-endif # SCHED_INSTRUMENTATION
+endmenu # System performance monitor hooks
+
 endmenu # Performance Monitoring
 
 menu "System Auto Instrumentation"
@@ -1600,6 +1772,7 @@ config ENABLE_PARTIAL_SIGNALS
 
 config DISABLE_ALL_SIGNALS
 	bool "Disable all signal support"
+	select DISABLE_POSIX_TIMERS
 	select DISABLE_MQUEUE_NOTIFICATION
 	---help---
 		Disable all signal-related functionality, including signal
@@ -2044,13 +2217,17 @@ config SCHED_BACKTRACE
 
 config GROUP_KILL_CHILDREN_TIMEOUT_MS
 	int "Group kill children timeout"
-	default -1
+	default 0
 	depends on !DISABLE_PTHREAD && SIG_SIGKILL_ACTION
 	---help---
-		Kill children a SIGQUIT signal before cancel them,
-		< 0 means wait until all the child thread exit
-		> 0 means wait timeout
-		= 0 means don't do kill signal
+		What exit() and task_restart() do with the other threads of
+		the task group before they cancel them:
+		= 0 means do not send a signal: cancel them at once
+		> 0 means send SIGTERM, then wait this number of milliseconds
+		    for them to exit
+		< 0 means send SIGTERM, then wait until they all exit
+		The default action of a signal (abnormal termination) does not
+		send the signal: it cancels the other threads at once.
 
 config PID_INITIAL_COUNT
 	int "Initial length of pid table"
@@ -2126,5 +2303,24 @@ config HRTIMER_TREE
 		timers, at the cost of slightly higher memory usage.
 
 endchoice
+
+config HRTIMER_PRECISION_SHIFT
+	int "HRTimer precision shift (0 = full precision)"
+	default 0
+	range 0 20
+	---help---
+		Reduce hrtimer precision to decrease interrupt frequency.
+		The value N defines the left-shift bits of the precision unit:
+		precision = 1 << N nanoseconds, and the mask = precision - 1.
+
+		The programmed expiration time is ceiling-aligned to the
+		precision boundary via (expired + mask) & ~mask in
+		hrtimer_reprogram().
+
+		Examples:
+		  0  - full nanosecond precision (default, no alignment)
+		  10 - 1024 ns (~1 us) precision
+		  15 - 32768 ns (~32 us) precision
+		  20 - 1048576 ns (~1 ms) precision
 
 endif # HRTIMER

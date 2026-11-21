@@ -28,6 +28,7 @@
  ****************************************************************************/
 
 #include <nuttx/config.h>
+#include <stdbool.h>
 #include <nuttx/sensors/ioctl.h>
 
 #if defined(CONFIG_I2C) && defined(CONFIG_SENSORS_T67XX)
@@ -56,11 +57,8 @@ struct t67xx_value_s
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -83,7 +81,6 @@ extern "C"
 int t67xx_register(FAR const char *devpath, FAR struct i2c_master_s *i2c,
                    uint8_t addr);
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

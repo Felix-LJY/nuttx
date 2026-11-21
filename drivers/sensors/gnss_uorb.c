@@ -36,6 +36,7 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <nuttx/debug.h>
+#include <nuttx/poll.h>
 #include <minmea/minmea.h>
 #include <sys/param.h>
 
@@ -77,7 +78,7 @@ struct gnss_sensor_s
 struct gnss_user_s
 {
   struct list_node node;
-  FAR struct pollfd *fds;
+  FAR struct pollfd_s *fds;
   size_t pos;
 };
 
@@ -128,7 +129,7 @@ static ssize_t gnss_write(FAR struct file *filep,
                           FAR const char *buffer, size_t buflen);
 static int     gnss_ioctl(FAR struct file *filep, int cmd,
                           unsigned long arg);
-static int     gnss_poll(FAR struct file *filep, FAR struct pollfd *fds,
+static int     gnss_poll(FAR struct file *filep, FAR struct pollfd_s *fds,
                          bool setup);
 
 /****************************************************************************
@@ -317,7 +318,7 @@ static int gnss_close(FAR struct file *filep)
         }
 
       upper->crefs--;
-      sminfo(filep->f_inode->i_name, "crefs " PRIu8 "", upper->crefs);
+      sminfo(filep->f_inode->i_name, "crefs %" PRIu8 "", upper->crefs);
     }
 
   list_delete(&user->node);
@@ -384,7 +385,7 @@ static ssize_t gnss_write(FAR struct file *filep, FAR const char *buffer,
                           size_t buflen)
 {
   FAR struct gnss_upperhalf_s *upper;
-  int ret = -ENOTSUP;
+  int ret = -ENOTTY;
 
   upper = filep->f_inode->i_private;
 
@@ -424,7 +425,7 @@ static int gnss_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
   return ret;
 }
 
-static int gnss_poll(FAR struct file *filep, FAR struct pollfd *fds,
+static int gnss_poll(FAR struct file *filep, FAR struct pollfd_s *fds,
                      bool setup)
 {
   FAR struct gnss_upperhalf_s *upper;
@@ -604,8 +605,8 @@ static void gnss_parse_nmea(FAR struct gnss_upperhalf_s *upper,
           break;
         }
 
-       default:
-         break;
+      default:
+        break;
     }
 
   if (GNSS_FLAG_MARK == upper->flags)
@@ -672,13 +673,15 @@ static void gnss_push_data(FAR void *priv, FAR const void *data,
     }
 
   circbuf_overwrite(&upper->buffer, data, bytes);
+  nxmutex_unlock(&upper->bufferlock);
 
+  nxmutex_lock(&upper->lock);
   list_for_every_entry(&upper->userlist, user, struct gnss_user_s, node)
     {
       poll_notify(&user->fds, 1, POLLIN);
     }
 
-  nxmutex_unlock(&upper->bufferlock);
+  nxmutex_unlock(&upper->lock);
 
   nxsem_get_value(&upper->buffersem, &semcount);
   while (semcount++ <= 0)
@@ -929,6 +932,8 @@ void gnss_unregister(FAR struct gnss_lowerhalf_s *lower, int devno)
   sensor_unregister(&upper->dev[SENSOR_GNSS_IDX_GNSS_GEOFENCE].lower, devno);
   snprintf(path, PATH_MAX, GNSS_PATH_FMT, devno);
   unregister_driver(path);
+  nxmutex_destroy(&upper->lock);
+  nxmutex_destroy(&upper->bufferlock);
   nxsem_destroy(&upper->buffersem);
   circbuf_uninit(&upper->buffer);
   lib_put_pathbuffer(path);

@@ -29,6 +29,7 @@
 
 #include <nuttx/config.h>
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <time.h>
 
@@ -82,13 +83,9 @@ struct sam_oneshot_s
  * Public Data
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -190,7 +187,6 @@ struct sam_freerun_s;
 int sam_oneshot_cancel(struct sam_oneshot_s *oneshot,
                        struct sam_freerun_s *freerun, struct timespec *ts);
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

@@ -1,6 +1,8 @@
 /****************************************************************************
  * arch/arm/src/s32k3xx/s32k3xx_emac.h
  *
+ * SPDX-License-Identifier: Apache-2.0
+ *
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.  The
@@ -47,13 +49,9 @@
 
 #ifndef __ASSEMBLY__
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -100,7 +98,6 @@ int s32k3xx_netinitialize(int intf);
 int s32k3xx_phy_boardinitialize(int intf);
 #endif
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

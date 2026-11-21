@@ -44,6 +44,7 @@
 #include <nuttx/config.h>
 
 #include <stdint.h>
+#include <stdbool.h>
 
 #include <nuttx/mutex.h>
 #include <nuttx/fs/ioctl.h>
@@ -90,11 +91,8 @@ struct relay_dev_s
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************

@@ -22,7 +22,9 @@
 
 # Include serial drivers
 
-set(SRCS serial.c serial_io.c)
+if(CONFIG_SERIAL)
+  set(SRCS serial.c serial_io.c serial_termios.c)
+endif()
 
 if(CONFIG_SERIAL_GDBSTUB)
   list(APPEND SRCS serial_gdbstub.c)
@@ -93,6 +95,12 @@ endif()
 
 if(CONFIG_RAM_UART)
   list(APPEND SRCS uart_ram.c)
+endif()
+
+# Netdev console
+
+if(CONFIG_CONSOLE_NETDEV)
+  list(APPEND SRCS netdev_console.c)
 endif()
 
 target_sources(drivers PRIVATE ${SRCS})

@@ -2,7 +2,7 @@
 ST Nucleo-H563ZI
 ================
 
-.. tags:: chip:stm32, chip:stm32h5, chip:stm32h563
+.. tags:: arch:arm, chip:stm32h5, part:stm32h563, vendor:st
 
 .. figure:: nucleo-h563zi.png
    :align: center
@@ -140,6 +140,17 @@ This configuration configures ADC1_IN3 and ADC1_IN10, which can be
 accessed at the CN9 A0 and A1 pins respectively. Modify
 nucleo-h563zi/src/stm32_adc.c to enable more channels.
 
+dac:
+--------
+
+This configuration enables DAC1 (polled, no DMA). DAC1_OUT2 (PA5) is
+registered as /dev/dac0, and can be tested with the dac example
+application, e.g. ``dac -d 0``.
+
+The ADC/DAC kernel clock is switched from PLL2R to HCLK when the DAC is
+enabled, because the DAC output voltage is invalid with other kernel clocks
+(see the STM32H5 errata).
+
 pwm:
 --------
 
@@ -147,6 +158,15 @@ This configuration configures TIM1_CH1OUT, which can be
 accessed at pin D6 on the CN10 A0 connector. TIM1_CH1 is configured
 as a pwm output at /dev/pwm0, and can be tested with the example pwm
 application.
+
+capture:
+--------
+
+This configuration configures TIM4 as a capture timer to measure the frequency and
+the duty cycle of a PWM input signal on TIM4_CH1 (pin PB6). It is registered at
+/dev/cap0 and can be tested with the example capture application (``cap``), which prints
+the measured frequency and duty cycle. The capture counter runs at 100 kHz, so only
+input signals that have a period of up to 655 ms (down to about 1.5 Hz) can be measured.
 
 adc_watchdog:
 --------------

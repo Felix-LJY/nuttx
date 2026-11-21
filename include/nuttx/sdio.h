@@ -486,6 +486,28 @@
 #define SDIO_CAPS_SD_HS_MODE      0x80 /* Bit 7=1: Supports SD card high speed mode */
 
 /****************************************************************************
+ * Name: SDIO_MAXREQUEST
+ *
+ * Description:
+ *   Return the maximum number of bytes that the host can transfer in one
+ *   request.  A return value of zero means that the host does not impose an
+ *   additional limit.  A nonzero limit applies to all buffers, including
+ *   directly DMA-accessible buffers.  Callers must split requests or reject
+ *   commands that cannot be split.  A limit smaller than a block cannot
+ *   support block I/O.
+ *
+ * Input Parameters:
+ *   dev - Device-specific state data
+ *
+ * Returned Value:
+ *   Maximum request size in bytes, or zero for no host-specific limit.
+ *
+ ****************************************************************************/
+
+#define SDIO_MAXREQUEST(dev) \
+  ((dev)->maxrequest ? (dev)->maxrequest(dev) : 0)
+
+/****************************************************************************
  * Name: SDIO_STATUS
  *
  * Description:
@@ -812,7 +834,11 @@
  *
  ****************************************************************************/
 
-#define SDIO_CALLBACKENABLE(dev,eventset) ((dev)->callbackenable(dev,eventset))
+#if defined(CONFIG_SCHED_WORKQUEUE) && defined(CONFIG_SCHED_HPWORK)
+#  define SDIO_CALLBACKENABLE(dev,eventset) ((dev)->callbackenable(dev,eventset))
+#else
+#  define SDIO_CALLBACKENABLE(dev,eventset) ((void)0)
+#endif
 
 /****************************************************************************
  * Name: SDIO_REGISTERCALLBACK
@@ -1041,10 +1067,10 @@ struct sdio_dev_s
   CODE void  (*waitenable)(FAR struct sdio_dev_s *dev,
                            sdio_eventset_t eventset, uint32_t timeout);
   CODE sdio_eventset_t (*eventwait)(FAR struct sdio_dev_s *dev);
-  CODE void  (*callbackenable)(FAR struct sdio_dev_s *dev,
-                               sdio_eventset_t eventset);
 
 #if defined(CONFIG_SCHED_WORKQUEUE) && defined(CONFIG_SCHED_HPWORK)
+  CODE void  (*callbackenable)(FAR struct sdio_dev_s *dev,
+                               sdio_eventset_t eventset);
   CODE int   (*registercallback)(FAR struct sdio_dev_s *dev,
                                  worker_t callback, FAR void *arg);
 #endif
@@ -1066,6 +1092,12 @@ struct sdio_dev_s
 #endif /* CONFIG_SDIO_DMA */
   CODE void  (*gotextcsd)(FAR struct sdio_dev_s *dev,
                           FAR const uint8_t *buffer);
+
+  /* Optional request limit in bytes; NULL means no additional limit.
+   * Keep optional extensions at the end for positional initializers.
+   */
+
+  CODE size_t (*maxrequest)(FAR struct sdio_dev_s *dev);
 };
 
 /****************************************************************************
@@ -1092,16 +1124,11 @@ int sdio_io_rw_extended(FAR struct sdio_dev_s *dev, bool write,
                         bool inc_addr, FAR uint8_t *buf,
                         unsigned int blocklen, unsigned int nblocks);
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

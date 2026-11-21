@@ -1,3 +1,24 @@
+############################################################################
+# Kconfig
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.  The
+# ASF licenses this file to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance with the
+# License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
+############################################################################
 #
 # For a description of the syntax of this configuration file,
 # see the file kconfig-language.txt in the NuttX tools repository.
@@ -68,7 +89,7 @@ config ALLOW_MIT_COMPONENTS
 
 config ALLOW_BSDNORDIC_COMPONENTS
 	bool "Use components that have 5-Clause Nordic licenses"
-	depends on ARCH_CHIP_NRF52 || ARCH_CHIP_NRF53 || ARCH_CHIP_NRF91
+	depends on ARCH_CHIP_NRF52 || ARCH_CHIP_NRF53 || ARCH_CHIP_NRF54L || ARCH_CHIP_NRF91
 	default n
 	---help---
 		When this option is enabled the project will allow the use
@@ -407,6 +428,23 @@ config NUTTX_USERSPACE
 		expect to find and instance of struct userspace_s at this location.
 
 endif # Build 2-pass
+
+config NUTTX_LINKER_IMAGE_CFG
+	bool "Use linker defined image configuration"
+	---help---
+		Enables the selection of image configurations defined in the linker
+		file (when provided).
+
+if NUTTX_LINKER_IMAGE_CFG
+
+config NUTTX_LINKER_IMAGE_CFG_ID
+	int "Linker image identifier"
+	default 0
+	---help---
+		Selects the linker image configuration.
+
+endif
+
 endmenu # Build Setup
 
 menu "Binary Output Formats"
@@ -484,7 +522,7 @@ endif # DFU_BINARY
 config OUTPUT_STRIP_PATHS
 	bool "Strip absolute paths from binaries"
 	default y
-	depends on ARCH_TOOLCHAIN_GNU
+	depends on ARCH_TOOLCHAIN_GNU || ARCH_TOOLCHAIN_TASKING
 	---help---
 		Cmake build provide absolute paths to compile files. If __FILE__
 		macros are used in the source code(ASSERT), the binary will contain
@@ -673,6 +711,13 @@ config ARCH_SETJMP_H
 		toolchain's setjmp.h file, they can use this alternative by defining
 		ARCH_SETJMP_H=y and providing. If ARCH_SETJMP_H, is not defined, then
 		the setjmp.h header file will stay out-of-the-way in include/nuttx/.
+
+config ARCH_HAVE_UCONTEXT
+	bool
+	default n
+	---help---
+		The architecture provides getcontext(), setcontext(), makecontext()
+		and swapcontext() in libc.
 
 choice
 	prompt "debug.h selection"
@@ -1226,7 +1271,6 @@ endif # DEBUG_WIRELESS
 config DEBUG_SCHED
 	bool "Scheduler Debug Features"
 	default n
-	depends on !SYSLOG_TIMESTAMP
 	---help---
 		Enable OS scheduler debug features.
 
@@ -1249,9 +1293,13 @@ config DEBUG_SCHED_WARN
 config DEBUG_SCHED_INFO
 	bool "Scheduler Informational Output"
 	default n
-	depends on DEBUG_INFO
+	depends on DEBUG_INFO && !SYSLOG_TIMESTAMP
 	---help---
 		Enable OS scheduler informational output to SYSLOG.
+
+		Not with SYSLOG_TIMESTAMP: the time stamp of a message comes
+		from the clock code of the scheduler, and its informational
+		output must not call syslog() again.
 
 endif # DEBUG_SCHED
 
@@ -2980,6 +3028,10 @@ config ITERABLE_SECTIONS_LINKER_INSERT
 		matching, in declaration order).  Boards declaring a generic
 		rwx region at a lower address first (e.g. ITCM at 0x0) must use
 		the common-rom.ld include instead.
+
+config DEBUG_LINK_ORPHAN_WARN
+	bool "Warn on orphan section handling"
+	default n
 
 config CCACHE
 	bool "Use ccache"

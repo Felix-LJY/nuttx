@@ -43,7 +43,17 @@ set(SRCS
     tricore_tcbinfo.c
     tricore_trapcall.c
     tricore_systimer.c
-    tricore_usestack.c)
+    tricore_usestack.c
+    tricore_fork.c)
+
+if(CONFIG_BUILD_PROTECTED OR CONFIG_BUILD_KERNEL)
+  list(APPEND SRCS tricore_task_start.c tricore_pthread_start.c
+       tricore_signal_dispatch.c)
+
+  if(CONFIG_BUILD_PROTECTED)
+    target_sources(arch_interface PRIVATE tricore_signal_handler.c)
+  endif()
+endif()
 
 if(CONFIG_SCHED_BACKTRACE)
   list(APPEND SRCS tricore_backtrace.c)
@@ -65,12 +75,38 @@ if(CONFIG_ARCH_HAVE_DEBUG)
   list(APPEND SRCS tricore_hwdebug.c)
 endif()
 
-set(IFXFLAGS -DIFX_CFG_EXTEND_TRAP_HOOKS -DIFX_USE_SW_MANAGED_INT)
-
 target_sources(arch PRIVATE ${SRCS})
 target_sources(nuttx PRIVATE tricore_doirq.c)
-target_compile_options(arch PRIVATE ${IFXFLAGS})
-target_compile_options(nuttx PRIVATE ${IFXFLAGS})
+
+# The trap vectors are placed by the linker script and not referenced by symbol,
+# link them directly instead of from the archive.
+
+if(CONFIG_TRICORE_TOOLCHAIN_TASKING)
+  target_sources(nuttx PRIVATE tasking/tricore_vectors.${ASMEXT})
+  target_sources(nuttx PRIVATE tasking/tricore_head.${ASMEXT})
+else()
+  target_sources(nuttx PRIVATE gnu/tricore_vectors.${ASMEXT})
+  target_sources(nuttx PRIVATE gnu/tricore_head.${ASMEXT})
+endif()
 target_include_directories(
   nuttx SYSTEM PRIVATE ${NUTTX_DIR}/include ${NUTTX_BINARY_DIR}/include
                        ${NUTTX_BINARY_DIR}/include_arch)
+# TASKING toolchain: build a fake libc_fpu.a to override the toolchain's default
+# C library and provide stubs for the symbols the linker still references (see
+# tricore_libc.c for details).
+
+if(CONFIG_TRICORE_TOOLCHAIN_TASKING)
+  nuttx_add_kernel_library(c_fpu)
+  target_sources(c_fpu PRIVATE tricore_libc.c)
+  target_link_options(nuttx PRIVATE
+                      --library-directory=${CMAKE_CURRENT_BINARY_DIR})
+
+  # Scope the delete-unreferenced-sections optimization to the kernel image
+  # only: applied globally it also strips sections of the user library that are
+  # still needed.
+
+  target_link_options(nuttx PRIVATE -OtxYcL)
+  if(CONFIG_BUILD_PROTECTED)
+    target_link_options(nuttx_user PRIVATE --optimize=0)
+  endif()
+endif()

@@ -218,15 +218,15 @@
 #define STM32_RCC_CFGR2_PPRE1     RCC_CFGR2_PPRE1_HCLK1d2      /* PCLK1 = HCLK / 2 */
 #define STM32_PCLK1_FREQUENCY    (STM32_HCLK_FREQUENCY / 2)
 
-#define STM32_TIM2_CLKIN    (STM32_PCLK1_FREQUENCY)
-#define STM32_TIM3_CLKIN    (STM32_PCLK1_FREQUENCY)
-#define STM32_TIM4_CLKIN    (STM32_PCLK1_FREQUENCY)
-#define STM32_TIM5_CLKIN    (STM32_PCLK1_FREQUENCY)
-#define STM32_TIM6_CLKIN    (STM32_PCLK1_FREQUENCY)
-#define STM32_TIM7_CLKIN    (STM32_PCLK1_FREQUENCY)
-#define STM32_TIM12_CLKIN   (STM32_PCLK1_FREQUENCY)
-#define STM32_TIM13_CLKIN   (STM32_PCLK1_FREQUENCY)
-#define STM32_TIM14_CLKIN   (STM32_PCLK1_FREQUENCY)
+#define STM32_TIM2_CLKIN    (2 * STM32_PCLK1_FREQUENCY)
+#define STM32_TIM3_CLKIN    (2 * STM32_PCLK1_FREQUENCY)
+#define STM32_TIM4_CLKIN    (2 * STM32_PCLK1_FREQUENCY)
+#define STM32_TIM5_CLKIN    (2 * STM32_PCLK1_FREQUENCY)
+#define STM32_TIM6_CLKIN    (2 * STM32_PCLK1_FREQUENCY)
+#define STM32_TIM7_CLKIN    (2 * STM32_PCLK1_FREQUENCY)
+#define STM32_TIM12_CLKIN   (2 * STM32_PCLK1_FREQUENCY)
+#define STM32_TIM13_CLKIN   (2 * STM32_PCLK1_FREQUENCY)
+#define STM32_TIM14_CLKIN   (2 * STM32_PCLK1_FREQUENCY)
 #define STM32_LPTIM2_CLKIN  (STM32_PCLK1_FREQUENCY)
 
 /* Configure the APB2 prescaler */
@@ -251,6 +251,15 @@
 #define STM32_LPTIM5_CLKIN  (STM32_PCLK3_FREQUENCY)
 #define STM32_LPTIM6_CLKIN  (STM32_PCLK3_FREQUENCY)
 
+/* I2C kernel clocks: the reset default PCLK1 (I2C1, I2C2) and PCLK3
+ * (I2C3, I2C4).  Select another with STM32_RCC_CCIPR4_I2CnSEL.
+ */
+
+#define STM32_I2C1_FREQUENCY  STM32_PCLK1_FREQUENCY
+#define STM32_I2C2_FREQUENCY  STM32_PCLK1_FREQUENCY
+#define STM32_I2C3_FREQUENCY  STM32_PCLK3_FREQUENCY
+#define STM32_I2C4_FREQUENCY  STM32_PCLK3_FREQUENCY
+
 /* Configure the Kernel clocks */
 
 /* Ethernet definitions *****************************************************/
@@ -265,10 +274,20 @@
 #define GPIO_ETH_RMII_CRS_DV  (GPIO_ETH_RMII_CRS_DV_0 | GPIO_SPEED_100MHZ)  /* PA7 */
 #define GPIO_ETH_RMII_REF_CLK (GPIO_ETH_RMII_REF_CLK_0 | GPIO_SPEED_100MHZ) /* PA1 */
 
-/* ADC Clock Source *********************************************************/
+/* ADC/DAC Clock Source *****************************************************/
 
-#define STM32_RCC_CCIPR5_ADCDACSEL RCC_CCIPR5_ADCDACSEL_PLL2RCK
-#define STM32_ADC_CLK_FREQUENCY    STM32_PLL2R_FREQUENCY
+/* The ADC and the DAC share a kernel clock.  Erratum "Invalid DAC output
+ * voltage for several DAC kernel clocks" requires that the kernel clock is
+ * HCLK or SYSCLK whenever the DAC is used.
+ */
+
+#ifdef CONFIG_STM32_DAC1
+#  define STM32_RCC_CCIPR5_ADCDACSEL RCC_CCIPR5_ADCDACSEL_RCCHCLK
+#  define STM32_ADC_CLK_FREQUENCY    STM32_HCLK_FREQUENCY
+#else
+#  define STM32_RCC_CCIPR5_ADCDACSEL RCC_CCIPR5_ADCDACSEL_PLL2RCK
+#  define STM32_ADC_CLK_FREQUENCY    STM32_PLL2R_FREQUENCY
+#endif
 
 /* LED definitions **********************************************************/
 
@@ -354,6 +373,13 @@
 
 #define GPIO_TIM1_CH1OUT GPIO_TIM1_CH1OUT_2 /* PE9 */
 
+/* TIM4 capture (PWM input).  The capture driver measures the signal on the
+ * pin of the selected channel (CONFIG_STM32_TIM4_CHANNEL, 1 by default).
+ */
+
+#define GPIO_TIM4_CH1IN  GPIO_TIM4_CH1IN_1  /* PB6 */
+#define GPIO_TIM4_CH2IN  GPIO_TIM4_CH2IN_1  /* PB7 */
+
 /* USART3 GPIOs *************************************************************/
 
 /* USART3 (Nucleo Virtual Console): Default board solder bridge configuration
@@ -383,13 +409,9 @@
 
 #ifndef __ASSEMBLY__
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -409,7 +431,6 @@ extern "C"
 
 void stm32_board_initialize(void);
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

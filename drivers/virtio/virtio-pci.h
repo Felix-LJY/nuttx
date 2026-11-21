@@ -31,6 +31,8 @@
 
 #ifdef CONFIG_DRIVERS_VIRTIO_PCI
 
+#include <stdbool.h>
+
 #include <nuttx/arch.h>
 #include <nuttx/pci/pci.h>
 #include <nuttx/virtio/virtio.h>
@@ -49,11 +51,8 @@
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -122,7 +121,6 @@ void virtio_pci_delete_virtqueues(FAR struct virtio_device *vdev);
 int virtio_pci_modern_probe(FAR struct pci_device_s *dev);
 int virtio_pci_legacy_probe(FAR struct pci_device_s *dev);
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

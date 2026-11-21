@@ -34,6 +34,7 @@
 #include <errno.h>
 #include <nuttx/debug.h>
 
+#include <nuttx/poll.h>
 #include <nuttx/spinlock.h>
 
 #include "nxterm.h"
@@ -219,12 +220,12 @@ errout_without_lock:
  * Name: nxterm_poll
  ****************************************************************************/
 
-int nxterm_poll(FAR struct file *filep, FAR struct pollfd *fds, bool setup)
+int nxterm_poll(FAR struct file *filep, FAR struct pollfd_s *fds, bool setup)
 {
   FAR struct inode *inode = filep->f_inode;
   FAR struct nxterm_state_s *priv;
   pollevent_t eventset;
-  spinlock_t flags;
+  irqstate_t flags;
   int ret;
   int i;
 
@@ -287,7 +288,7 @@ int nxterm_poll(FAR struct file *filep, FAR struct pollfd *fds, bool setup)
     {
       /* This is a request to tear down the poll. */
 
-      FAR struct pollfd **slot = (FAR struct pollfd **)fds->priv;
+      FAR struct pollfd_s **slot = (FAR struct pollfd_s **)fds->priv;
 
 #ifdef CONFIG_DEBUG_GRAPHICS
       if (!slot)

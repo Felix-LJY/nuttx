@@ -1,3 +1,24 @@
+############################################################################
+# arch/arm64/Kconfig
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.  The
+# ASF licenses this file to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance with the
+# License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
+############################################################################
 #
 # For a description of the syntax of this configuration file,
 # see the file kconfig-language.txt in the NuttX tools repository.
@@ -229,6 +250,19 @@ config ARCH_AS_HAS_ARMV8_5
 menu "ARMv8.5 architectural features"
 	depends on ARCH_AS_HAS_ARMV8_5
 
+config ARM64_CRYPTO_AES
+	bool "AES using the Armv8 Cryptography Extension"
+	select CRYPTO
+	select CRYPTO_AES
+	---help---
+		Provide aes_cypher() with AESE, AESD and the MixColumns pair. The
+		table-driven cipher indexes memory with key-dependent values, so
+		its timing follows the cache; these instructions do not.
+
+		The core must implement the extension. ID_AA64ISAR0_EL1 is read on
+		every call, which returns -ENOTSUP rather than trapping if it does
+		not.
+
 config ARM64_MTE
 	bool "Memory Tagging Extension support"
 	select ARCH_HAVE_MEMTAG
@@ -368,7 +402,7 @@ config ARCH_CORTEX_R82
 	select ARCH_HAVE_FPU
 	select ARCH_HAVE_CLUSTER_PMU
 	select ARM64_HAVE_NEON
-	select ARCH_HAVE_PERF_EVENTS_USER_ACCESS if !ARCH_CLUSTER_PMU
+	select ARCH_HAVE_PERF_EVENTS_USER_ACCESS if !SMP && !ARCH_CLUSTER_PMU
 
 config ARCH_CPU_UNKNOWN
 	bool
@@ -429,14 +463,6 @@ config ARM64_NEON
 	bool "Advanced SIMD (NEON) Extension"
 	default y
 	depends on ARM64_HAVE_NEON
-
-config ARM64_DECODEFIQ
-	bool "FIQ Handler"
-	default n
-	---help---
-		Select this option if your platform supports the function
-		arm_decodefiq().  This is used primarily to support secure TrustZone
-		interrupts received on the FIQ vector.
 
 config ARM64_GIC_VERSION
 	int "GIC version"

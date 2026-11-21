@@ -1,6 +1,8 @@
-==================
-ESP32-H2-DevKitM-1
-==================
+============================
+Espressif ESP32-H2-DevKitM-1
+============================
+
+.. tags:: arch:risc-v, chip:esp32h2, vendor:espressif
 
 ESP32-H2-DevKitM-1 is an entry-level development board based on Bluetooth® Low Energy and
 IEEE 802.15.4 combo module ESP32-H2-MINI-1 or ESP32-H2-MINI-1U. You can find the board schematic

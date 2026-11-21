@@ -243,11 +243,8 @@ struct mtd_dev_s
 #ifndef __ASSEMBLY__
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -750,6 +747,18 @@ FAR struct mtd_dev_s *n25qxxx_initialize(FAR struct qspi_dev_s *qspi,
                                          bool unprotect);
 
 /****************************************************************************
+ * Name: mx66uw1g45g_initialize
+ *
+ * Description:
+ *   Create an initialized MTD device instance for the QSPI-based
+ *   MX66U21G45G FLASH part.
+ *
+ ****************************************************************************/
+
+FAR struct mtd_dev_s *
+mx66uw1g45g_initialize(FAR struct qspi_dev_s *qspi);
+
+/****************************************************************************
  * Name: w25qxxxjv_initialize
  *
  * Description:
@@ -938,7 +947,6 @@ int register_cfi_driver(volatile uintptr_t addr_base,
                         int id);
 #endif
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

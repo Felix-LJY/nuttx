@@ -1,0 +1,82 @@
+############################################################################
+# net/vsock/Kconfig
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.  The
+# ASF licenses this file to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance with the
+# License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
+############################################################################
+#
+# For a description of the syntax of this configuration file,
+# see misc/tools/kconfig-language.txt.
+#
+
+menu "Virtual Socket networking stack API"
+
+config NET_VSOCK
+	bool
+
+if NET_VSOCK
+
+config NET_VSOCK_RX_BUFSIZE
+	int "Virtual Socket rx buffer size"
+	default 2048
+
+config NET_VSOCK_NPOLLWAITERS
+	int "Virtual Socket poll waiter number"
+	default 4
+
+config NET_VSOCK_PKT_BUFSIZE
+	int "Virtual Socket packet tx buffer size"
+	default 2048
+
+config NET_VSOCK_PKT_BUFCOUNT
+	int "Virtual Socket packet virtqueue buf count"
+	default 16
+
+config NET_VSOCK_WORK_PRIORITY
+	int "Virtual Socket work priority"
+	default 223
+
+config NET_VSOCK_WORK_STACKSIZE
+	int "Virtual Socket work stack size"
+	default DEFAULT_TASK_STACKSIZE
+
+config NET_VSOCK_VQ_BUFCOUNT
+	int "Virtual Socket virtqueue max number"
+	default 64
+
+endif # NET_VSOCK
+
+config NET_VSOCK_VIRTIO
+	bool "Virtual Socket Virtio Transport Layer Support"
+	default n
+	select DRIVERS_VIRTIO
+	select NET_VSOCK
+
+config NET_VSOCK_VHOST
+	bool "Virtual Socket Vhost Transport Layer Support"
+	default n
+	select DRIVERS_VHOST
+	select NET_VSOCK
+
+config NET_VSOCK_LOCAL
+	bool "Virtual Socket Local Transport Layer Support"
+	default n
+	select NET_VSOCK
+	select OPENAMP
+
+endmenu # Virtual Socket networking stack API

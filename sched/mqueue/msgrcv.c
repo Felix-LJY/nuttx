@@ -40,11 +40,12 @@
  ****************************************************************************/
 
 static int msgrcv_wait(FAR struct msgq_s *msgq, FAR struct msgbuf_s **rcvmsg,
-                       long msgtyp, int msgflg)
+                       size_t msgsz, long msgtyp, int msgflg)
 {
   FAR struct msgbuf_s *newmsg = NULL;
   FAR struct msgbuf_s *tmp;
   FAR struct tcb_s *rtcb;
+  int msqid = msgq->id;
 
 #ifdef CONFIG_CANCELLATION_POINTS
   /* msgrcv_wait() is not a cancellation point, but it may be called
@@ -84,7 +85,10 @@ static int msgrcv_wait(FAR struct msgq_s *msgq, FAR struct msgbuf_s **rcvmsg,
 
           if (msgtyp < 0)
             {
-              if (newmsg == NULL || newmsg->mtype > tmp->mtype)
+              /* mtype <= |msgtyp|, without the overflow of -LONG_MIN */
+
+              if (-tmp->mtype >= msgtyp &&
+                  (newmsg == NULL || newmsg->mtype > tmp->mtype))
                 {
                   newmsg = tmp;
                 }
@@ -99,13 +103,22 @@ static int msgrcv_wait(FAR struct msgq_s *msgq, FAR struct msgbuf_s **rcvmsg,
 
       if (newmsg)
         {
+          /* A message longer than msgsz stays in the queue.  With
+           * MSG_NOERROR, msgrcv() truncates the message.
+           */
+
+          if (newmsg->msize > msgsz && (msgflg & MSG_NOERROR) == 0)
+            {
+              return -E2BIG;
+            }
+
           list_delete(&newmsg->node);
           goto found;
         }
 
       if ((msgflg & IPC_NOWAIT) != 0)
         {
-          return -EAGAIN;
+          return -ENOMSG;
         }
 
       /* The queue is empty!  Should we block until there the above condition
@@ -126,7 +139,7 @@ static int msgrcv_wait(FAR struct msgq_s *msgq, FAR struct msgbuf_s **rcvmsg,
        * isn't going to end well.
        */
 
-      DEBUGASSERT(NULL != rtcb->flink);
+      DEBUGASSERT(!is_idle_task(rtcb));
 
       /* Remove the tcb task from the running list. */
 
@@ -151,10 +164,19 @@ static int msgrcv_wait(FAR struct msgq_s *msgq, FAR struct msgbuf_s **rcvmsg,
         {
           return -rtcb->errcode;
         }
+
+      /* msgctl(IPC_RMID) may have freed the queue before this task ran */
+
+      if (nxmsg_lookup(msqid) != msgq)
+        {
+          return -EIDRM;
+        }
     }
 
 found:
-  msgq->nmsgs--;
+  msgq->cbytes -= newmsg->msize;
+  msgq->lrpid   = nxsched_getpid();
+  msgq->rtime   = time(NULL);
   *rcvmsg = newmsg;
   return OK;
 }
@@ -182,8 +204,16 @@ found:
  * Returned Value:
  *   On success, msgrcv() returns the number of bytes actually copied
  *   into the mtext array.
- *   On failure, both functions return -1, and set errno to indicate
- *   the error.
+ *   On failure, msgrcv() returns -1 and sets errno to indicate the
+ *   error:
+ *
+ *   E2BIG   The message is longer than msgsz and MSG_NOERROR is not set.
+ *           The message stays in the queue.
+ *   EINVAL  msqid is not a valid message queue identifier.
+ *   ENOMSG  IPC_NOWAIT is set and the queue has no message of the
+ *           requested type.
+ *   EINTR   The call was interrupted by a signal handler.
+ *   EIDRM   The queue was removed while the caller waited.
  *
  ****************************************************************************/
 
@@ -193,7 +223,6 @@ ssize_t msgrcv(int msqid, FAR void *msgp, size_t msgsz, long msgtyp,
   FAR struct msgbuf_s *msg = NULL;
   FAR struct mymsg *buf = msgp;
   FAR struct msgq_s *msgq;
-  FAR struct tcb_s *btcb;
   irqstate_t flags;
   int ret;
 
@@ -212,14 +241,7 @@ ssize_t msgrcv(int msqid, FAR void *msgp, size_t msgsz, long msgtyp,
       goto errout_with_critical;
     }
 
-  if (msgsz < msgq->maxmsgsize &&
-      ((msgflg & MSG_NOERROR) == 0))
-    {
-      ret = -EMSGSIZE;
-      goto errout_with_critical;
-    }
-
-  ret = msgrcv_wait(msgq, &msg, msgtyp, msgflg);
+  ret = msgrcv_wait(msgq, &msg, msgsz, msgtyp, msgflg);
   if (ret < 0)
     {
       goto errout_with_critical;
@@ -231,44 +253,10 @@ ssize_t msgrcv(int msqid, FAR void *msgp, size_t msgsz, long msgtyp,
 
   list_add_tail(&g_msgfreelist, &msg->node);
 
-  /* Check if any tasks are waiting for the MQ not full event. */
+  /* The room in the queue can be enough for more than one sender */
 
-  if (msgq->cmn.nwaitnotfull > 0)
-    {
-      FAR struct tcb_s *rtcb = this_task();
-
-      /* Find the highest priority task that is waiting for
-       * this queue to be not-full in g_waitingformqnotfull list.
-       * This must be performed in a critical section because
-       * messages can be sent from interrupt handlers.
-       */
-
-      btcb = (FAR struct tcb_s *)dq_remfirst(MQ_WNFLIST(msgq->cmn));
-
-      /* If one was found, unblock it.  NOTE:  There is a race
-       * condition here:  the queue might be full again by the
-       * time the task is unblocked
-       */
-
-      DEBUGASSERT(btcb != NULL);
-
-      wd_cancel(&btcb->waitdog);
-
-      msgq->cmn.nwaitnotfull--;
-
-      /* Indicate that the wait is over. */
-
-      btcb->waitobj = NULL;
-
-      /* Add the task to ready-to-run task list and
-       * perform the context switch if one is needed
-       */
-
-      if (nxsched_add_readytorun(btcb))
-        {
-          up_switch_context(this_task(), rtcb);
-        }
-    }
+  nxmsg_wakeup_senders(msgq);
+  nxmsg_wakeup_pool();
 
 errout_with_critical:
   leave_critical_section(flags);

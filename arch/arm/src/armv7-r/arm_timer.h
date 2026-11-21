@@ -30,7 +30,7 @@
 #include <nuttx/config.h>
 #include <nuttx/timers/oneshot.h>
 
-#include <arch/armv7-r/cp15.h>
+#include <arch/arm_a_r/cp15.h>
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -43,11 +43,8 @@
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -73,7 +70,6 @@ struct oneshot_lowerhalf_s *arm_timer_initialize(unsigned int freq);
 #  define arm_timer_initialize(freq) NULL
 #endif
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

@@ -28,6 +28,7 @@
  ****************************************************************************/
 
 #include <nuttx/config.h>
+#include <stdbool.h>
 
 #ifdef CONFIG_PCI_IVSHMEM
 
@@ -55,13 +56,9 @@ struct ivshmem_driver_s
  * Public Functions Prototypes
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -167,7 +164,6 @@ int ivshmem_unregister_driver(FAR struct ivshmem_driver_s *drv);
 
 int pci_ivshemem_register(void);
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

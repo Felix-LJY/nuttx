@@ -2,7 +2,7 @@
 ST Nucleo H7S3L8
 =================
 
-.. tags:: chip:stm32, chip:stm32h7, chip:stm32h7s3
+.. tags:: arch:arm, chip:stm32h7, part:stm32h7s3, vendor:st
 
 This page describes the NuttX port for the STMicro NUCLEO-H7S3L8
 development board.  The board is based on the 600 MHz STM32H7S3L8
@@ -83,15 +83,15 @@ console is the ST-LINK virtual COM port on USART3.
 nsh-xip
 -------
 
-Provides NuttShell, common diagnostic commands, and ``ostest``.  The image is
+Provides NuttShell and common diagnostic commands.  The image is
 linked for execution from XSPI2 flash at ``0x70000000`` and requires an XIP
 bootloader in internal flash.
 
 jumbo-xip
 ---------
 
-As ``nsh-xip``, with networking over the on-board LAN8742A Ethernet PHY.  The
-address is obtained by DHCP.
+As ``nsh-xip``, with ``ostest`` and networking over the on-board LAN8742A
+Ethernet PHY.  The address is obtained by DHCP.
 
 boot-xip
 --------

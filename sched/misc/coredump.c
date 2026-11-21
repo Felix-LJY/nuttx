@@ -32,6 +32,7 @@
 
 #include <nuttx/coredump.h>
 #include <nuttx/elf.h>
+#include <nuttx/lib/lib.h>
 #include <nuttx/nuttx.h>
 #include <nuttx/sched.h>
 
@@ -61,6 +62,8 @@
 #  define XCPTCONTEXT_ALIGN 16
 #endif
 
+#define PID0_REPLACE  INT32_MAX
+
 /****************************************************************************
  * Private Types
  ****************************************************************************/
@@ -72,8 +75,9 @@
 struct elf_dumpinfo_s
 {
   FAR const struct memory_region_s *regions;
-  FAR struct lib_outstream_s *stream;
-  pid_t                       pid;
+  FAR struct lib_outstream_s       *stream;
+  pid_t                             pid;
+  FAR struct tcb_s                 *tcb;
 };
 
 /****************************************************************************
@@ -139,6 +143,7 @@ static int elf_flush(FAR struct elf_dumpinfo_s *cinfo)
  *
  ****************************************************************************/
 
+noinline_function
 static int elf_emit(FAR struct elf_dumpinfo_s *cinfo,
                     FAR const void *buf, size_t len)
 {
@@ -169,6 +174,7 @@ static int elf_emit(FAR struct elf_dumpinfo_s *cinfo,
  *
  ****************************************************************************/
 
+noinline_function
 static int elf_emit_align(FAR struct elf_dumpinfo_s *cinfo)
 {
   off_t align = ALIGN_UP(cinfo->stream->nput,
@@ -326,7 +332,11 @@ static void elf_emit_tcb_note(FAR struct elf_dumpinfo_s *cinfo,
   elf_emit(cinfo, &nhdr, sizeof(nhdr));
   elf_emit(cinfo, name, sizeof(name));
 
-  status.pr_pid = tcb->pid;
+  /* GDB treats PID 0 as invalid: for a core file it assigns an unused ID,
+   * and for the GDB stub 0 means "any thread".
+   */
+
+  status.pr_pid = tcb->pid == 0 ? PID0_REPLACE : tcb->pid;
 
   if (running_task() == tcb)
     {
@@ -374,7 +384,7 @@ static void elf_emit_note(FAR struct elf_dumpinfo_s *cinfo)
 
   if (cinfo->pid == INVALID_PROCESS_ID)
     {
-     FAR struct tcb_s *rtcb = running_task();
+      FAR struct tcb_s *rtcb = running_task();
 
       /* Emit the current (typically crashing) task first so that GDB's
        * default thread selection shows the crashing backtrace on the initial
@@ -396,7 +406,7 @@ static void elf_emit_note(FAR struct elf_dumpinfo_s *cinfo)
     }
   else
     {
-      elf_emit_tcb_note(cinfo, nxsched_get_tcb(cinfo->pid));
+      elf_emit_tcb_note(cinfo, cinfo->tcb);
     }
 }
 
@@ -492,7 +502,7 @@ static void elf_emit_stack(FAR struct elf_dumpinfo_s *cinfo)
     }
   else
     {
-      elf_emit_tcb_stack(cinfo, nxsched_get_tcb(cinfo->pid));
+      elf_emit_tcb_stack(cinfo, cinfo->tcb);
     }
 }
 
@@ -535,6 +545,13 @@ static void elf_emit_memory(FAR struct elf_dumpinfo_s *cinfo, int memsegs)
         }
       else
         {
+          /* Skip the Non-Write segment because it's unnecessary. */
+
+          if ((cinfo->regions[i].flags & PF_W) == 0)
+            {
+              continue;
+            }
+
           elf_emit(cinfo, (FAR void *)cinfo->regions[i].start,
                    cinfo->regions[i].end - cinfo->regions[i].start);
         }
@@ -682,8 +699,7 @@ static void elf_emit_phdr(FAR struct elf_dumpinfo_s *cinfo,
     }
   else
     {
-      elf_emit_tcb_phdr(cinfo, nxsched_get_tcb(cinfo->pid),
-                        &phdr, &offset);
+      elf_emit_tcb_phdr(cinfo, cinfo->tcb, &phdr, &offset);
     }
 
   /* Write program headers for segments dump */
@@ -709,6 +725,37 @@ static void elf_emit_phdr(FAR struct elf_dumpinfo_s *cinfo,
 
   elf_emit(cinfo, &phdr, sizeof(phdr));
 }
+
+/****************************************************************************
+ * Name: coredump_print_memory_regions
+ *
+ * Description:
+ *   Print out the memory range when coredump is generated.
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_BOARD_COREDUMP_PRINT_REGIONS
+static void
+coredump_print_memory_regions(FAR const struct memory_region_s *regions)
+{
+  int i;
+
+  if (regions == NULL)
+    {
+      _alert("No memory regions defined.\n");
+      return;
+    }
+
+  _alert("Memory regions will be printed:\n");
+  for (i = 0; regions[i].start < regions[i].end; i++)
+    {
+      _alert("Region[%d] start=0x%" PRIxPTR ", end=0x%" PRIxPTR "\n",
+             i, regions[i].start, regions[i].end);
+      *(volatile int *)regions[i].start;
+      *(volatile int *)(regions[i].end - sizeof(int));
+    }
+}
+#endif
 
 /****************************************************************************
  * Name: coredump_dump_syslog
@@ -756,10 +803,10 @@ static void coredump_dump_syslog(pid_t pid)
   coredump(g_regions, stream, pid);
 
 #  ifdef CONFIG_BOARD_COREDUMP_COMPRESSION
-  _alert("Finish coredump (Compression Enabled). %s formatted\n",
+  _alert("Coredump finish (Compression Enabled). %s formatted\n",
          streamname);
 #  else
-  _alert("Finish coredump. %s formatted\n", streamname);
+  _alert("Coredump finish. %s formatted\n", streamname);
 #  endif
 
   setlogmask(logmask);
@@ -798,7 +845,7 @@ static void coredump_dump_dev(pid_t pid)
       return;
     }
 
-  _alert("Finish coredump, write %" PRIdOFF " bytes to %s\n",
+  _alert("Coredump finish, write %" PRIdOFF " bytes to %s\n",
          g_devstream.common.nput, CONFIG_BOARD_COREDUMP_DEVPATH);
 }
 #endif
@@ -896,7 +943,10 @@ int coredump_add_memory_region(FAR const void *ptr, size_t size,
       return -ENOMEM;
     }
 
-  memcpy(region, g_regions, sizeof(struct memory_region_s) * count);
+  if (g_regions != NULL)
+    {
+      memcpy(region, g_regions, sizeof(struct memory_region_s) * count);
+    }
 
   if (g_regions != NULL
 #ifdef CONFIG_BOARD_MEMORY_RANGE
@@ -969,6 +1019,10 @@ int coredump_initialize(void)
 
 void coredump_dump(pid_t pid)
 {
+#ifdef CONFIG_BOARD_COREDUMP_PRINT_REGIONS
+  coredump_print_memory_regions(g_regions);
+#endif
+
 #ifdef CONFIG_BOARD_COREDUMP_SYSLOG
   coredump_dump_syslog(pid);
 #endif
@@ -998,12 +1052,14 @@ int coredump(FAR const struct memory_region_s *regions,
   cinfo.regions = regions;
   cinfo.stream  = stream;
   cinfo.pid     = pid;
+  cinfo.tcb     = NULL;
 
   flags = enter_critical_section();
 
   if (cinfo.pid != INVALID_PROCESS_ID)
     {
-      if (nxsched_get_tcb(cinfo.pid) == NULL)
+      cinfo.tcb = nxsched_get_tcb(cinfo.pid);
+      if (cinfo.tcb == NULL)
         {
           leave_critical_section(flags);
           return -EINVAL;

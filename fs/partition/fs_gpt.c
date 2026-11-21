@@ -32,6 +32,7 @@
 
 #include <nuttx/crc32.h>
 #include <nuttx/kmalloc.h>
+#include <nuttx/lib/lib.h>
 
 #include "partition.h"
 #include "fs_heap.h"
@@ -358,6 +359,7 @@ static void gpt_part_set_name(FAR struct gpt_entry_s *pte,
   for (i = 0; i < len; i++)
     {
       uint8_t c = pte->partition_name[i];
+
       dest[i] = (c && !isprint(c)) ? '.' : c;
     }
 
@@ -402,7 +404,7 @@ int parse_gpt_partition(FAR struct partition_state_s *state,
 
   count = (sizeof(struct gpt_ptable_s) + (state->blocksize - 1)) /
           state->blocksize;
-  ptbl = fs_heap_malloc(count * state->blocksize);
+  ptbl = lib_get_tempbuffer(count * state->blocksize);
   if (!ptbl)
     {
       return -ENOMEM;
@@ -440,6 +442,7 @@ int parse_gpt_partition(FAR struct partition_state_s *state,
 
       finfo("Primary GPT is invalid, using alternate GPT.\n");
 
+      lastlba = le64toh(gpt->alternate_lba);
       count = (GPT_BLOCK_SIZE + state->blocksize - 1) / state->blocksize;
       ret = read_partition_block(state, ptbl,
                                  GPT_LBA_TO_BLOCK(gpt->alternate_lba,
@@ -450,8 +453,7 @@ int parse_gpt_partition(FAR struct partition_state_s *state,
         }
 
       gpt = (FAR struct gpt_header_s *)ptbl;
-      ret = gpt_header_is_valid(state, gpt,
-                                le64toh(gpt->alternate_lba));
+      ret = gpt_header_is_valid(state, gpt, lastlba);
       if (ret >= 0)
         {
           /* Verify gpt header is valid */
@@ -490,6 +492,6 @@ int parse_gpt_partition(FAR struct partition_state_s *state,
 
   fs_heap_free(ptes);
 err:
-  fs_heap_free(ptbl);
+  lib_put_tempbuffer(ptbl);
   return ret;
 }

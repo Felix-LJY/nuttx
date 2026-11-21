@@ -38,7 +38,6 @@ set(SRCS
     arm_secure_irq.c
     arm_svcall.c
     arm_systemreset.c
-    arm_tcbinfo.c
     arm_trigger_irq.c
     arm_usagefault.c)
 
@@ -66,6 +65,10 @@ if(CONFIG_ARCH_FPU)
   list(APPEND SRCS arm_fpuconfig.c arm_fpucmp.c)
 endif()
 
+if(CONFIG_ARM_PACBTI)
+  list(APPEND SRCS arm_pacbticonfig.c)
+endif()
+
 if(CONFIG_ARCH_RAMVECTORS)
   list(APPEND SRCS arm_ramvec_initialize.c arm_ramvec_attach.c)
 endif()
@@ -80,10 +83,6 @@ endif()
 
 if(CONFIG_ARM_COREDUMP_REGION)
   list(APPEND SRCS arm_dumpnvic.c)
-endif()
-
-if(CONFIG_LIB_SYSCALL)
-  list(APPEND SRCS arm_dispatch_syscall.S)
 endif()
 
 target_sources(arch PRIVATE ${SRCS})

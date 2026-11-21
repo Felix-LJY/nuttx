@@ -42,13 +42,9 @@
 
 #ifndef __ASSEMBLY__
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /* CPU interrupt flags.
@@ -254,6 +250,24 @@ int esp_set_handle(int cpu, int irq, intr_handle_t handle);
 intr_handle_t esp_get_handle(int cpu, int irq);
 
 /****************************************************************************
+ * Name:  esp_get_irq
+ *
+ * Description:
+ *   This function gets the IRQ associated with a handle
+ *
+ * Input Parameters:
+ *   cpu - The CPU associated with the IRQ
+ *   handle - The handle associated with a CPU interrupt
+ *
+ * Returned Value:
+ *   The irq associated with the handle or negative value if no irq is
+ *   associated with the handle.
+ *
+ ****************************************************************************/
+
+int esp_get_irq(int cpu, intr_handle_t handle);
+
+/****************************************************************************
  * Name:  esp_get_iram_interrupt_records
  *
  * Description:
@@ -294,7 +308,6 @@ void esp_get_iram_interrupt_records(uint64_t *irq_count, int cpu);
 
 int esp_cpuint_to_irq(int cpuint, int cpu);
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

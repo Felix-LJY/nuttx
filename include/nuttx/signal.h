@@ -31,10 +31,15 @@
 
 #include <sys/types.h>
 #include <stdbool.h>
+#include <errno.h>
+#include <time.h>
 #include <signal.h>
 
 #include <nuttx/wqueue.h>
 #include <nuttx/sched.h>
+#ifdef CONFIG_FDPIC
+#  include <nuttx/fdpic.h>
+#endif
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -67,7 +72,14 @@ struct sigwork_s
 {
   struct work_s work;           /* Work queue structure */
   union sigval value;           /* Data passed with notification */
+#ifdef CONFIG_FDPIC
+  struct fdpic_desc_s func;     /* Notification function, and the data base
+                                 * of a module callback or zero.  The base is
+                                 * captured at registration and installed
+                                 * around the call on the worker thread. */
+#else
   sigev_notify_function_t func; /* Notification function */
+#endif
 };
 
 #ifdef __cplusplus
@@ -128,10 +140,8 @@ extern "C"
 #endif
 
 /****************************************************************************
- * Public Function Prototypes
+ * Inline Functions
  ****************************************************************************/
-
-struct timespec;  /* Forward reference */
 
 /****************************************************************************
  * Name: nxsig_ismember
@@ -156,7 +166,15 @@ struct timespec;  /* Forward reference */
  *
  ****************************************************************************/
 
-int nxsig_ismember(FAR const sigset_t *set, int signo);
+static inline int nxsig_ismember(FAR const sigset_t *set, int signo)
+{
+  if (!GOOD_SIGNO(signo))
+    {
+      return -EINVAL;
+    }
+
+  return (set->_elem[_SIGSET_NDX(signo)] & _SIGNO2SET(signo)) ? 1 : 0;
+}
 
 /****************************************************************************
  * Name: nxsig_addset
@@ -180,7 +198,16 @@ int nxsig_ismember(FAR const sigset_t *set, int signo);
  *
  ****************************************************************************/
 
-int nxsig_addset(FAR sigset_t *set, int signo);
+static inline int nxsig_addset(FAR sigset_t *set, int signo)
+{
+  if (!GOOD_SIGNO(signo))
+    {
+      return -EINVAL;
+    }
+
+  set->_elem[_SIGSET_NDX(signo)] |= _SIGNO2SET(signo);
+  return 0;
+}
 
 /****************************************************************************
  * Name: nxsig_delset
@@ -204,7 +231,22 @@ int nxsig_addset(FAR sigset_t *set, int signo);
  *
  ****************************************************************************/
 
-int nxsig_delset(FAR sigset_t *set, int signo);
+static inline int nxsig_delset(FAR sigset_t *set, int signo)
+{
+  if (!GOOD_SIGNO(signo))
+    {
+      return -EINVAL;
+    }
+
+  set->_elem[_SIGSET_NDX(signo)] &= ~_SIGNO2SET(signo);
+  return 0;
+}
+
+/****************************************************************************
+ * Public Function Prototypes
+ ****************************************************************************/
+
+struct timespec;  /* Forward reference */
 
 /****************************************************************************
  * Name: nxsig_nandset
@@ -271,6 +313,46 @@ int nxsig_xorset(FAR sigset_t *dest, FAR const sigset_t *left,
  ****************************************************************************/
 
 sigset_t nxsig_pendingset(FAR struct tcb_s *stcb);
+
+/****************************************************************************
+ * Name: nxsig_waitmask_set
+ *
+ * Description:
+ *   Set the temporary signal mask of a call that waits, as ppoll(),
+ *   pselect() and sigsuspend() do.  The caller holds a critical section
+ *   from this call until it waits, so that no signal comes before the
+ *   wait.
+ *
+ * Input Parameters:
+ *   set   - The temporary signal mask, or NULL to keep the signal mask
+ *   saved - Location to store the signal mask to restore after the wait
+ *
+ * Returned Value:
+ *   true if the temporary mask unblocks a pending signal.  Then the caller
+ *   must not wait, and it must return EINTR.  In a system call, the handler
+ *   of the signal runs at the end of the system call.
+ *
+ ****************************************************************************/
+
+bool nxsig_waitmask_set(FAR const sigset_t *set, FAR sigset_t *saved);
+
+/****************************************************************************
+ * Name: nxsig_waitmask_restore
+ *
+ * Description:
+ *   Restore the signal mask that nxsig_waitmask_set() saved.  In a system
+ *   call, the temporary mask stays until the end of the system call, so
+ *   that the handlers of the signals that it unblocks run.
+ *
+ * Input Parameters:
+ *   saved - The signal mask from nxsig_waitmask_set()
+ *
+ * Returned Value:
+ *   None
+ *
+ ****************************************************************************/
+
+void nxsig_waitmask_restore(FAR const sigset_t *saved);
 
 /****************************************************************************
  * Name: nxsig_procmask
@@ -375,7 +457,7 @@ int nxsig_action(int signo, FAR const struct sigaction *act,
  *
  ****************************************************************************/
 
-int nxsig_queue(int pid, int signo, union sigval value);
+int nxsig_queue(int pid, int signo, const union sigval value);
 
 /****************************************************************************
  * Name: nxsig_kill
@@ -387,14 +469,14 @@ int nxsig_queue(int pid, int signo, union sigval value);
  *   the POSIX standard kill() function but does not modify the application
  *   errno variable.
  *
- *   Limitation: Sending of signals to 'process groups' is not
- *   supported in NuttX
+ *   With CONFIG_SCHED_PROCESS_GROUPS, a pid of 0 is the process group of
+ *   the caller, and -pid is the process group pid.  Without it, a process
+ *   group is one process: 0 is the caller and -pid is the process pid.
  *
  * Input Parameters:
  *   pid - The id of the task to receive the signal.  The POSIX nxsig_kill
  *     specification encodes process group information as zero and
- *     negative pid values.  Only positive, non-zero values of pid are
- *     supported by this implementation.
+ *     negative pid values.  A pid of -1 (all processes) is not supported.
  *   signo - The signal number to send.  If signo is zero, no signal is
  *     sent, but all error checking is performed.
  *
@@ -407,11 +489,34 @@ int nxsig_queue(int pid, int signo, union sigval value);
  *    EPERM  The process does not have permission to send the
  *           signal to any of the target processes.
  *    ESRCH  The pid or process group does not exist.
- *    ENOSYS Do not support sending signals to process groups.
+ *    ENOSYS pid is -1: a signal to all processes is not supported.
  *
  ****************************************************************************/
 
 int nxsig_kill(pid_t pid, int signo);
+
+/****************************************************************************
+ * Name: nxsig_kill_foreground
+ *
+ * Description:
+ *   Send a signal of a terminal to its foreground process group pgrp.  If
+ *   no process is in the process group pgrp, the process pgrp gets it.
+ *   Without CONFIG_SCHED_PROCESS_GROUPS, this is nxsig_kill().
+ *
+ * Input Parameters:
+ *   pgrp  - The foreground process group ID (or a process ID)
+ *   signo - The signal number to send
+ *
+ * Returned Value:
+ *   As nxsig_kill().
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_SCHED_PROCESS_GROUPS
+int nxsig_kill_foreground(pid_t pgrp, int signo);
+#else
+#  define nxsig_kill_foreground(pgrp, signo) nxsig_kill(pgrp, signo)
+#endif
 
 /****************************************************************************
  * Name: nxsig_tgkill
@@ -583,8 +688,15 @@ int nxsig_timedwait(FAR const sigset_t *set, FAR struct siginfo *info,
  *
  ****************************************************************************/
 
-int nxsig_nanosleep(FAR const struct timespec *rqtp,
-                    FAR struct timespec *rmtp);
+static inline int nxsig_nanosleep(FAR const struct timespec *rqtp,
+                                  FAR struct timespec *rmtp)
+{
+  int ret;
+
+  ret = nxsig_clockwait(CLOCK_REALTIME, 0, rqtp, rmtp);
+
+  return ret == -EAGAIN ? 0 : ret;
+}
 
 /****************************************************************************
  * Name: nxsig_sleep
@@ -649,6 +761,24 @@ unsigned int nxsig_sleep(unsigned int seconds);
  ****************************************************************************/
 
 int nxsig_usleep(useconds_t usec);
+
+/****************************************************************************
+ * Name: nxsig_event_valid
+ *
+ * Description:
+ *   Check a sigevent handed in by the calling task before it is stored:
+ *   its signal must exist and a SIGEV_THREAD_ID target must be one of the
+ *   caller's own threads.
+ *
+ * Input Parameters:
+ *   event - The instance of struct sigevent to check.
+ *
+ * Returned Value:
+ *   Zero (OK) if the event may be stored; -EINVAL if not.
+ *
+ ****************************************************************************/
+
+int nxsig_event_valid(FAR const struct sigevent *event);
 
 /****************************************************************************
  * Name: nxsig_notification

@@ -51,18 +51,19 @@
 /* Allocate a new ICMPv6 data callback */
 
 #define icmpv6_callback_alloc(dev, conn) \
-  devif_callback_alloc((dev), &(conn)->sconn.list, &(conn)->sconn.list_tail)
+  devif_callback_alloc((dev), &(conn)->sconn.s_list, &(conn)->sconn.s_listtail)
 #define icmpv6_callback_free(dev, conn, cb) \
-  devif_conn_callback_free((dev), (cb), &(conn)->sconn.list, &(conn)->sconn.list_tail)
+  devif_conn_callback_free((dev), (cb), &(conn)->sconn.s_list, &(conn)->sconn.s_listtail)
 
 /****************************************************************************
  * Public Type Definitions
  ****************************************************************************/
 
-struct net_driver_s; /* Forward reference */
-struct socket;       /* Forward reference */
-struct sockaddr;     /* Forward reference */
-struct pollfd;       /* Forward reference */
+struct net_driver_s;  /* Forward reference */
+struct socket;        /* Forward reference */
+struct sockaddr;      /* Forward reference */
+struct pollfd_s;      /* Forward reference */
+struct icmpv6_conn_s; /* Forward reference */
 
 #ifdef CONFIG_NET_ICMPv6_SOCKET
 /* Representation of a IPPROTO_ICMP socket connection */
@@ -74,7 +75,7 @@ struct devif_callback_s; /* Forward reference */
 struct icmpv6_poll_s
 {
   FAR struct socket *psock;        /* IPPROTO_ICMP6 socket structure */
-  FAR struct pollfd *fds;          /* Needed to handle poll events */
+  FAR struct pollfd_s *fds;        /* Needed to handle poll events */
   FAR struct devif_callback_s *cb; /* Needed to teardown the poll */
 };
 
@@ -150,17 +151,14 @@ struct icmpv6_pmtu_entry
  ****************************************************************************/
 
 #ifdef __cplusplus
-#  define EXTERN extern "C"
 extern "C"
 {
-#else
-#  define EXTERN extern
 #endif
 
 #ifdef CONFIG_NET_ICMPv6_SOCKET
 /* PF_INET6 socket address family, IPPROTO_ICMP6 protocol interface */
 
-EXTERN const struct sock_intf_s g_icmpv6_sockif;
+extern const struct sock_intf_s g_icmpv6_sockif;
 #endif
 
 /****************************************************************************
@@ -236,8 +234,9 @@ void icmpv6_input(FAR struct net_driver_s *dev, unsigned int iplen);
  *   found in the Neighbor Table.
  *   On error a negated errno value is returned:
  *
- *     -ETIMEDOUT:    The number or retry counts has been exceed.
- *     -EHOSTUNREACH: Could not find a route to the host
+ *     -ENETUNREACH:  No device or router reaches the address,
+ *     -EHOSTUNREACH: The address resolution failed
+ *     -ENOMEM:       No callback available
  *
  * Assumptions:
  *   This function is called from the normal tasking context.
@@ -621,6 +620,8 @@ FAR struct icmpv6_conn_s *icmpv6_active(uint16_t id);
 
 #ifdef CONFIG_NET_ICMPv6_SOCKET
 FAR struct icmpv6_conn_s *icmpv6_nextconn(FAR struct icmpv6_conn_s *conn);
+#else
+#  define icmpv6_nextconn(c) NULL
 #endif
 
 /****************************************************************************
@@ -716,7 +717,7 @@ ssize_t icmpv6_recvmsg(FAR struct socket *psock, FAR struct msghdr *msg,
  ****************************************************************************/
 
 #ifdef CONFIG_NET_ICMPv6_SOCKET
-int icmpv6_pollsetup(FAR struct socket *psock, FAR struct pollfd *fds);
+int icmpv6_pollsetup(FAR struct socket *psock, FAR struct pollfd_s *fds);
 #endif
 
 /****************************************************************************
@@ -736,7 +737,7 @@ int icmpv6_pollsetup(FAR struct socket *psock, FAR struct pollfd *fds);
  ****************************************************************************/
 
 #ifdef CONFIG_NET_ICMPv6_SOCKET
-int icmpv6_pollteardown(FAR struct socket *psock, FAR struct pollfd *fds);
+int icmpv6_pollteardown(FAR struct socket *psock, FAR struct pollfd_s *fds);
 #endif
 
 /****************************************************************************
@@ -838,7 +839,6 @@ icmpv6_find_pmtu_entry(net_ipv6addr_t destipaddr);
 
 void icmpv6_add_pmtu_entry(net_ipv6addr_t destipaddr, int mtu);
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

@@ -28,14 +28,15 @@
 #include <errno.h>
 #include <execinfo.h>
 #include <fcntl.h>
+#include <lzf.h>
 #include <stdint.h>
 #include <stdio.h>
 
-#include <nuttx/crc16.h>
 #include <nuttx/event.h>
 #include <nuttx/fs/fs.h>
 #include <nuttx/kmalloc.h>
 #include <nuttx/kthread.h>
+#include <nuttx/lib/xorsum.h>
 #include <nuttx/mutex.h>
 #include <nuttx/nuttx.h>
 #include <nuttx/power/pm.h>
@@ -47,6 +48,9 @@
 /****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
+
+#define RPMSG_PORT_UART_CMD_NORMAL         0x00
+#define RPMSG_PORT_UART_CMD_LZF            0x01
 
 #define RPMSG_PORT_UART_START              0x7f
 #define RPMSG_PORT_UART_CONNREQ            0x7e
@@ -80,8 +84,8 @@
 #define RPMSG_PORT_UART_EVT_TX             (1 << 3) /* TX is ready or not */
 
 #ifdef CONFIG_RPMSG_PORT_UART_CRC
-#  define rpmsg_port_uart_crc16(hdr)       crc16ibm((FAR uint8_t *)&(hdr)->cmd, \
-                                                     (hdr)->len - sizeof((hdr)->crc))
+#  define rpmsg_port_uart_crc16(hdr)       xorsum16(&(hdr)->cmd, \
+                                                    (hdr)->len - sizeof((hdr)->crc))
 #else
 #  define rpmsg_port_uart_crc16(hdr)       0
 #endif
@@ -95,7 +99,8 @@
 #endif
 
 #define rpmsgerrdump(m,b,s)                lib_dumpbuffer(m, (FAR const uint8_t *)b, s)
-#define rpmsgvbs                           rpmsgerr
+
+#define rpmsg_port_uart_staywake(r)        rpmsg_port_uart_staywake_times(r, ~0)
 
 /****************************************************************************
  * Private Types
@@ -114,12 +119,21 @@ struct rpmsg_port_uart_s
   uint8_t                         rx_dbg_buf[RPMSG_PORT_UART_DBG_BUFLEN];
   int                             rx_dbg_idx;
   nxevent_t                       event;
+
+  /* Serialize the connect handshake */
+
+  mutex_t                         conn_lock;
   struct notifier_block           nb;       /* Reboot notifier block */
   pid_t                           tx_tid;
   uint8_t                         tx_staywake;
 #ifdef CONFIG_PM
   struct pm_wakelock_s            tx_wakelock;
   struct pm_wakelock_s            rx_wakelock;
+#endif
+#ifdef CONFIG_RPMSG_PORT_UART_COMPRESSION
+  FAR struct rpmsg_port_header_s *tx_lzfhdr;  /* Buffer for LZF compression output */
+  FAR struct rpmsg_port_header_s *rx_lzfhdr;  /* Pre-reserved rxq buffer for decompression */
+  lzf_state_t                     tx_lzfhtab; /* LZF compression hash table */
 #endif
 };
 
@@ -136,7 +150,8 @@ rpmsg_port_uart_queue_noavail(FAR struct rpmsg_port_s *port,
                               FAR struct rpmsg_port_queue_s *queue);
 static void rpmsg_port_uart_register_callback(FAR struct rpmsg_port_s *port,
                                               rpmsg_port_rx_cb_t callback);
-static void rpmsg_port_uart_dump(FAR struct rpmsg_port_s *port);
+static void rpmsg_port_uart_dump(FAR struct rpmsg_port_s *port,
+                                 bool verbose);
 
 static void rpmsg_port_uart_rx_worker(FAR struct rpmsg_port_uart_s *rpuart,
                                       bool process_rx);
@@ -178,6 +193,7 @@ rpmsg_port_uart_set(FAR struct rpmsg_port_uart_s *rpuart,
                     nxevent_mask_t event)
 {
   bool ret = rpmsg_port_uart_check(rpuart, event);
+
   nxevent_post(&rpuart->event, event, 0);
   return ret;
 }
@@ -215,6 +231,7 @@ static inline void
 rpmsg_port_uart_send_one(FAR struct rpmsg_port_uart_s *rpuart, uint8_t ch)
 {
   ssize_t ret = file_write(&rpuart->file, &ch, 1);
+
   if (ret != 1)
     {
       rpmsgerr("Send ch %u failed, ret=%zd\n", ch, ret);
@@ -223,28 +240,39 @@ rpmsg_port_uart_send_one(FAR struct rpmsg_port_uart_s *rpuart, uint8_t ch)
 }
 
 /****************************************************************************
- * Name: rpmsg_port_uart_staywake
+ * Name: rpmsg_port_uart_staywake_times
  *
  * Description:
  *   Send wakeup data to peer if peer is suspended.
  *
  ****************************************************************************/
 
-static void rpmsg_port_uart_staywake(FAR struct rpmsg_port_uart_s *rpuart)
+static int
+rpmsg_port_uart_staywake_times(FAR struct rpmsg_port_uart_s *rpuart,
+                               unsigned int times)
 {
   pm_wakelock_stay(&rpuart->tx_wakelock);
 
   if (rpmsg_port_uart_check(rpuart, RPMSG_PORT_UART_EVT_WAKED))
     {
-      rpmsgdbg("Peer is running, no need to wakeup 0x%x 0x%x\n",
+      rpmsgdbg("Peer is running, no need to wakeup 0x%x 0x%lx\n",
                rpuart->tx_staywake, rpuart->event.events);
-      return;
+      return 0;
     }
 
   rpmsg_port_uart_set(rpuart, RPMSG_PORT_UART_EVT_WAKING);
   for (; ; )
     {
-      rpmsgdbg("Try to wakeup peer 0x%x 0x%x\n",
+      if (times-- == 0)
+        {
+          rpmsg_port_uart_clear(rpuart, RPMSG_PORT_UART_EVT_WAKING);
+          pm_wakelock_relax(&rpuart->tx_wakelock);
+          rpmsgerr("Wakeup failed 0x%x 0x%lx\n",
+                   rpuart->tx_staywake, rpuart->event.events);
+          return -EAGAIN;
+        }
+
+      rpmsgdbg("Try to wakeup peer 0x%x 0x%lx\n",
                rpuart->tx_staywake, rpuart->event.events);
       rpmsg_port_uart_send_one(rpuart, rpuart->tx_staywake);
       if (rpmsg_port_uart_wait(rpuart, RPMSG_PORT_UART_EVT_WAKED,
@@ -255,8 +283,9 @@ static void rpmsg_port_uart_staywake(FAR struct rpmsg_port_uart_s *rpuart)
     }
 
   rpmsg_port_uart_clear(rpuart, RPMSG_PORT_UART_EVT_WAKING);
-  rpmsgdbg("Wakeup peer success 0x%x 0x%x\n",
+  rpmsgdbg("Wakeup peer success 0x%x 0x%lx\n",
            rpuart->tx_staywake, rpuart->event.events);
+  return 0;
 }
 
 /****************************************************************************
@@ -267,7 +296,7 @@ static void rpmsg_port_uart_relaxwake(FAR struct rpmsg_port_uart_s *rpuart)
 {
   if (rpmsg_port_uart_check(rpuart, RPMSG_PORT_UART_EVT_WAKED))
     {
-      rpmsgdbg("Try allow peer sleep 0x%x 0x%x\n",
+      rpmsgdbg("Try allow peer sleep 0x%x 0x%lx\n",
                rpuart->tx_staywake, rpuart->event.events);
       rpmsg_port_uart_send_one(rpuart, RPMSG_PORT_UART_RELAXWAKE);
       rpmsg_port_uart_clear(rpuart, RPMSG_PORT_UART_EVT_WAKED);
@@ -301,6 +330,7 @@ static void rpmsg_port_uart_send_packet(FAR struct rpmsg_port_uart_s *rpuart,
   while (datalen > 0)
     {
       ssize_t ret = file_write(&rpuart->file, data, datalen);
+
       DEBUGASSERT(ret >= 0);
 
       data = (FAR uint8_t *)data + ret;
@@ -371,12 +401,52 @@ static void rpmsg_port_uart_send_frame(FAR struct rpmsg_port_uart_s *rpuart,
 static void rpmsg_port_uart_send_data(FAR struct rpmsg_port_uart_s *rpuart,
                                       FAR struct rpmsg_port_header_s *hdr)
 {
-  rpmsgdbg("Send data len: %" PRIu16 "\n", hdr->len);
+  uint16_t len = hdr->len - sizeof(*hdr);
+#ifdef CONFIG_RPMSG_PORT_UART_COMPRESSION
+  FAR struct rpmsg_port_header_s *lzfhdr = rpuart->tx_lzfhdr;
+  FAR struct lzf_header_s *reshdr;
+  size_t lzflen;
 
-  hdr->cmd = 0;
+  /* Try LZF compression: compress hdr->buf payload into lzfhdr->buf.
+   * out_len is set to len so compression only succeeds (TYPE1) when
+   * the result is strictly smaller than the original data.
+   *
+   * Side effects of lzf_compress:
+   *  - TYPE1 (compressed): writes a 7-byte LZF file header at
+   *    lzfhdr->buf - 7, clobbering lzfhdr's port header fields.
+   *    We rebuild them below before sending.
+   *  - TYPE0 (incompressible fallback): writes a 5-byte header at
+   *    hdr->buf - 5, clobbering hdr->cmd, hdr->avail, and hdr->len.
+   *    The else branch restores all three fields.
+   */
+
+  lzflen = lzf_compress(hdr->buf, len, lzfhdr->buf, len,
+                        rpuart->tx_lzfhtab, &reshdr);
+  if (reshdr->lzf_type == LZF_TYPE1_HDR)
+    {
+      /* Compression successful (TYPE1).  The compressed payload sits
+       * at lzfhdr->buf with length = lzflen - LZF_TYPE1_HDR_SIZE.
+       * Copy the original port header to lzfhdr (restoring fields
+       * clobbered by the LZF file header), then override cmd and len
+       * for the compressed frame.  Finally redirect hdr to lzfhdr
+       * so the common CRC + send path below uses the compressed frame.
+       */
+
+      memcpy(lzfhdr, hdr, sizeof(*lzfhdr));
+      lzfhdr->cmd = RPMSG_PORT_UART_CMD_LZF;
+      lzfhdr->len = sizeof(*lzfhdr) + lzflen - LZF_TYPE1_HDR_SIZE;
+      hdr = lzfhdr;
+    }
+  else
+#endif
+    {
+      hdr->cmd = RPMSG_PORT_UART_CMD_NORMAL;
+      hdr->len = sizeof(*hdr) + len;
+    }
+
+  rpmsgdbg("Send data len: %" PRIu16 "\n", hdr->len);
   hdr->avail = 0;
   hdr->crc = rpmsg_port_uart_crc16(hdr);
-
   rpmsg_port_uart_send_frame(rpuart, hdr, hdr->len);
 }
 
@@ -436,7 +506,7 @@ static void rpmsg_port_uart_register_callback(FAR struct rpmsg_port_s *port,
  * Name: rpmsg_port_uart_dump
  ****************************************************************************/
 
-static void rpmsg_port_uart_dump(FAR struct rpmsg_port_s *port)
+static void rpmsg_port_uart_dump(FAR struct rpmsg_port_s *port, bool verbose)
 {
   FAR struct rpmsg_port_uart_s *rpuart =
     (FAR struct rpmsg_port_uart_s *)port;
@@ -472,10 +542,21 @@ static void
 rpmsg_port_uart_process_rx_conn(FAR struct rpmsg_port_uart_s *rpuart,
                                 uint8_t ch)
 {
+  bool conned;
+
+  /* Only the EVT_CONNED update is serialized against the tx thread's
+   * check-and-send; register/unregister below may re-enter this function
+   * on the same thread through the rx worker.
+   */
+
+  nxmutex_lock(&rpuart->conn_lock);
+  conned = rpmsg_port_uart_set(rpuart, RPMSG_PORT_UART_EVT_CONNED);
+  nxmutex_unlock(&rpuart->conn_lock);
+
   if (ch == RPMSG_PORT_UART_CONNREQ)
     {
       rpmsgvbs("Connect Request Command 0x%lx\n", rpuart->event.events);
-      if (rpmsg_port_uart_set(rpuart, RPMSG_PORT_UART_EVT_CONNED))
+      if (conned)
         {
           rpmsg_port_drop_packets(&rpuart->port, RPMSG_PORT_DROP_TXQ);
           rpmsg_port_unregister(&rpuart->port);
@@ -488,7 +569,7 @@ rpmsg_port_uart_process_rx_conn(FAR struct rpmsg_port_uart_s *rpuart,
   else if (ch == RPMSG_PORT_UART_CONNACK)
     {
       rpmsgvbs("Connect Ack Command 0x%lx\n", rpuart->event.events);
-      if (!rpmsg_port_uart_set(rpuart, RPMSG_PORT_UART_EVT_CONNED))
+      if (!conned)
         {
           rpmsg_port_drop_packets(&rpuart->port, RPMSG_PORT_DROP_ALL);
           rpmsg_port_register(&rpuart->port, rpuart->localcpu);
@@ -552,7 +633,7 @@ rpmsg_port_uart_process_rx_cmd(FAR struct rpmsg_port_uart_s *rpuart,
         break;
       case RPMSG_PORT_UART_STAYWAKE1:
         count = pm_wakelock_staycount(&rpuart->rx_wakelock);
-        rpmsgdbg("Received staywake1 command %d 0x%x\n",
+        rpmsgdbg("Received staywake1 command %d 0x%lx\n",
                  count, rpuart->event.events);
         if (count == 0)
           {
@@ -563,7 +644,7 @@ rpmsg_port_uart_process_rx_cmd(FAR struct rpmsg_port_uart_s *rpuart,
         break;
       case RPMSG_PORT_UART_STAYWAKE2:
         count = pm_wakelock_staycount(&rpuart->rx_wakelock);
-        rpmsgdbg("Received staywake2 command %d 0x%x\n",
+        rpmsgdbg("Received staywake2 command %d 0x%lx\n",
                  count, rpuart->event.events);
         if (count == 0)
           {
@@ -574,7 +655,7 @@ rpmsg_port_uart_process_rx_cmd(FAR struct rpmsg_port_uart_s *rpuart,
         break;
       case RPMSG_PORT_UART_RELAXWAKE:
         count = pm_wakelock_staycount(&rpuart->rx_wakelock);
-        rpmsgdbg("Received relaxwake command %d 0x%x\n",
+        rpmsgdbg("Received relaxwake command %d 0x%lx\n",
                  count, rpuart->event.events);
         if (count != 0)
           {
@@ -583,7 +664,7 @@ rpmsg_port_uart_process_rx_cmd(FAR struct rpmsg_port_uart_s *rpuart,
         break;
       case RPMSG_PORT_UART_STAYWAKEACK1:
       case RPMSG_PORT_UART_STAYWAKEACK2:
-        rpmsgdbg("Received staywake ack command 0x%x 0x%x 0x%x\n",
+        rpmsgdbg("Received staywake ack command 0x%x 0x%x 0x%lx\n",
                  ch, rpuart->tx_staywake, rpuart->event.events);
         if (ch == rpuart->tx_staywake - 1 &&
             rpmsg_port_uart_check(rpuart, RPMSG_PORT_UART_EVT_WAKING))
@@ -622,6 +703,37 @@ rpmsg_port_uart_process_rx_data(FAR struct rpmsg_port_uart_s *rpuart)
   while ((hdr = rpmsg_port_queue_get_buffer(rxq, false)) != NULL)
     {
       rpmsgdbg("Received data hdr=%p len=%u\n", hdr, hdr->len);
+
+#ifdef CONFIG_RPMSG_PORT_UART_COMPRESSION
+      if (hdr->cmd == RPMSG_PORT_UART_CMD_LZF)
+        {
+          FAR struct rpmsg_port_header_s *rxhdr = rpuart->rx_lzfhdr;
+          uint16_t rxlen = hdr->len - sizeof(*hdr);
+
+          /* Decompress hdr->buf (compressed payload) into the
+           * pre-reserved rxhdr buffer.  On success, copy the port
+           * header from hdr to rxhdr, fix up rxhdr->len with the
+           * decompressed size, then swap: rxhdr goes to rx_cb and
+           * the consumed hdr becomes the new rx_lzfhdr.
+           */
+
+          rxlen = lzf_decompress(hdr->buf, rxlen, rxhdr->buf,
+                                 rxq->len - sizeof(*rxhdr));
+          if (rxlen > 0)
+            {
+              memcpy(rxhdr, hdr, sizeof(*rxhdr));
+              rxhdr->len = sizeof(*rxhdr) + rxlen;
+              rpuart->rx_lzfhdr = hdr;
+              hdr = rxhdr;
+            }
+          else
+            {
+              rpmsgerr("LZF decompress failed\n");
+              PANIC();
+            }
+        }
+#endif
+
       rpuart->rx_cb(&rpuart->port, hdr);
     }
 }
@@ -706,14 +818,18 @@ static void rpmsg_port_uart_rx_worker(FAR struct rpmsg_port_uart_s *rpuart,
                 rpmsgerrdump("Recv dbg:", rpuart->rx_dbg_buf,
                               sizeof(rpuart->rx_dbg_buf));
                 rpmsgerrdump("Recv error:", buf, ret);
-                rpmsgerrdump("Recv hdr:", hdr, hdr->len);
+
+                /* hdr->len came off the line and may be bogus here */
+
+                rpmsgerrdump("Recv hdr:", hdr, next);
                 state = RPMSG_PORT_UART_RX_WAIT_START;
                 next = 0;
               }
             else if (buf[i] == RPMSG_PORT_UART_END)
               {
-                if (hdr->len != next || (hdr->crc != 0 &&
-                    hdr->crc != rpmsg_port_uart_crc16(hdr)))
+                if (hdr->len < sizeof(*hdr) || hdr->len != next ||
+                    (hdr->crc != 0 &&
+                     hdr->crc != rpmsg_port_uart_crc16(hdr)))
                   {
                     rpmsgerr("Recv error crc=%u len=%u next=%u i=%zd "
                              "dbg_i=%d\n", hdr->crc, hdr->len, next, i,
@@ -721,10 +837,16 @@ static void rpmsg_port_uart_rx_worker(FAR struct rpmsg_port_uart_s *rpuart,
                     rpmsgerrdump("Recv dbg:", rpuart->rx_dbg_buf,
                                  sizeof(rpuart->rx_dbg_buf));
                     rpmsgerrdump("Recv error:", buf, ret);
-                    rpmsgerrdump("Recv hdr:", hdr, hdr->len);
-                  }
 
-                rpmsg_port_queue_add_buffer(rxq, hdr);
+                    /* hdr->len came off the line and may be bogus here */
+
+                    rpmsgerrdump("Recv hdr:", hdr, next);
+                    rpmsg_port_queue_return_buffer(rxq, hdr);
+                  }
+                else
+                  {
+                    rpmsg_port_queue_add_buffer(rxq, hdr);
+                  }
 
                 state = RPMSG_PORT_UART_RX_WAIT_START;
                 hdr = NULL;
@@ -807,6 +929,12 @@ static int rpmsg_port_uart_tx_thread(int argc, FAR char *argv[])
   rpuart->tx_tid = nxsched_gettid();
 
   rpmsg_port_uart_staywake(rpuart);
+
+  /* A CONNREQ sent after the rx thread has already answered CONNACK
+   * makes the peer register twice.
+   */
+
+  nxmutex_lock(&rpuart->conn_lock);
   if (!rpmsg_port_uart_check(rpuart, RPMSG_PORT_UART_EVT_CONNED))
     {
       rpmsgvbs("Not Connected, Send Conn Req\n");
@@ -816,6 +944,8 @@ static int rpmsg_port_uart_tx_thread(int argc, FAR char *argv[])
     {
       rpmsgvbs("Connected, no need Send Conn Req\n");
     }
+
+  nxmutex_unlock(&rpuart->conn_lock);
 
   for (; ; )
     {
@@ -848,7 +978,11 @@ static int rpmsg_port_uart_reboot_notifier(FAR struct notifier_block *nb,
   if ((action == SYS_POWER_OFF || action == SYS_RESTART) &&
       rpmsg_port_uart_check(rpuart, RPMSG_PORT_UART_EVT_CONNED))
     {
-      rpmsg_port_uart_staywake(rpuart);
+      if (rpmsg_port_uart_staywake_times(rpuart, 50) < 0)
+        {
+          rpmsgerr("Reboot wakeup timeout!\n");
+        }
+
       rpmsg_port_uart_send_one(rpuart, RPMSG_PORT_UART_POWEROFF);
     }
 
@@ -882,16 +1016,25 @@ int rpmsg_port_uart_initialize(FAR const struct rpmsg_port_config_s *cfg,
   int ret;
   int rx;
 
-  rpuart = kmm_zalloc(sizeof(*rpuart));
+  rpuart = kmm_malloc(sizeof(*rpuart)
+#ifdef CONFIG_RPMSG_PORT_UART_COMPRESSION
+                      + cfg->txlen
+#endif
+                    );
   if (rpuart == NULL)
     {
       rpmsgerr("Malloc rptun uart failed\n");
       return -ENOMEM;
     }
 
+  memset(rpuart, 0, sizeof(*rpuart));
+#ifdef CONFIG_RPMSG_PORT_UART_COMPRESSION
+  rpuart->tx_lzfhdr = (FAR struct rpmsg_port_header_s *)(rpuart + 1);
+#endif
   rpuart->rx_state = RPMSG_PORT_UART_RX_WAIT_START;
   rpuart->tx_staywake = RPMSG_PORT_UART_STAYWAKE1;
   nxevent_init(&rpuart->event, 0);
+  nxmutex_init(&rpuart->conn_lock);
 
   /* Hardware initialize */
 
@@ -913,6 +1056,17 @@ int rpmsg_port_uart_initialize(FAR const struct rpmsg_port_config_s *cfg,
       rpmsgerr("Port initialize failed, ret=%d\n", ret);
       goto err_rpmsg_port;
     }
+
+#ifdef CONFIG_RPMSG_PORT_UART_COMPRESSION
+  rpuart->rx_lzfhdr = rpmsg_port_queue_get_available_buffer(
+                        &rpuart->port.rxq, false);
+  if (rpuart->rx_lzfhdr == NULL)
+    {
+      rpmsgerr("Get LZF rx queue buffer failed\n");
+      ret = -ENOMEM;
+      goto err_lzf;
+    }
+#endif
 
 #ifdef CONFIG_PM
   snprintf(arg1, sizeof(arg1), "rpmsg-uart-rx-%s", cfg->remotecpu);
@@ -961,10 +1115,16 @@ err_rx_thread:
   pm_wakelock_uninit(&rpuart->tx_wakelock);
   pm_wakelock_uninit(&rpuart->rx_wakelock);
 #endif
+#ifdef CONFIG_RPMSG_PORT_UART_COMPRESSION
+  rpmsg_port_queue_return_buffer(&rpuart->port.rxq,
+                                 rpuart->rx_lzfhdr);
+err_lzf:
+#endif
   rpmsg_port_uninitialize(&rpuart->port);
 err_rpmsg_port:
   file_close(&rpuart->file);
 err_file:
+  nxmutex_destroy(&rpuart->conn_lock);
   nxevent_destroy(&rpuart->event);
   kmm_free(rpuart);
   return ret;

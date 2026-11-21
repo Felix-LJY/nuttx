@@ -42,6 +42,8 @@
 #  include <arch/imxrt/imxrt106x_irq.h>
 #elif defined(CONFIG_ARCH_FAMILY_IMXRT117x)
 #  include <arch/imxrt/imxrt117x_irq.h>
+#elif defined(CONFIG_ARCH_FAMILY_IMXRT118x)
+#  include <arch/imxrt/imxrt118x_irq.h>
 #else
 #  error Unrecognized i.MX RT architecture
 #endif
@@ -93,18 +95,14 @@
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
  * Public Function Prototypes
  ****************************************************************************/
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

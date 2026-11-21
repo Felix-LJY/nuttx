@@ -239,9 +239,9 @@
 
 #define STM32_RCC_D3CCIPR_I2C4SRC    RCC_D3CCIPR_I2C4SEL_HSI
 
-/* SPI123 clock source - PLL1Q */
+/* SPI123 clock source - PLL2P (75 MHz, kernel clock must be <= 200 MHz) */
 
-#define STM32_RCC_D2CCIP1R_SPI123SRC RCC_D2CCIP1R_SPI123SEL_PLL1
+#define STM32_RCC_D2CCIP1R_SPI123SRC RCC_D2CCIP1R_SPI123SEL_PLL2
 
 /* SPI45 clock source - APB (PCLK2?) */
 
@@ -375,6 +375,16 @@
 #define GPIO_SPI4_MOSI   (GPIO_SPI4_MOSI_1 | GPIO_SPEED_50MHz) /* PE14 */
 #define GPIO_SPI4_MISO   0
 
+/* SPI1 - Morse Micro HaLow module (Quectel FGH100M)
+ *
+ * SCK and MOSI use the lowest slew rate: with jumper wires the ringing of
+ * fast edges double clocks the module SPI interface.
+ */
+
+#define GPIO_SPI1_SCK    (GPIO_SPI1_SCK_1  | GPIO_SPEED_2MHz)   /* PA5 */
+#define GPIO_SPI1_MISO   (GPIO_SPI1_MISO_1 | GPIO_SPEED_2MHz)   /* PA6 */
+#define GPIO_SPI1_MOSI   (GPIO_SPI1_MOSI_1 | GPIO_SPEED_2MHz)   /* PA7 */
+
 /* OTGFS */
 
 #define GPIO_OTGFS_DM  (GPIO_OTGFS_DM_0|GPIO_SPEED_100MHz) /* PA11 */
@@ -387,20 +397,15 @@
 
 #ifndef __ASSEMBLY__
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
  * Public Function Prototypes
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

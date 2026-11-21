@@ -86,9 +86,15 @@ int nxevent_post(FAR nxevent_t *event, nxevent_mask_t events,
       event->events |= events ? events : ~0;
     }
 
+  waitlist = EVENT_WAITLIST(event);
+  if (dq_empty(waitlist))
+    {
+      leave_critical_section(flags);
+      return OK;
+    }
+
   postall = ((eflags & NXEVENT_POST_ALL) != 0);
   rtcb    = this_task();
-  waitlist = EVENT_WAITLIST(event);
 
   dq_for_every_safe(waitlist, entry, tmp)
     {
@@ -104,7 +110,11 @@ int nxevent_post(FAR nxevent_t *event, nxevent_mask_t events,
 
           /* Stop timeout watchdog */
 
-          wd_cancel(&wtcb->waitdog);
+          if (WDOG_ISACTIVE(&wtcb->waitdog))
+            {
+              wd_cancel(&wtcb->waitdog);
+            }
+
           wtcb->waitobj = NULL;
 
           /* Make task ready-to-run */

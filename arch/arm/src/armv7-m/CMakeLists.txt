@@ -36,7 +36,6 @@ set(SRCS
     arm_perf.c
     arm_svcall.c
     arm_systemreset.c
-    arm_tcbinfo.c
     arm_trigger_irq.c
     arm_usagefault.c
     arm_dbgmonitor.c)
@@ -75,10 +74,6 @@ endif()
 
 if(CONFIG_ARM_COREDUMP_REGION)
   list(APPEND SRCS arm_dumpnvic.c)
-endif()
-
-if(CONFIG_LIB_SYSCALL)
-  list(APPEND SRCS arm_dispatch_syscall.S)
 endif()
 
 target_sources(arch PRIVATE ${SRCS})

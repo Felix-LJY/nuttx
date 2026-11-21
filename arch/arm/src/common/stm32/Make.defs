@@ -41,6 +41,27 @@ ARCHXXINCLUDES += ${INCDIR_PREFIX}$(STM32_COMMON_SRCDIR)
 
 CHIP_CSRCS += stm32_waste.c
 CHIP_CSRCS += stm32_uid.c
+CHIP_CSRCS += stm32_lsi.c
+
+ifneq ($(CONFIG_SCHED_TICKLESS),y)
+ifeq ($(CONFIG_ARCH_ARMV6M),y)
+CHIP_CSRCS += stm32_timerisr_armv6m.c
+else
+CHIP_CSRCS += stm32_timerisr.c
+endif
+endif
+
+ifdef CONFIG_STM32_TICKLESS_TIMER
+CHIP_CSRCS += stm32_tickless.c
+endif
+
+ifeq ($(CONFIG_STM32_IWDG),y)
+CHIP_CSRCS += stm32_iwdg.c
+endif
+
+ifeq ($(CONFIG_STM32_WWDG),y)
+CHIP_CSRCS += stm32_wwdg.c
+endif
 
 ifneq ($(CONFIG_ARCH_CUSTOM_PMINIT),y)
 ifneq ($(filter y,$(CONFIG_STM32_COMMON_LEGACY) \
@@ -49,31 +70,108 @@ CHIP_CSRCS += stm32_pminitialize_default.c
 endif
 endif
 
-ifeq ($(CONFIG_STM32_HAVE_IP_USART_M33_V3),y)
-CHIP_CSRCS += stm32_lowputc_usart_m33_v3.c
-CHIP_CSRCS += stm32_serial_m33_v3.c
+ifeq ($(CONFIG_STM32_HAVE_IP_USART_M33M55_V3),y)
+CHIP_CSRCS += stm32_lowputc_usart_m33m55_v3.c
+CHIP_CSRCS += stm32_serial_m33m55_v3.c
 endif
 
-ifeq ($(CONFIG_STM32_HAVE_IP_GPIO_M33_V1),y)
-CHIP_CSRCS += stm32_gpio_m33_v1.c
+ifeq ($(CONFIG_STM32_HAVE_IP_GPIO_M33M55_V1),y)
+CHIP_CSRCS += stm32_gpio_m33m55_v1.c
 endif
 
-ifeq ($(CONFIG_STM32_HAVE_IP_EXTI_M33_V1),y)
-CHIP_CSRCS += stm32_exti_gpio_m33_v1.c
+ifeq ($(CONFIG_STM32_HAVE_IP_DMA_GPDMA)$(CONFIG_STM32_DMA),yy)
+CHIP_CSRCS += stm32_dma_gpdma.c
+endif
+
+ifeq ($(CONFIG_STM32_HAVE_IP_EXTI_M33M55_V1),y)
+CHIP_CSRCS += stm32_exti_gpio_m33m55_v1.c
+endif
+
+ifeq ($(CONFIG_STM32_RNG)$(CONFIG_STM32_HAVE_IP_RNG_V1),yy)
+CHIP_CSRCS += stm32_rng_v1.c
+endif
+
+ifeq ($(CONFIG_STM32_RTC)$(CONFIG_STM32_HAVE_IP_RTCC_M33M55_V1),yy)
+CHIP_CSRCS += stm32_rtcc_m33m55_v1.c
+ifeq ($(CONFIG_RTC_DRIVER),y)
+CHIP_CSRCS += stm32_rtc_m3m4_v1_lowerhalf.c
+endif
+endif
+
+ifeq ($(CONFIG_STM32_LTDC)$(CONFIG_STM32_HAVE_IP_LTDC_V2),yy)
+CHIP_CSRCS += stm32_ltdc_v1v2.c
+endif
+
+ifeq ($(CONFIG_STM32_I2C)$(CONFIG_STM32_HAVE_IP_I2C_M33M55_V2),yy)
+CHIP_CSRCS += stm32_i2c_m33m55_v2.c
+endif
+
+ifeq ($(CONFIG_STM32_SPI)$(CONFIG_STM32_HAVE_IP_SPI_V5),yy)
+CHIP_CSRCS += stm32_spi_v5.c
+endif
+
+ifeq ($(CONFIG_STM32_ETHMAC)$(CONFIG_STM32_HAVE_IP_ETHMAC_V2),yy)
+CHIP_CSRCS += stm32_eth_v2.c
+endif
+
+ifeq ($(CONFIG_MDIO_BUS)$(CONFIG_STM32_HAVE_IP_ETHMAC_V2),yy)
+ifeq ($(CONFIG_STM32_ETH_MDIO_GPIO),y)
+CHIP_CSRCS += stm32_mdio_gpio.c
+else
+CHIP_CSRCS += stm32_mdio_v2.c
+endif
+endif
+
+ifeq ($(CONFIG_STM32_SDMMC)$(CONFIG_STM32_HAVE_IP_SDMMC_V2),yy)
+CHIP_CSRCS += stm32_sdmmc_v2.c
 endif
 
 ifeq ($(CONFIG_STM32_COMMON_M33),y)
 CHIP_CSRCS += stm32_allocateheap_m33_v1.c
 CHIP_CSRCS += stm32_irq_m33_v1.c
 CHIP_CSRCS += stm32_start_m33_v1.c
-CHIP_CSRCS += stm32_timerisr_m33_v1.c
 ifneq ($(CONFIG_ARCH_IDLE_CUSTOM),y)
 CHIP_CSRCS += stm32_idle_m33_v1.c
 endif
+ifeq ($(CONFIG_ARM_MPU),y)
+ifneq ($(CONFIG_BUILD_PROTECTED),y)
+CHIP_CSRCS += stm32_mpuinit_m33_v1.c
+endif
+endif
+endif
+
+ifeq ($(CONFIG_TIMER)$(CONFIG_STM32_TIM),yy)
+CHIP_CSRCS += stm32_tim_lowerhalf.c
+endif
+ifeq ($(CONFIG_STM32_TIM),y)
+CHIP_CSRCS += stm32_tim.c
+endif
+ifeq ($(CONFIG_STM32_LPTIM),y)
+CHIP_CSRCS += stm32_lptim.c
+ifeq ($(CONFIG_TIMER),y)
+CHIP_CSRCS += stm32_lptim_lowerhalf.c
+endif
+ifeq ($(CONFIG_ONESHOT),y)
+CHIP_CSRCS += stm32_lptim_oneshot_lowerhalf.c
+endif
+endif
+ifeq ($(CONFIG_STM32_FREERUN),y)
+CHIP_CSRCS += stm32_freerun.c
+endif
+ifeq ($(CONFIG_STM32_ONESHOT),y)
+CHIP_CSRCS += stm32_oneshot.c
+CHIP_CSRCS += stm32_oneshot_lowerhalf.c
+endif
+ifeq ($(CONFIG_SENSORS_QENCODER)$(CONFIG_STM32_QE),yy)
+CHIP_CSRCS += stm32_qencoder.c
 endif
 
 ifeq ($(CONFIG_STM32_PULSECOUNT),y)
 CHIP_CSRCS += stm32_pulsecount.c
+endif
+
+ifeq ($(CONFIG_STM32_1WIREDRIVER),y)
+CHIP_CSRCS += stm32_1wire_m3m4_v1.c
 endif
 
 ifeq ($(CONFIG_STM32_COMMON_LEGACY),y)
@@ -81,7 +179,6 @@ ifeq ($(CONFIG_STM32_COMMON_LEGACY),y)
 CHIP_CSRCS += stm32_allocateheap_m3m4_v1.c
 CHIP_CSRCS += stm32_start_m3m4_v1.c
 CHIP_CSRCS += stm32_lse_m3m4_v1.c
-CHIP_CSRCS += stm32_lsi_m3m4_v1.c
 CHIP_CSRCS += stm32_irq_m3m4_v1.c
 ifneq ($(filter y,$(CONFIG_STM32_HAVE_IP_USART_V1) \
             $(CONFIG_STM32_HAVE_IP_USART_V2) \
@@ -117,25 +214,12 @@ endif
 ifeq ($(CONFIG_STM32_HAVE_IP_SDIO_M3M4_V1),y)
 CHIP_CSRCS += stm32_sdio_m3m4_v1.c
 endif
-ifeq ($(CONFIG_STM32_HAVE_IP_TIMERS),y)
-CHIP_CSRCS += stm32_tim_m3m4_v1v2v3.c
-endif
 ifeq ($(CONFIG_STM32_HAVE_IP_CCM_M3M4_V1),y)
 CHIP_CSRCS += stm32_ccm_m3m4_v1.c
 endif
 CHIP_CSRCS += stm32_capture_m3m4_v1.c
 ifeq ($(CONFIG_STM32_HAVE_IP_DFUMODE_M3M4_V1),y)
 CHIP_CSRCS += stm32_dfumode_m3m4_v1.c
-endif
-
-ifdef CONFIG_STM32_TICKLESS_TIMER
-CHIP_CSRCS += stm32_tickless_m3m4_v1.c
-else
-ifeq ($(CONFIG_ARCH_ARMV6M),y)
-CHIP_CSRCS += stm32_timerisr_armv6m.c
-else
-CHIP_CSRCS += stm32_timerisr_armv7m.c
-endif
 endif
 
 ifeq ($(CONFIG_BUILD_PROTECTED),y)
@@ -151,13 +235,11 @@ CHIP_CSRCS += stm32_pmstop_m3m4_v1.c
 CHIP_CSRCS += stm32_pmstandby_m3m4_v1.c
 CHIP_CSRCS += stm32_pmsleep_m3m4_v1.c
 
-ifeq ($(CONFIG_STM32_USART),y)
 ifneq ($(filter y,$(CONFIG_STM32_HAVE_IP_USART_V1) \
             $(CONFIG_STM32_HAVE_IP_USART_V2) \
             $(CONFIG_STM32_HAVE_IP_USART_V3) \
             $(CONFIG_STM32_HAVE_IP_USART_V4)),)
 CHIP_CSRCS += stm32_serial_m3m4_v1v2v3v4.c
-endif
 endif
 
 ifeq ($(CONFIG_STM32_DMA),y)
@@ -174,18 +256,7 @@ CHIP_CSRCS += stm32_dma_m3m4_v2_stream.c
 endif
 endif
 
-ifeq ($(CONFIG_TIMER)$(CONFIG_STM32_HAVE_IP_TIMERS),yy)
-CHIP_CSRCS += stm32_tim_m3m4_v1v2v3_lowerhalf.c
-endif
 
-ifeq ($(CONFIG_STM32_ONESHOT),y)
-CHIP_CSRCS += stm32_oneshot_m3m4_v1.c
-CHIP_CSRCS += stm32_oneshot_m3m4_v1_lowerhalf.c
-endif
-
-ifeq ($(CONFIG_STM32_FREERUN),y)
-CHIP_CSRCS += stm32_freerun_m3m4_v1.c
-endif
 
 ifeq ($(CONFIG_STM32_HAVE_IP_I2C_M3M4_V1),y)
 ifeq ($(CONFIG_STM32_I2C_ALT),y)
@@ -316,21 +387,13 @@ CHIP_CSRCS += stm32_hrtim_m3m4_v1.c
 endif
 endif
 
-ifeq ($(CONFIG_STM32_1WIREDRIVER),y)
-CHIP_CSRCS += stm32_1wire_m3m4_v1.c
-endif
-
 ifeq ($(CONFIG_STM32_HCIUART),y)
 CHIP_CSRCS += stm32_hciuart_m3m4_v1.c
 endif
 
-ifeq ($(CONFIG_STM32_RNG)$(CONFIG_STM32_HAVE_IP_RNG_M3M4_V1),yy)
-CHIP_CSRCS += stm32_rng_m3m4_v1.c
-endif
-
 ifeq ($(CONFIG_STM32_LTDC),y)
-ifeq ($(CONFIG_STM32_HAVE_IP_LTDC_M3M4_V1),y)
-CHIP_CSRCS += stm32_ltdc_m3m4_v1.c
+ifeq ($(CONFIG_STM32_HAVE_IP_LTDC_V1),y)
+CHIP_CSRCS += stm32_ltdc_v1v2.c
 endif
 endif
 
@@ -348,9 +411,6 @@ ifeq ($(CONFIG_STM32_CAP),y)
 CHIP_CSRCS += stm32_capture_m3m4_v1_lowerhalf.c
 endif
 
-ifeq ($(CONFIG_SENSORS_QENCODER)$(CONFIG_STM32_QE),yy)
-CHIP_CSRCS += stm32_qencoder_m3m4_v1v2v3.c
-endif
 
 ifeq ($(CONFIG_STM32_CAN)$(CONFIG_STM32_HAVE_IP_CAN_BXCAN_M3M4_V1),yy)
 ifeq ($(CONFIG_STM32_CAN_CHARDRIVER),y)
@@ -372,18 +432,8 @@ endif
 endif
 endif
 
-ifeq ($(CONFIG_STM32_IWDG)$(CONFIG_STM32_HAVE_IP_WDG_M3M4_V1),yy)
-CHIP_CSRCS += stm32_iwdg_m3m4_v1.c
-endif
-
-ifeq ($(CONFIG_STM32_WWDG)$(CONFIG_STM32_HAVE_IP_WDG_M3M4_V1),yy)
-CHIP_CSRCS += stm32_wwdg_m3m4_v1.c
-endif
-
 ifeq ($(CONFIG_DEBUG_FEATURES),y)
-ifneq ($(filter y,$(CONFIG_STM32_HAVE_IP_DBGMCU_M3M4_V1) \
-            $(CONFIG_STM32_HAVE_IP_DBGMCU_M3M4_V2) \
-            $(CONFIG_STM32_HAVE_IP_DBGMCU_M3M4_V3)),)
+ifeq ($(CONFIG_STM32_HAVE_IP_GPIO_M3M4_V1),y)
 CHIP_CSRCS += stm32_dumpgpio_m3m4_v1.c
 endif
 endif
@@ -433,7 +483,6 @@ else ifeq ($(CONFIG_STM32_HAVE_IP_USART_V4),y)
 CHIP_CSRCS += stm32_lowputc_usart_m0_v4.c
 endif
 CHIP_CSRCS += stm32_start_m0_v1.c
-CHIP_CSRCS += stm32_lsi_m0_v1.c
 ifeq ($(CONFIG_STM32_HAVE_IP_GPIO_M0_V1),y)
 CHIP_CSRCS += stm32_gpio_m0_v1.c
 endif
@@ -453,14 +502,6 @@ endif
 
 ifneq ($(CONFIG_ARCH_IDLE_CUSTOM),y)
 CHIP_CSRCS += stm32_idle_m0_v1.c
-endif
-
-ifneq ($(CONFIG_SCHED_TICKLESS),y)
-ifeq ($(CONFIG_ARCH_ARMV6M),y)
-CHIP_CSRCS += stm32_timerisr_armv6m.c
-else
-CHIP_CSRCS += stm32_timerisr_armv7m.c
-endif
 endif
 
 ifeq ($(CONFIG_STM32_PWR),y)
@@ -538,17 +579,7 @@ ifeq ($(CONFIG_STM32_RNG)$(CONFIG_STM32_HAVE_IP_RNG_M0_V1),yy)
 CHIP_CSRCS += stm32_rng_m0_v1.c
 endif
 
-ifeq ($(CONFIG_STM32_TIM)$(CONFIG_STM32_HAVE_IP_TIMERS_M0_V1),yy)
-CHIP_CSRCS += stm32_tim_m0_v1.c stm32_tim_m0_v1_lowerhalf.c
-endif
 
-ifeq ($(CONFIG_STM32_IWDG)$(CONFIG_STM32_HAVE_IP_WDG_M0_V1),yy)
-CHIP_CSRCS += stm32_iwdg_m0_v1.c
-endif
-
-ifeq ($(CONFIG_STM32_WWDG)$(CONFIG_STM32_HAVE_IP_WDG_M0_V1),yy)
-CHIP_CSRCS += stm32_wwdg_m0_v1.c
-endif
 
 ifeq ($(CONFIG_STM32_FDCAN),y)
 ifeq ($(CONFIG_STM32_HAVE_IP_FDCAN_MCAN_M0_V1),y)
@@ -561,9 +592,6 @@ endif
 endif
 endif
 
-ifeq ($(CONFIG_SENSORS_QENCODER),y)
-CHIP_CSRCS += stm32_qencoder_m0_v1.c
-endif
 
 endif
 

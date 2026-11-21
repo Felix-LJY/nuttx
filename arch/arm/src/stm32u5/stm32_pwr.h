@@ -32,7 +32,7 @@
 #include <stdbool.h>
 
 #include "chip.h"
-#include "hardware/stm32_pwr.h"
+#include "hardware/stm32u5xx_pwr.h"
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -40,13 +40,9 @@
 
 #ifndef __ASSEMBLY__
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -120,7 +116,6 @@ void stm32_pwr_adjustvcore(unsigned sysclock);
 
 void stm32_pwr_enablesmps(bool enable);
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

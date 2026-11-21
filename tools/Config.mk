@@ -41,7 +41,12 @@ endif
 ifeq ($(CONFIG_WINDOWS_NATIVE),y)
   export SHELL=cmd
 else
-  BASHCMD := $(shell command -v bash 2> /dev/null)
+  # Look for bash once; sub-makes get BASHCMD from the environment.
+
+  ifeq ($(origin BASHCMD),undefined)
+    BASHCMD := $(shell command -v bash 2> /dev/null)
+    export BASHCMD
+  endif
   ifneq ($(BASHCMD),)
     export SHELL=$(BASHCMD)
     ifeq ($(V),)
@@ -507,6 +512,26 @@ define ARCHIVE_REBUILD
 	$(AR) $1  $2
 endef
 
+# ARCHIVE_ADDLIB - Add all the members of a static library to an archive
+# Example: $(call ARCHIVE_ADDLIB, archive-file, library-file)
+#
+# Used to merge a pre-built library (e.g. the binary host library of a
+# wireless chip vendor) into a NuttX library, so that it is linked like the
+# rest of the code without architecture or board specific link rules. Only
+# the library members that are referenced are pulled in by the linker.
+#
+# The members are copied as they are with an ar MRI script, which keeps the
+# members that share the same name (extracting them with 'ar x' would not).
+#
+# Depends on these settings defined in board-specific Make.defs file
+# installed at $(TOPDIR)/Make.defs:
+#
+#   AR - The command to invoke the archiver (includes any options)
+
+define ARCHIVE_ADDLIB
+	$(Q) printf "OPEN %s\nADDLIB %s\nSAVE\nEND\n" $1 $2 | $(firstword $(AR)) -M
+endef
+
 # PRELINK - Prelink a list of files
 # This is useful when files were compiled with fvisibility=hidden.
 # Any symbol which was not explicitly made global is invisible outside the
@@ -664,9 +689,13 @@ endef
 #            if it is not provided or is empty.
 # Example: $(call DOWNLOAD,$(FOO_URL_BASE),$(FOO_TARBALL),foo.out,foo-)
 
+DOWNLOAD_RETRY ?= 5
+DOWNLOAD_DELAY ?= 5
+DOWNLOAD_TIMEOUT ?= 30
+
 define DOWNLOAD
 	$(ECHO_BEGIN)"Downloading: $(if $3,$3,$2) "
-	$(Q) curl -L $(if $(V),,-Ss) $(1)/$(2) -o $(if $(3),$(3),$(2))
+	$(Q) curl -L $(if $(V),,-Ss) --connect-timeout $(DOWNLOAD_TIMEOUT) --retry $(DOWNLOAD_RETRY) --retry-delay $(DOWNLOAD_DELAY) $(1)/$(2) -o $(if $(3),$(3),$(2))
 	$(ECHO_END)
 endef
 
@@ -680,10 +709,20 @@ endef
 define CLONE
 	$(ECHO_BEGIN)"Clone: $(if $3,$3,$2) "
 	if [ -z $3 ]; then \
-		git clone --quiet $1 $2; \
+		for i in 1 2 3 4 5; do \
+			git clone --quiet $1 $2 && break; \
+			if [ $$i -eq 5 ]; then exit 1; fi; \
+			rm -rf $2; \
+			sleep 5; \
+		done; \
 	else \
 		if [ ! -d $3 ]; then \
-			git clone --quiet $1 $3; \
+			for i in 1 2 3 4 5; do \
+				git clone --quiet $1 $3 && break; \
+				if [ $$i -eq 5 ]; then exit 1; fi; \
+				rm -rf $3; \
+				sleep 5; \
+			done; \
 		fi; \
 		$(DIRLINK) $3 $2; \
 	fi
@@ -874,4 +913,31 @@ LOWER_CASE = $(call ULMAP,$(LOWERMAP),$(1))
 
 ifeq ($(CONFIG_ITERABLE_SECTIONS_LINKER_INSERT),y)
   ARCHSCRIPT += $(TOPDIR)$(DELIM)include$(DELIM)nuttx$(DELIM)linker$(DELIM)common-insert.ld
+endif
+
+# Send the calls to __emutls_get_address() to the per-thread version of
+# libc, never to the single copy of libgcc.  LDFLAGS is for the image link;
+# the sim links NuttX with "$(LD) -r $(LDLINKFLAGS)" first.  The arch
+# Toolchain.defs adds EMUTLS_LDFLAGS to LDELFFLAGS and LDMODULEFLAGS.
+
+ifeq ($(CONFIG_TLS_EMUTLS),y)
+  EMUTLS_WRAP = --wrap=__emutls_get_address --wrap=__emutls_register_common
+  EMUTLS_IMAGE = $(EMUTLS_WRAP)
+
+  # With LTO the linker sees the calls only in the code made after it has
+  # chosen the archive members, so take the libc functions in from the start.
+
+  ifneq ($(CONFIG_LTO_NONE),y)
+    EMUTLS_IMAGE += -u __wrap___emutls_get_address
+    EMUTLS_IMAGE += -u __wrap___emutls_register_common
+  endif
+
+  ifeq ($(CONFIG_ARCH_SIM),y)
+    LDLINKFLAGS += $(EMUTLS_IMAGE)
+  else
+    LDFLAGS += $(EMUTLS_IMAGE)
+  endif
+
+  EMUTLS_XLINKER = $(if $(filter $(CC),$(LD)),-Xlinker)
+  EMUTLS_LDFLAGS = $(foreach f,$(EMUTLS_WRAP),$(EMUTLS_XLINKER) $(f))
 endif

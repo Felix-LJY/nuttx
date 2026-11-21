@@ -63,7 +63,7 @@ static int     adc_receive_batch(FAR struct adc_dev_s *dev,
                                  FAR const uint32_t *data,
                                  size_t count);
 static void    adc_notify(FAR struct adc_dev_s *dev);
-static int     adc_poll(FAR struct file *filep, FAR struct pollfd *fds,
+static int     adc_poll(FAR struct file *filep, FAR struct pollfd_s *fds,
                         bool setup);
 static int     adc_reset_fifo(FAR struct adc_dev_s *dev);
 static int     adc_samples_on_read(FAR struct adc_dev_s *dev);
@@ -140,7 +140,6 @@ static int adc_open(FAR struct file *filep)
             {
               /* Yes.. perform one time hardware initialization. */
 
-              irqstate_t flags = enter_critical_section();
               ret = dev->ad_ops->ao_setup(dev);
               if (ret == OK)
                 {
@@ -157,13 +156,14 @@ static int adc_open(FAR struct file *filep)
 
                   dev->ad_ops->ao_rxint(dev, true);
                 }
-
-              leave_critical_section(flags);
             }
 
-          /* Save the new open count on success */
+          /* Save the new open count only on success */
 
-          dev->ad_ocount = tmp;
+          if (ret == OK)
+            {
+              dev->ad_ocount = tmp;
+            }
         }
 
       nxmutex_unlock(&dev->ad_lock);
@@ -185,7 +185,6 @@ static int adc_close(FAR struct file *filep)
 {
   FAR struct inode     *inode = filep->f_inode;
   FAR struct adc_dev_s *dev   = inode->i_private;
-  irqstate_t            flags;
   int                   ret;
 
   ret = nxmutex_lock(&dev->ad_lock);
@@ -208,9 +207,7 @@ static int adc_close(FAR struct file *filep)
 
           /* Free the IRQ and disable the ADC device */
 
-          flags = enter_critical_section();    /* Disable interrupts */
-          dev->ad_ops->ao_shutdown(dev);       /* Disable the ADC */
-          leave_critical_section(flags);
+          dev->ad_ops->ao_shutdown(dev);
 
           nxmutex_unlock(&dev->ad_lock);
         }
@@ -232,6 +229,7 @@ static ssize_t adc_read(FAR struct file *filep, FAR char *buffer,
   size_t                nread;
   int                   ret    = 0;
   int                   msglen;
+  irqstate_t            flags;
 
   ainfo("buflen: %d\n", (int)buflen);
 
@@ -270,14 +268,7 @@ static ssize_t adc_read(FAR struct file *filep, FAR char *buffer,
 
   if (buflen >= msglen)
     {
-      /* Interrupts must be disabled while accessing the fifo FIFO */
-
-      ret = nxmutex_lock(&dev->ad_lock);
-
-      if (ret < 0)
-        {
-          return ret;
-        }
+      flags = spin_lock_irqsave(&dev->ad_spinlock);
 
       while (fifo->af_head == fifo->af_tail)
         {
@@ -301,7 +292,9 @@ static ssize_t adc_read(FAR struct file *filep, FAR char *buffer,
           /* Wait for a message to be received */
 
           dev->ad_nrxwaiters++;
+          spin_unlock_irqrestore(&dev->ad_spinlock, flags);
           ret = nxsem_wait(&fifo->af_sem);
+          flags = spin_lock_irqsave(&dev->ad_spinlock);
           dev->ad_nrxwaiters--;
           if (ret < 0)
             {
@@ -378,6 +371,7 @@ static ssize_t adc_read(FAR struct file *filep, FAR char *buffer,
                    */
 
                   int16_t data16 = data >> 16;
+
                   memcpy(&buffer[nread], &data16, 2);
                 }
               else if (msglen == 3)
@@ -417,7 +411,7 @@ static ssize_t adc_read(FAR struct file *filep, FAR char *buffer,
       ret = nread;
 
 return_with_irqdisabled:
-      nxmutex_unlock(&dev->ad_lock);
+      spin_unlock_irqrestore(&dev->ad_spinlock, flags);
     }
 
   ainfo("Returning: %d\n", ret);
@@ -603,7 +597,7 @@ static void adc_notify(FAR struct adc_dev_s *dev)
  * Name: adc_poll
  ****************************************************************************/
 
-static int adc_poll(FAR struct file *filep, FAR struct pollfd *fds,
+static int adc_poll(FAR struct file *filep, FAR struct pollfd_s *fds,
                     bool setup)
 {
   FAR struct inode     *inode = filep->f_inode;
@@ -616,7 +610,7 @@ static int adc_poll(FAR struct file *filep, FAR struct pollfd *fds,
    * and ad_recv FIFO.
    */
 
-  flags = enter_critical_section();
+  flags = spin_lock_irqsave(&dev->ad_spinlock);
 
   if (setup)
     {
@@ -657,14 +651,16 @@ static int adc_poll(FAR struct file *filep, FAR struct pollfd *fds,
 
       if (dev->ad_recv.af_head != dev->ad_recv.af_tail)
         {
+          spin_unlock_irqrestore(&dev->ad_spinlock, flags);
           poll_notify(&fds, 1, POLLIN);
+          return ret;
         }
     }
   else if (fds->priv)
     {
       /* This is a request to tear down the poll. */
 
-      FAR struct pollfd **slot = (FAR struct pollfd **)fds->priv;
+      FAR struct pollfd_s **slot = (FAR struct pollfd_s **)fds->priv;
 
       /* Remove all memory of the poll setup */
 
@@ -673,7 +669,7 @@ static int adc_poll(FAR struct file *filep, FAR struct pollfd *fds,
     }
 
 return_with_irqdisabled:
-  leave_critical_section(flags);
+  spin_unlock_irqrestore(&dev->ad_spinlock, flags);
   return ret;
 }
 
@@ -688,11 +684,11 @@ static int adc_reset_fifo(FAR struct adc_dev_s *dev)
 
   /* Interrupts must be disabled while accessing the ad_recv FIFO */
 
-  flags = enter_critical_section();
+  flags = spin_lock_irqsave(&dev->ad_spinlock);
 
   fifo->af_head = fifo->af_tail;
 
-  leave_critical_section(flags);
+  spin_unlock_irqrestore(&dev->ad_spinlock, flags);
 
   return OK;
 }
@@ -709,11 +705,11 @@ static int adc_samples_on_read(FAR struct adc_dev_s *dev)
 
   /* Interrupts must be disabled while accessing the ad_recv FIFO */
 
-  flags = enter_critical_section();
+  flags = spin_lock_irqsave(&dev->ad_spinlock);
 
   ret = fifo->af_tail - fifo->af_head;
 
-  leave_critical_section(flags);
+  spin_unlock_irqrestore(&dev->ad_spinlock, flags);
 
   if (ret < 0)
     {
@@ -760,6 +756,7 @@ int adc_register(FAR const char *path, FAR struct adc_dev_s *dev)
 
   nxsem_init(&dev->ad_recv.af_sem, 0, 0);
   nxmutex_init(&dev->ad_lock);
+  spin_lock_init(&dev->ad_spinlock);
 
   /* Reset the ADC hardware */
 
@@ -808,12 +805,12 @@ int adc_register(FAR const char *path, FAR struct adc_dev_s *dev)
     {
       if (alloc_channel)
         {
-           kmm_free(fifo->af_channel);
+          kmm_free(fifo->af_channel);
         }
 
       if (alloc_data)
         {
-           kmm_free(fifo->af_data);
+          kmm_free(fifo->af_data);
         }
 
       nxsem_destroy(&dev->ad_recv.af_sem);

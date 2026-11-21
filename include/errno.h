@@ -29,7 +29,10 @@
 
 #include <nuttx/compiler.h>
 
-#if defined(CONFIG_BUILD_FLAT) || defined(__KERNEL__)
+/* set_errno() needs up_interrupt_context() */
+
+#if !defined(NUTTX_NO_EXTENSIONS) && \
+    (defined(CONFIG_BUILD_FLAT) || defined(__KERNEL__))
 #  include <nuttx/irq.h>
 #endif
 
@@ -45,25 +48,30 @@
  */
 
 #define errno *__errno()
-#if defined(CONFIG_BUILD_FLAT) || defined(__KERNEL__)
-#define set_errno(e) \
-  do \
-    { \
-      if (!up_interrupt_context()) \
-        { \
-          errno = (int)(e); \
-        } \
-    } \
-  while (0)
-#else
-#define set_errno(e) \
-  do \
-    { \
-      errno = (int)(e); \
-    } \
-  while (0)
-#endif
-#define get_errno() errno
+
+/* Not with NUTTX_NO_EXTENSIONS, see nuttx/compiler.h */
+
+#ifndef NUTTX_NO_EXTENSIONS
+#  if defined(CONFIG_BUILD_FLAT) || defined(__KERNEL__)
+#    define set_errno(e) \
+       do \
+         { \
+           if (!up_interrupt_context()) \
+             { \
+               errno = (int)(e); \
+             } \
+         } \
+       while (0)
+#  else
+#    define set_errno(e) \
+       do \
+         { \
+           errno = (int)(e); \
+         } \
+       while (0)
+#  endif
+#  define get_errno() errno
+#endif /* NUTTX_NO_EXTENSIONS */
 
 /* Definitions of error numbers and the string that would be
  * returned by strerror().
@@ -368,20 +376,15 @@
  * Public Function Prototypes
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /* Return a pointer to the thread specific errno. */
 
 FAR int *__errno(void);
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

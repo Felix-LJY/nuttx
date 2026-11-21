@@ -1,7 +1,7 @@
 /****************************************************************************
  * arch/arm64/src/bcm2711/bcm2711_spi.h
  *
- * Contributed by Matteo Golin
+ * SPDX-License-Identifier: Apache-2.0
  *
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
@@ -42,13 +42,9 @@
 
 #ifndef __ASSEMBLY__
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -71,7 +67,6 @@ extern "C"
 
 struct spi_dev_s *bcm2711_spibus_initialize(int port);
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

@@ -68,6 +68,10 @@ FAR void *calloc(size_t n, size_t elem_size)
 
       mem = zalloc(n * elem_size);
     }
+  else
+    {
+      umm_set_errno(ENOMEM);
+    }
 
   return mem;
 #else
@@ -77,12 +81,11 @@ FAR void *calloc(size_t n, size_t elem_size)
 
   if (mem == NULL)
     {
-      set_errno(ENOMEM);
+      umm_set_errno(ENOMEM);
     }
   else
     {
-      mm_notify_pressure(mm_heapfree(USR_HEAP),
-                         mm_heapfree_largest(USR_HEAP));
+      mm_notify_pressure(USR_HEAP);
     }
 
   return mem;

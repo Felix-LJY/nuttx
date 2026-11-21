@@ -53,7 +53,7 @@ struct virtio_rng_priv_s
 {
   FAR struct virtio_device *vdev;
   char                      name[NAME_MAX];
-#ifdef CONFIG_DEV_URANDOM
+#ifdef CONFIG_DEV_URANDOM_ARCH
   char                      uname[NAME_MAX];
 #endif
   spinlock_t                lock;
@@ -72,6 +72,7 @@ static ssize_t virtio_rng_read(FAR struct file *filep, FAR char *buffer,
 
 static int virtio_rng_probe(FAR struct virtio_device *vdev);
 static void virtio_rng_remove(FAR struct virtio_device *vdev);
+static void virtio_rng_dump(FAR struct virtio_device *vdev);
 
 /****************************************************************************
  * Private Data
@@ -79,10 +80,10 @@ static void virtio_rng_remove(FAR struct virtio_device *vdev);
 
 static struct virtio_driver g_virtio_rng_driver =
 {
-  LIST_INITIAL_VALUE(g_virtio_rng_driver.node), /* node */
-  VIRTIO_ID_ENTROPY,                            /* device id */
-  virtio_rng_probe,                             /* probe */
-  virtio_rng_remove,                            /* remove */
+  VIRTIO_ID_ENTROPY, /* device id */
+  virtio_rng_probe,  /* probe */
+  virtio_rng_remove, /* remove */
+  virtio_rng_dump,   /* dump */
 };
 
 static const struct file_operations g_virtio_rng_ops =
@@ -152,6 +153,7 @@ static ssize_t virtio_rng_read(FAR struct file *filep, FAR char *buffer,
   FAR struct virtqueue *vq = priv->vdev->vrings_info[0].vq;
   struct virtio_rng_cookie_s cookie;
   struct virtqueue_buf vb;
+  FAR void *mapped;
   irqstate_t flags;
   int ret;
 
@@ -160,22 +162,34 @@ static ssize_t virtio_rng_read(FAR struct file *filep, FAR char *buffer,
   cookie.len = 0;
   nxsem_init(&cookie.sem, 0, 0);
 
+  /* Map the user buffer so the device side can access it. On MMIO/PCI
+   * map returns the buffer itself and the device writes the entropy straight
+   * into it (zero copy); a transport that cannot reach it (rptun, or a user
+   * buffer with CONFIG_ARCH_ADDRENV) bounces it and unmap copies the result
+   * back below.
+   */
+
+  ret = virtio_map_buf(priv->vdev, buffer, buflen, VIRTIO_DMA_FROM_DEVICE,
+                       &mapped);
+  if (ret < 0)
+    {
+      return ret;
+    }
+
   /* Add the input buffer to the virtqueue, and the cookie as the virtqueue
    * cookie. (virtqueue_get_buffer() will return cookie).
    */
 
   vb.len = buflen;
-  vb.buf = virtio_zalloc_buf(priv->vdev, buflen, 16);
-  if (vb.buf == NULL)
-    {
-      return -ENOMEM;
-    }
+  vb.buf = mapped;
 
   flags = spin_lock_irqsave(&priv->lock);
   ret = virtqueue_add_buffer(vq, &vb, 0, 1, &cookie);
   if (ret < 0)
     {
       spin_unlock_irqrestore(&priv->lock, flags);
+      virtio_unmap_buf(priv->vdev, buffer, 0, VIRTIO_DMA_FROM_DEVICE,
+                       mapped);
       return ret;
     }
 
@@ -187,8 +201,13 @@ static ssize_t virtio_rng_read(FAR struct file *filep, FAR char *buffer,
   /* Wait for completion */
 
   nxsem_wait_uninterruptible(&cookie.sem);
-  memcpy(buffer, vb.buf, cookie.len);
-  virtio_free_buf(priv->vdev, vb.buf);
+
+  /* Unmap copies a bounce back into the user buffer and is a no-op when the
+   * device wrote it directly. Only cookie.len bytes are valid.
+   */
+
+  virtio_unmap_buf(priv->vdev, buffer, cookie.len, VIRTIO_DMA_FROM_DEVICE,
+                   mapped);
   return cookie.len;
 }
 
@@ -237,30 +256,31 @@ static int virtio_rng_probe(FAR struct virtio_device *vdev)
   if (g_virtio_rng_idx == 0)
     {
       strlcpy(priv->name, "/dev/random", NAME_MAX);
-#ifdef CONFIG_DEV_URANDOM
+#ifdef CONFIG_DEV_URANDOM_ARCH
       strlcpy(priv->uname, "/dev/urandom", NAME_MAX);
 #endif
     }
   else
     {
       snprintf(priv->name, NAME_MAX, "/dev/random%d", g_virtio_rng_idx);
-#ifdef CONFIG_DEV_URANDOM
+#ifdef CONFIG_DEV_URANDOM_ARCH
       snprintf(priv->uname, NAME_MAX, "/dev/urandom%d", g_virtio_rng_idx);
 #endif
     }
 
-  ret = register_driver(priv->name, &g_virtio_rng_ops, 0400, priv);
+  ret = register_driver(priv->name, &g_virtio_rng_ops, 0444, priv);
   if (ret < 0)
     {
       vrterr("Register NuttX driver failed, ret=%d\n", ret);
       goto err_with_virtqueue;
     }
 
-#ifdef CONFIG_DEV_URANDOM
-  ret = register_driver(priv->uname, &g_virtio_rng_ops, 0400, priv);
+#ifdef CONFIG_DEV_URANDOM_ARCH
+  ret = register_driver(priv->uname, &g_virtio_rng_ops, 0444, priv);
   if (ret < 0)
     {
       vrterr("Register NuttX driver failed, ret=%d\n", ret);
+      unregister_driver(priv->name);
       goto err_with_virtqueue;
     }
 #endif
@@ -285,9 +305,23 @@ static void virtio_rng_remove(FAR struct virtio_device *vdev)
   FAR struct virtio_rng_priv_s *priv = vdev->priv;
 
   unregister_driver(priv->name);
+#ifdef CONFIG_DEV_URANDOM_ARCH
+  unregister_driver(priv->uname);
+#endif
   virtio_reset_device(vdev);
   virtio_delete_virtqueues(vdev);
   kmm_free(priv);
+}
+
+/****************************************************************************
+ * Name: virtio_rng_dump
+ ****************************************************************************/
+
+static void virtio_rng_dump(FAR struct virtio_device *vdev)
+{
+  FAR struct virtio_rng_priv_s *priv = vdev->priv;
+
+  syslog(LOG_EMERG, "    name=%s\n", priv->name);
 }
 
 /****************************************************************************
@@ -319,7 +353,7 @@ void weak_function devrandom_register(void)
  *
  ****************************************************************************/
 
-#ifdef CONFIG_DEV_URANDOM
+#ifdef CONFIG_DEV_URANDOM_ARCH
 void weak_function devurandom_register(void)
 {
   /* Nothing, implement it here just avoid the compile error, the driver

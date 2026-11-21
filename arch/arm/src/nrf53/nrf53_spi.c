@@ -93,7 +93,7 @@ static int nrf53_spi_hwfeatures(struct spi_dev_s *dev,
                                 spi_hwfeatures_t features);
 #endif
 static uint32_t nrf53_spi_send(struct spi_dev_s *dev, uint32_t wd);
-static void nrf53_spi_exchange(struct spi_dev_s *dev,
+static int  nrf53_spi_exchange(struct spi_dev_s *dev,
                                const void *txbuffer,
                                void *rxbuffer, size_t nwords);
 #ifndef CONFIG_SPI_EXCHANGE
@@ -265,7 +265,7 @@ static const struct spi_ops_s g_spi2ops =
 #  ifdef CONFIG_SPI_EXCHANGE
   .exchange          = nrf53_spi_exchange,
 #  else
-  .sndlock           = nrf53_spi_sndblock,
+  .sndblock          = nrf53_spi_sndblock,
   .recvblock         = nrf53_spi_recvblock,
 #  endif
 #ifdef CONFIG_SPI_TRIGGER
@@ -318,7 +318,7 @@ static const struct spi_ops_s g_spi3ops =
 #  ifdef CONFIG_SPI_EXCHANGE
   .exchange          = nrf53_spi_exchange,
 #  else
-  .sndlock           = nrf53_spi_sndblock,
+  .sndblock          = nrf53_spi_sndblock,
   .recvblock         = nrf53_spi_recvblock,
 #  endif
 #ifdef CONFIG_SPI_TRIGGER
@@ -371,7 +371,7 @@ static const struct spi_ops_s g_spi4ops =
 #  ifdef CONFIG_SPI_EXCHANGE
   .exchange          = nrf53_spi_exchange,
 #  else
-  .sndlock           = nrf53_spi_sndblock,
+  .sndblock          = nrf53_spi_sndblock,
   .recvblock         = nrf53_spi_recvblock,
 #  endif
 #ifdef CONFIG_SPI_TRIGGER
@@ -795,10 +795,10 @@ static uint32_t nrf53_spi_setfrequency(struct spi_dev_s *dev,
   switch (frequency)
     {
       case 125000:
-      {
-        regval = SPIM_FREQUENCY_125KBPS;
-        break;
-      }
+        {
+          regval = SPIM_FREQUENCY_125KBPS;
+          break;
+        }
 
       case 250000:
         {
@@ -819,10 +819,10 @@ static uint32_t nrf53_spi_setfrequency(struct spi_dev_s *dev,
         }
 
       case 2000000:
-      {
-        regval = SPIM_FREQUENCY_2MBPS;
-        break;
-      }
+        {
+          regval = SPIM_FREQUENCY_2MBPS;
+          break;
+        }
 
       case 4000000:
         {
@@ -1069,11 +1069,11 @@ static uint32_t nrf53_spi_send(struct spi_dev_s *dev, uint32_t wd)
  *              selected for the SPI interface.
  *
  * Returned Value:
- *   None
+ *   Returns zero (OK) on success; a negated errno value on failure.
  *
  ****************************************************************************/
 
-static void nrf53_spi_exchange(struct spi_dev_s *dev,
+static int  nrf53_spi_exchange(struct spi_dev_s *dev,
                                const void *txbuffer,
                                void *rxbuffer, size_t nwords)
 {
@@ -1196,6 +1196,8 @@ static void nrf53_spi_exchange(struct spi_dev_s *dev,
       nrf53_spi_putreg(priv, NRF53_SPIM_RXDLIST_OFFSET, 0);
       nrf53_spi_putreg(priv, NRF53_SPIM_TXDLIST_OFFSET, 0);
     }
+
+  return OK;
 }
 
 #ifndef CONFIG_SPI_EXCHANGE
@@ -1223,7 +1225,7 @@ static void nrf53_spi_sndblock(struct spi_dev_s *dev,
                                size_t nwords)
 {
   spiinfo("txbuffer=%p nwords=%zu\n", txbuffer, nwords);
-  return nrf53_spi_exchange(dev, txbuffer, NULL, nwords);
+  nrf53_spi_exchange(dev, txbuffer, NULL, nwords);
 }
 
 /****************************************************************************
@@ -1249,7 +1251,7 @@ static void nrf53_spi_recvblock(struct spi_dev_s *dev,
                                 size_t nwords)
 {
   spiinfo("txbuffer=%p nwords=%zu\n", rxbuffer, nwords);
-  return nrf53_spi_exchange(dev, NULL, rxbuffer, nwords);
+  nrf53_spi_exchange(dev, NULL, rxbuffer, nwords);
 }
 #endif /* CONFIG_SPI_EXCHANGE */
 

@@ -1,0 +1,62 @@
+############################################################################
+# arch/risc-v/src/sbi/Kconfig
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.  The
+# ASF licenses this file to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance with the
+# License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
+############################################################################
+#
+# For a description of the syntax of this configuration file,
+# see the file kconfig-language.txt in the NuttX tools repository.
+#
+
+choice
+	prompt "SBI implementation"
+	optional
+
+config NUTTSBI
+	bool "Use NuttX native SBI"
+	depends on ARCH_USE_S_MODE
+	---help---
+		Use NuttX minimalistic SBI
+
+config OPENSBI
+	bool "OpenSBI support"
+	depends on ALLOW_BSD_COMPONENTS
+	---help---
+		Enable Open Source Supervisor Binary Interface (OpenSBI) features
+		for RISC-V.
+
+config RUSTSBI
+	bool "Build RustSBI firmware"
+	depends on ARCH_USE_S_MODE && BUILD_KERNEL
+	---help---
+		Build RustSBI Prototyper as a separate M-mode firmware image.
+
+endchoice
+
+if OPENSBI
+source "arch/risc-v/src/sbi/opensbi/Kconfig"
+endif
+
+if NUTTSBI
+source "arch/risc-v/src/sbi/nuttsbi/Kconfig"
+endif
+
+if RUSTSBI
+source "arch/risc-v/src/sbi/rustsbi/Kconfig"
+endif

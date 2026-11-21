@@ -2,7 +2,7 @@
 Raspberry Pi rp2350
 ===================
 
-.. tags:: chip:rp2350
+.. tags:: arch:arm, chip:rp23xx, part:rp2350, vendor:raspberry-pi
 
 The rp2350 is a dual core chip produced by Raspberry Pi that
 is based on ARM Cortex-M33 or the Hazard3 RISC-V.
@@ -45,7 +45,8 @@ TRNG             Working       Hardware RNG at /dev/random and /dev/urandom
 Flash MTD        Working       Unused flash tail as an MTD device, answers BIOC_XIPBASE
 Timer            Working       /dev/timerN on TIMER0/TIMER1, 1 us resolution
 Tickless         Working       Optional, RP2350 TIMER via the alarm/oneshot
-RTC              Working       POWMAN always-on timer, backs the system clock
+RTC              Working       POWMAN always-on timer, system clock and /dev/rtc0 with alarm
+PM               Working       Standby, dormant and suspend to RAM, see Power Management
 OTP              Working       Reads via /dev/efuse; programming is opt-in
 ==============   ============  =====
 
@@ -133,13 +134,21 @@ The port offers three options for configuring the heaps to use
 the external PSRAM, described below. More custom configurations
 can be used with custom board initialization functions.
 
+The atomic operations of the RP2350 work across the two cores only
+in the internal SRAM (RP2350 datasheet, section 2.1.6). In the PSRAM
+they exclude only the local core. So with `SMP` only the separate
+heap is available (it is the default there), and a lock or an atomic
+variable must not be allocated from the `psram` heap: with `SMP` an
+atomic operation outside the SRAM never ends.
+
 Use PSRAM and SRAM as a single main heap
 ----------------------------------------
 
 This option is selected with `RP23XX_PSRAM_HEAP_SINGLE` and
 requires `MM_REGIONS > 1`, as the PSRAM memory region will
 be added to the heap. It is also necessary to disable
-`MM_KERNEL_HEAP`, as there will only be a single heap.
+`MM_KERNEL_HEAP`, as there will only be a single heap. It is
+not available with `SMP`.
 
 This is the simplest configuration because it will unify the
 memories into a single main heap. This way you can see the `free`
@@ -154,7 +163,8 @@ Use PSRAM as user heap, SRAM as kernel heap
 -------------------------------------------
 
 This option is selected with `RP23XX_PSRAM_HEAP_USER` and
-requires `MM_KERNEL_HEAP` to be set.
+requires `MM_KERNEL_HEAP` to be set. It is not available with
+`SMP`.
 
 The external PSRAM is allocated to the default heap, while
 the internal SRAM will be used for the kernel heap. This
@@ -258,6 +268,61 @@ library (`powman_timer_start_lposc()`, `powman_timer_set_ms()` and
 <https://github.com/raspberrypi/pico-sdk/tree/master/src/rp2_common/pico_aon_timer>`_
 wrapper.
 
+The always-on timer also has one alarm comparator. With ``RTC_DRIVER``, the
+common board bring-up registers the timer as ``/dev/rtc0``. With
+``RTC_ALARM`` too, ``/dev/rtc0`` supports ``RTC_SET_ALARM``,
+``RTC_SET_RELATIVE``, ``RTC_RD_ALARM`` and ``RTC_CANCEL_ALARM``, for example
+through ``apps/examples/alarm``. The comparator stays asserted while the
+time is past the alarm time, so the interrupt handler disables the alarm
+first. An alarm fires once.
+
+Power Management
+================
+
+Enable ``PM`` and ``RP23XX_PM``. The driver maps the NuttX PM states onto
+the RP2350 low-power modes:
+
+* ``PM_STANDBY`` is the RP2350 SLEEP state: a WFI with the clocks of the
+  blocks that have no driver gated.
+* ``PM_SLEEP`` is the DORMANT state: the PLLs and the crystal oscillator
+  stop. Only a GPIO can end it. Set the wake pin with
+  ``RP23XX_PM_WAKEUP_GPIO`` (-1, the default, means never dormant: then
+  ``PM_SLEEP`` gives standby), and its polarity and edge with
+  ``RP23XX_PM_WAKEUP_GPIO_HIGH`` and ``RP23XX_PM_WAKEUP_GPIO_EDGE``. The
+  console receive pin can be the wake pin.
+* Suspend to RAM (POWMAN P1.0, ``RP23XX_PM_SUSPEND``): the switched core is
+  powered off, and SRAM and the XIP cache keep their contents. Every
+  peripheral loses its registers, and the chip comes back through the boot
+  path. The idle governor never selects this state. An application asks
+  for it with the ``BOARDIOC_RP23XX_SUSPEND`` boardctl() command
+  (``arch/chip/pm.h``, needs ``BOARDCTL_IOCTL``). The wake is the wake GPIO,
+  an RTC alarm that the application set, or the ``wake_ms`` timer of the
+  command, whichever comes first. ``wake_source`` returns the POWMAN
+  ``LAST_SWCORE_PWRUP`` register, which tells the cause.
+
+After a dormant wake, and after each character that a UART receives, the
+driver holds a ``PM_STANDBY`` wakelock for ``RP23XX_PM_WAKE_HOLD_MS``
+(default 3000). ``RP23XX_PM_QUIESCE_PADS`` (default ``y``) isolates the
+unused pads and holds the blocks with no driver in reset, against the
+input leakage of erratum RP2350-E9.
+
+Limits:
+
+* In the dormant state the system tick stops. Timers, ``sleep()`` and RTC
+  alarms wait for the next GPIO wake. An application that needs them holds
+  a PM state with ``boardctl(BOARDIOC_PM_CONTROL)``.
+* A dormant chip does not answer SWD. The ``pm`` configurations set
+  ``PM_GOVERNOR_EXPLICIT_RELAX`` to stay out of the dormant state for 30 s
+  after boot.
+* With the console receive pin as the wake pin, the input of the first 4 to
+  10 ms after a dormant wake is lost, while the crystal oscillator and the
+  PLLs start.
+
+The ``pm`` configurations of :doc:`boards/raspberrypi-pico-2/index` and
+:doc:`boards/pimoroni-pico-2-plus/index` use these options.
+:doc:`/applications/examples/pmstress/index` walks the states in a timed
+sequence for current measurement.
+
 Programming
 ============
 
@@ -322,17 +387,28 @@ The region is described by ``RP23XX_FLASH_MTD_OFFSET`` (byte offset from
 ``0x10000000``) and ``RP23XX_FLASH_MTD_SIZE``, both of which must be multiples
 of the 4096 byte erase sector.  The driver refuses to initialize if the region
 would overlap the NuttX image (it checks ``__flash_binary_end``), so a bad
-offset fails at boot instead of corrupting the running firmware.
+offset fails at boot instead of corrupting the running firmware.  It also
+reads the flash size from the JEDEC ID and refuses a region that ends past the
+end of the flash, because such an address wraps around to the image.
 
 Erase and program go through the bootrom flash routines.  Because those
 operations stall instruction fetch from the same flash, the driver runs them
-from SRAM with interrupts disabled and, on SMP builds, the other core parked;
-expect interrupt latency to suffer for the duration of a write.  Afterwards the
-QSPI interface is put back into execute-in-place mode -- by default restoring
-the fast read mode the bootrom set up at boot, or, with
+from SRAM with interrupts disabled and, on SMP builds, the other core parked.
+It does so for one 64K block erase or one 256 byte page program at a time, and
+enables interrupts between them; expect interrupt latency to suffer for that
+long (a block erase can take hundreds of milliseconds).  Afterwards the
+QSPI interface is put back into execute-in-place mode -- by default with a
+copy of the XIP setup function that the bootrom leaves in boot RAM, which
+restores the read mode found at boot, or, with
 ``RP23XX_FLASH_MTD_SAFE_XIP``, always through the bootrom
 ``flash_enter_cmd_xip`` routine, which is slower to execute from but depends
-only on the documented bootrom entry point.
+only on the documented bootrom entry point.  The driver also saves and
+restores the QSPI pads and the PSRAM configuration on chip select 1.
+
+Flash and PSRAM cannot be read while an erase or program is in progress.  So
+the driver copies a page to SRAM before it programs it if the data is in flash
+or PSRAM, and a caller with its stack in PSRAM runs the operation on a small
+SRAM stack.
 
 The driver answers the ``BIOC_XIPBASE`` ioctl with the memory-mapped address of
 the region, so a filesystem that supports execute in place can hand out real

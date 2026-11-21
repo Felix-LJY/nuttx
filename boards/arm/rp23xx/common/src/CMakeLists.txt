@@ -30,6 +30,10 @@ if(CONFIG_ARCH_BOARD_COMMON)
     list(APPEND SRCS rp23xx_reset.c)
   endif()
 
+  if(CONFIG_BOARDCTL_IOCTL)
+    list(APPEND SRCS rp23xx_boardctl.c)
+  endif()
+
   if(CONFIG_SPI)
     list(APPEND SRCS rp23xx_spi.c)
   endif()
@@ -108,6 +112,10 @@ if(CONFIG_ARCH_BOARD_COMMON)
 
   if(CONFIG_SENSORS_MAX6675)
     list(APPEND SRCS rp23xx_max6675.c)
+  endif()
+
+  if(CONFIG_RP23XX_INFINEON_CYW43439)
+    list(APPEND SRCS rp23xx_cyw43439_userleds.c)
   endif()
 
   # Firmware blob for the Infineon CYW43439 WiFi chip.  rp23xx_firmware.c

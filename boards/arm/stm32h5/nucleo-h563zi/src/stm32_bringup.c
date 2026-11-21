@@ -26,7 +26,6 @@
 
 #include <nuttx/config.h>
 
-#include <sys/mount.h>
 #include <sys/types.h>
 #include <nuttx/debug.h>
 
@@ -38,13 +37,84 @@
 
 #include <arch/board/board.h>
 
-#ifdef CONFIG_STM32_IWDG
-#  include "stm32_wdg.h"
+#include "board_common.h"
+
+#if defined(CONFIG_CAPTURE) && defined(CONFIG_STM32_TIMX_CAP)
+#  include <errno.h>
+#  include <nuttx/timers/capture.h>
+#  include "stm32_capture.h"
+#  define HAVE_CAPTURE 1
 #endif
 
 /****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
+
+/****************************************************************************
+ * Private Functions
+ ****************************************************************************/
+
+/****************************************************************************
+ * Name: stm32_capture_setup
+ *
+ * Description:
+ *   Initialize and register the capture drivers of the timers that are
+ *   configured for capture.  They are registered as /dev/cap0, /dev/cap1,
+ *   etc. in the order of the timer numbers.
+ *
+ * Returned Value:
+ *   Zero (OK) on success; a negated errno value on failure.
+ *
+ ****************************************************************************/
+
+#ifdef HAVE_CAPTURE
+static int stm32_capture_setup(void)
+{
+  struct cap_lowerhalf_s *lower[] =
+    {
+#ifdef CONFIG_STM32_TIM1_CAP
+      stm32_cap_initialize(1),
+#endif
+#ifdef CONFIG_STM32_TIM2_CAP
+      stm32_cap_initialize(2),
+#endif
+#ifdef CONFIG_STM32_TIM3_CAP
+      stm32_cap_initialize(3),
+#endif
+#ifdef CONFIG_STM32_TIM4_CAP
+      stm32_cap_initialize(4),
+#endif
+#ifdef CONFIG_STM32_TIM5_CAP
+      stm32_cap_initialize(5),
+#endif
+#ifdef CONFIG_STM32_TIM8_CAP
+      stm32_cap_initialize(8),
+#endif
+#ifdef CONFIG_STM32_TIM12_CAP
+      stm32_cap_initialize(12),
+#endif
+#ifdef CONFIG_STM32_TIM15_CAP
+      stm32_cap_initialize(15),
+#endif
+    };
+
+  size_t count = sizeof(lower) / sizeof(lower[0]);
+  size_t i;
+
+  for (i = 0; i < count; i++)
+    {
+      if (lower[i] == NULL)
+        {
+          syslog(LOG_ERR, "ERROR: Failed to initialize a capture timer\n");
+          return -ENODEV;
+        }
+    }
+
+  /* This will register "/dev/cap0" ... "/dev/cap<count-1>" */
+
+  return cap_register_multiple("/dev/cap", lower, count);
+}
+#endif /* HAVE_CAPTURE */
 
 /****************************************************************************
  * Public Functions
@@ -65,21 +135,14 @@ int stm32_bringup(void)
 {
   int ret;
 
-#ifdef CONFIG_STM32_IWDG
-  /* Initialize the watchdog timer */
+  /* Initialize the board features common to all STM32 boards */
 
-  stm32_iwdginitialize("/dev/watchdog0", STM32_LSI_FREQUENCY);
-#endif
-
-#ifdef CONFIG_FS_PROCFS
-  /* Mount the procfs file system */
-
-  ret = mount(NULL, "/proc", "procfs", 0, NULL);
+  ret = stm32_common_initialize();
   if (ret < 0)
     {
-      ferr("ERROR: Failed to mount procfs at /proc: %d\n", ret);
+      syslog(LOG_ERR, "ERROR: stm32_common_initialize() failed: %d\n",
+             ret);
     }
-#endif
 
 #if !defined(CONFIG_ARCH_LEDS) && defined(CONFIG_USERLED_LOWER)
   /* Register the LED driver */
@@ -117,6 +180,14 @@ int stm32_bringup(void)
     }
 #endif /* CONFIG_ADC*/
 
+#ifdef CONFIG_DAC
+  ret = stm32_dac_setup();
+  if (ret < 0)
+    {
+      syslog(LOG_ERR, "ERROR: stm32_dac_setup failed: %d\n", ret);
+    }
+#endif /* CONFIG_DAC */
+
 #ifdef CONFIG_STM32_DTS
   /* devno == 0 creates /dev/sensor_temp0 */
 
@@ -125,25 +196,6 @@ int stm32_bringup(void)
     {
       syslog(LOG_ERR, "ERROR: stm32_adc_setup failed: %d\n", ret);
     }
-#endif
-
-#ifdef CONFIG_STM32_FDCAN_CHARDRIVER
-  /* Initialize CAN and register the CAN driver. */
-# ifdef CONFIG_STM32_FDCAN1
-  ret = stm32_can_setup(1);
-  if (ret < 0)
-    {
-      syslog(LOG_ERR, "ERROR: FDCAN1 stm32_fdcan_setup failed: %d\n", ret);
-    }
-# endif
-
-# ifdef CONFIG_STM32_FDCAN2
-  ret = stm32_can_setup(2);
-  if (ret < 0)
-    {
-      syslog(LOG_ERR, "ERROR: FDCAN2 stm32_fdcan_setup failed: %d\n", ret);
-    }
-# endif
 #endif
 
 #ifdef CONFIG_STM32_SPI
@@ -165,6 +217,16 @@ int stm32_bringup(void)
   if (ret < 0)
     {
       syslog(LOG_ERR, "ERROR: stm32_pwm_setup() failed: %d\n", ret);
+    }
+#endif
+
+#ifdef HAVE_CAPTURE
+  /* Initialize the capture drivers and register them as /dev/capN */
+
+  ret = stm32_capture_setup();
+  if (ret < 0)
+    {
+      syslog(LOG_ERR, "ERROR: stm32_capture_setup() failed: %d\n", ret);
     }
 #endif
 

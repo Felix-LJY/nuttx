@@ -47,7 +47,7 @@
 
 #define VIRTIO_INPUT_EVENT           0
 #define VIRTIO_INPUT_NUM             1
-#define VIRTIO_INPUT_EVT_NUM         8
+#define VIRTIO_INPUT_EVT_NUM         64
 
 /****************************************************************************
  * Private Types
@@ -77,7 +77,6 @@ struct virtio_input_priv
   union
   {
     struct mouse_report_s       mousesample;    /* Mouse event */
-    struct keyboard_event_s     keyboardsample; /* Keyboard event */
     struct touch_sample_s       touchsample;    /* Touchpad event */
   };
 };
@@ -88,6 +87,7 @@ struct virtio_input_priv
 
 static int virtio_input_probe(FAR struct virtio_device *vdev);
 static void virtio_input_remove(FAR struct virtio_device *vdev);
+static void virtio_input_dump(FAR struct virtio_device *vdev);
 
 /****************************************************************************
  * Private Data
@@ -95,10 +95,10 @@ static void virtio_input_remove(FAR struct virtio_device *vdev);
 
 static struct virtio_driver g_virtio_input_driver =
 {
-  .node   = LIST_INITIAL_VALUE(g_virtio_input_driver.node), /* node */
-  .device = VIRTIO_ID_INPUT,                                /* device id */
-  .probe  = virtio_input_probe,                             /* probe */
-  .remove = virtio_input_remove,                            /* remove */
+  .device = VIRTIO_ID_INPUT,     /* device id */
+  .probe  = virtio_input_probe,  /* probe */
+  .remove = virtio_input_remove, /* remove */
+  .dump   = virtio_input_dump,   /* dump */
 };
 
 static int g_virtio_mouse_idx    = 0;
@@ -131,16 +131,12 @@ virtio_input_send_keyboard_event(FAR struct virtio_input_priv *priv,
     {
       uint32_t trans_key;
       bool is_special;
+
+      /* Report each key at once: one update can change several keys */
+
       trans_key = keyboard_translate_virtio_code(event->code, &is_special);
-      priv->keyboardsample.code = trans_key;
-      priv->keyboardsample.type = types[is_special][event->value & 1];
-    }
-  else if (event->type == EV_SYN && event->code == SYN_REPORT)
-    {
-      keyboard_event(&(priv->keyboardlower),
-                     priv->keyboardsample.code,
-                     priv->keyboardsample.type);
-      memset(&priv->keyboardsample, 0, sizeof(priv->keyboardsample));
+      keyboard_event(&(priv->keyboardlower), trans_key,
+                     types[is_special][event->value & 1]);
     }
 }
 
@@ -256,6 +252,68 @@ virtio_input_send_touch_event(FAR struct virtio_input_priv *priv,
 }
 
 /****************************************************************************
+ * Name: virtio_input_send_tablet_event
+ ****************************************************************************/
+
+static void
+virtio_input_send_tablet_event(FAR struct virtio_input_priv *priv,
+                               FAR struct virtio_input_event *event)
+{
+  FAR struct touch_point_s *point = &priv->touchsample.point[0];
+
+  if (event->type == EV_ABS)
+    {
+      switch (event->code)
+        {
+          case ABS_X:
+            point->x = event->value;
+            break;
+
+          case ABS_Y:
+            point->y = event->value;
+            break;
+        }
+    }
+  else if (event->type == EV_KEY)
+    {
+      if (event->code == BTN_LEFT || event->code == BTN_TOUCH)
+        {
+          if (!event->value)
+            {
+              point->flags = TOUCH_UP;
+            }
+          else if (point->flags == TOUCH_UP)
+            {
+              point->flags = TOUCH_DOWN;
+            }
+          else
+            {
+              point->flags = TOUCH_MOVE;
+            }
+        }
+    }
+  else if (event->type == EV_SYN && event->code == SYN_REPORT)
+    {
+      if (point->flags & TOUCH_UP)
+        {
+          point->flags = TOUCH_UP | TOUCH_ID_VALID;
+        }
+      else
+        {
+          point->flags |= TOUCH_ID_VALID | TOUCH_POS_VALID;
+        }
+
+      priv->touchsample.npoints = 1;
+      point->timestamp = touch_get_time();
+      touch_event(priv->touchlower.priv, &priv->touchsample);
+
+      /* Reset flags: keep UP as idle, DOWN transitions to MOVE */
+
+      point->flags = (point->flags & TOUCH_UP) ? TOUCH_UP : TOUCH_MOVE;
+    }
+}
+
+/****************************************************************************
  * Name: virtio_input_worker
  ****************************************************************************/
 
@@ -329,6 +387,7 @@ static uint8_t virtio_input_select_cfg(FAR struct virtio_input_priv *priv,
                                        uint8_t select, uint8_t subsel)
 {
   uint8_t cfg_size = 0;
+
   virtio_write_config(priv->vdev, offsetof(struct virtio_input_config,
                       select), &select, sizeof(uint8_t));
   virtio_write_config(priv->vdev, offsetof(struct virtio_input_config,
@@ -352,7 +411,18 @@ static void virtio_input_register(FAR struct virtio_input_priv *priv)
       touch_register(&(priv->touchlower),
                      priv->name,
                      priv->evtnum);
-      priv->eventhandler = virtio_input_send_touch_event;
+
+      /* Tablet (BTN_LEFT) vs real touchscreen (ABS_PRESSURE) */
+
+      if (virtio_input_select_cfg(priv, VIRTIO_INPUT_CFG_EV_BITS, EV_KEY))
+        {
+          priv->touchsample.point[0].flags = TOUCH_UP;
+          priv->eventhandler = virtio_input_send_tablet_event;
+        }
+      else
+        {
+          priv->eventhandler = virtio_input_send_touch_event;
+        }
     }
   else if (virtio_input_select_cfg(priv, VIRTIO_INPUT_CFG_EV_BITS, EV_REL))
     {
@@ -444,7 +514,8 @@ static void virtio_input_remove(FAR struct virtio_device *vdev)
     {
       mouse_unregister(&(priv->mouselower), priv->name);
     }
-  else if (priv->eventhandler == virtio_input_send_touch_event)
+  else if (priv->eventhandler == virtio_input_send_touch_event ||
+           priv->eventhandler == virtio_input_send_tablet_event)
     {
       touch_unregister(&(priv->touchlower), priv->name);
     }
@@ -452,6 +523,32 @@ static void virtio_input_remove(FAR struct virtio_device *vdev)
   virtio_reset_device(vdev);
   virtio_delete_virtqueues(vdev);
   kmm_free(priv);
+}
+
+/****************************************************************************
+ * Name: virtio_input_dump
+ ****************************************************************************/
+
+static void virtio_input_dump(FAR struct virtio_device *vdev)
+{
+  FAR struct virtio_input_priv *priv = vdev->priv;
+  FAR const char *type = "unknown";
+
+  if (priv->eventhandler == virtio_input_send_keyboard_event)
+    {
+      type = "keyboard";
+    }
+  else if (priv->eventhandler == virtio_input_send_mouse_event)
+    {
+      type = "mouse";
+    }
+  else if (priv->eventhandler == virtio_input_send_touch_event)
+    {
+      type = "touch";
+    }
+
+  syslog(LOG_EMERG, "    name=%s, type=%s, evtnum=%zu\n",
+         priv->name, type, priv->evtnum);
 }
 
 /****************************************************************************

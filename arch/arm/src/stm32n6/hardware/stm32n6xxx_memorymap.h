@@ -42,6 +42,13 @@
 #define STM32_SRAM1_BASE      0x34000000    /* SRAM1 base */
 #define STM32_SRAM2_BASE      0x34100000    /* SRAM2 base */
 
+/* AXISRAM1-6 and the CACHEAXI RAM (Secure aliases), reachable by bus
+ * masters such as the SDMMC IDMA
+ */
+
+#define STM32_AXISRAM_BASE    STM32_SRAM1_BASE
+#define STM32_AXISRAM_SIZE    0x00400000
+
 /* External Memory **********************************************************/
 
 #define STM32_XSPI1_BANK      0x90000000    /* XSPI1 memory-mapped region */
@@ -79,7 +86,13 @@
 #define STM32_TIM5_BASE       0x50000c00
 #define STM32_TIM6_BASE       0x50001000
 #define STM32_TIM7_BASE       0x50001400
+#define STM32_TIM12_BASE      0x50001800
+#define STM32_TIM13_BASE      0x50001c00
+#define STM32_TIM14_BASE      0x50002000
 #define STM32_LPTIM1_BASE     0x50002400
+#define STM32_WWDG_BASE       0x50002c00
+#define STM32_TIM10_BASE      0x50003000
+#define STM32_TIM11_BASE      0x50003400
 #define STM32_SPI2_BASE       0x50003800
 #define STM32_SPI3_BASE       0x50003c00
 #define STM32_USART2_BASE     0x50004400
@@ -89,21 +102,37 @@
 #define STM32_I2C1_BASE       0x50005400
 #define STM32_I2C2_BASE       0x50005800
 #define STM32_I2C3_BASE       0x50005c00
+#define STM32_UART7_BASE      0x50007800
+#define STM32_UART8_BASE      0x50007c00
 
 /* APB2 peripherals *********************************************************/
 
 #define STM32_TIM1_BASE       0x52000000
 #define STM32_TIM8_BASE       0x52000400
 #define STM32_USART1_BASE     0x52001000
+#define STM32_USART6_BASE     0x52001400
+#define STM32_UART9_BASE      0x52001800
+#define STM32_USART10_BASE    0x52001c00
 #define STM32_SPI1_BASE       0x52003000
 #define STM32_SPI4_BASE       0x52003400
+#define STM32_TIM18_BASE      0x52003c00
 #define STM32_TIM15_BASE      0x52004000
 #define STM32_TIM16_BASE      0x52004400
 #define STM32_TIM17_BASE      0x52004800
+#define STM32_TIM9_BASE       0x52004c00
 #define STM32_SPI5_BASE       0x52005000
+
+/* APB5 peripherals *********************************************************/
+
+#define STM32_LTDC_BASE       0x58001000
+
+/* Debug ********************************************************************/
+
+#define STM32_DBGMCU_BASE     0x54001000
 
 /* APB4 peripherals *********************************************************/
 
+#define STM32_LPUART1_BASE    0x56000c00
 #define STM32_SPI6_BASE       0x56001400
 #define STM32_I2C4_BASE       0x56001c00
 #define STM32_LPTIM2_BASE     0x56002400
@@ -117,6 +146,7 @@
 #define STM32_TAMP_BASE       0x56004400
 #define STM32_IWDG_BASE       0x56004800
 #define STM32_BSEC_BASE       0x56009000
+#define STM32_SYSMEM_UID      0x56009014    /* 96-bit unique ID (BSEC OTP 5-7) */
 #define STM32_DTS_BASE        0x5600a000
 
 /* AHB4 peripherals *********************************************************/
@@ -159,8 +189,16 @@
 
 #define STM32_AHB5_BASE       0x58020000    /* AHB5 (Secure) */
 #define STM32_HPDMA1_BASE     0x58020000    /* HPDMA1 (AHB5, Secure) */
+
+/* The common GPDMA driver names its instances DMA1 and DMA2 */
+
+#define STM32_DMA1_BASE       STM32_GPDMA1_BASE
+#define STM32_DMA2_BASE       STM32_HPDMA1_BASE
+#define STM32_SDMMC2_BASE     0x58026800    /* SDMMC2 (AHB5, Secure) */
+#define STM32_SDMMC1_BASE     0x58027000    /* SDMMC1 (AHB5, Secure) */
 #define STM32_XSPI2_BASE      0x5802A000    /* XSPI2 controller (AHB5, Secure) */
 #define STM32_XSPIM_BASE      0x5802B400    /* XSPIM IO Manager (AHB5, Secure) */
+#define STM32_EMAC_BASE       0x58036000    /* ETH1 MAC (AHB5, Secure) */
 #define STM32_USB1_HS_PHYC_BASE 0x5803FC00  /* USB1 HS PHY controller (Secure) */
 #define STM32_USB1_OTG_HS_BASE  0x58040000  /* USB1 OTG HS (Secure) */
 #define STM32_USB2_OTG_HS_BASE  0x58080000  /* USB2 OTG HS (Secure) */

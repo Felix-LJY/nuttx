@@ -37,6 +37,10 @@
 #include <nuttx/kmalloc.h>
 #include <nuttx/spinlock.h>
 
+#if defined(CONFIG_FDPIC) && defined(CONFIG_SIG_EVTHREAD)
+#  include <nuttx/fdpic.h>
+#endif
+
 #include "sched/sched.h"
 #include "timer/timer.h"
 
@@ -104,6 +108,38 @@ static FAR struct posix_timer_s *timer_allocate(void)
 }
 
 /****************************************************************************
+ * Name: timer_cpu_getclockid
+ *
+ * Description:
+ *   Check a CPU-time clock of a new timer.  Give a clock of the calling
+ *   thread its thread ID: the timer reads the clock in interrupt handlers.
+ *
+ ****************************************************************************/
+
+#if CONFIG_SCHED_CRITMONITOR_MAXTIME_THREAD >= 0
+static bool timer_cpu_getclockid(FAR clockid_t *clockid)
+{
+  pid_t pid = *clockid >> CLOCK_SHIFT;
+
+  if ((*clockid & CLOCK_MASK) != CLOCK_PROCESS_CPUTIME_ID &&
+      (*clockid & CLOCK_MASK) != CLOCK_THREAD_CPUTIME_ID)
+    {
+      return false;
+    }
+
+  if (pid == 0)
+    {
+      *clockid |= this_task()->pid << CLOCK_SHIFT;
+      return true;
+    }
+
+  return nxsched_get_tcb(pid) != NULL;
+}
+#else
+#  define timer_cpu_getclockid(c) false
+#endif
+
+/****************************************************************************
  * Public Functions
  ****************************************************************************/
 
@@ -164,9 +200,9 @@ int timer_create(clockid_t clockid, FAR struct sigevent *evp,
   /* Sanity checks. */
 
   if (timerid == NULL || (clockid != CLOCK_REALTIME &&
-      clockid != CLOCK_MONOTONIC && clockid != CLOCK_BOOTTIME) ||
-      (evp != NULL && evp->sigev_notify == SIGEV_SIGNAL &&
-       !GOOD_SIGNO(evp->sigev_signo)))
+      clockid != CLOCK_MONOTONIC && clockid != CLOCK_BOOTTIME &&
+      !timer_cpu_getclockid(&clockid)) ||
+      (evp != NULL && nxsig_event_valid(evp) < 0))
     {
       set_errno(EINVAL);
     }
@@ -196,6 +232,25 @@ int timer_create(clockid_t clockid, FAR struct sigevent *evp,
               /* Yes, copy the entire struct sigevent content */
 
               memcpy(&ret->pt_event, evp, sizeof(struct sigevent));
+
+#if defined(CONFIG_FDPIC) && defined(CONFIG_SIG_EVTHREAD)
+              /* Record the callback here, where this still runs in the
+               * module's context.  It fires later on a worker that carries
+               * no data base, so the base travels with it.  The function
+               * shares a union with the thread ID, so only a SIGEV_THREAD
+               * event has one to record.
+               */
+
+              if ((evp->sigev_notify & SIGEV_THREAD) != 0)
+                {
+                  FAR void *fn = (FAR void *)evp->sigev_notify_function;
+
+                  fdpic_init(&ret->pt_work.func, fn);
+
+                  ret->pt_event.sigev_notify_function =
+                    (sigev_notify_function_t)fdpic_callback(fn);
+                }
+#endif
             }
           else
             {

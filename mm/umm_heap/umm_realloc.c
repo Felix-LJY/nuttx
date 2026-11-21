@@ -26,9 +26,12 @@
 
 #include <nuttx/config.h>
 
+#include <assert.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
+#include <nuttx/debug.h>
 #include <nuttx/mm/mm.h>
 
 #include "umm_heap/umm_heap.h"
@@ -79,9 +82,24 @@ FAR void *realloc(FAR void *oldmem, size_t size)
       mem = mm_realloc(USR_HEAP, oldmem, size);
       if (!mem)
         {
-          brkaddr = sbrk(size < 1 ? 1 : size);
+          /* sbrk() takes a signed increment */
+
+          brkaddr = (FAR void *)-1;
+          if (size <= INTPTR_MAX)
+            {
+              brkaddr = sbrk(size < 1 ? 1 : size);
+            }
+
           if (brkaddr == (FAR void *)-1)
             {
+              /* mm_malloc() does not report a failure in this heap */
+
+              mwarn("WARNING: Allocation failed, size %zu\n", size);
+#ifdef CONFIG_MM_PANIC_ON_FAILURE
+              PANIC();
+#endif
+
+              umm_set_errno(ENOMEM);
               return NULL;
             }
         }
@@ -95,12 +113,11 @@ FAR void *realloc(FAR void *oldmem, size_t size)
   ret = mm_realloc(USR_HEAP, oldmem, size);
   if (ret == NULL)
     {
-      set_errno(ENOMEM);
+      umm_set_errno(ENOMEM);
     }
   else
     {
-      mm_notify_pressure(mm_heapfree(USR_HEAP),
-                         mm_heapfree_largest(USR_HEAP));
+      mm_notify_pressure(USR_HEAP);
     }
 
   return ret;

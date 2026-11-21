@@ -410,6 +410,15 @@ enum virtio_gpu_formats
 
   VIRTIO_GPU_FORMAT_A8B8G8R8_UNORM  = 121,
   VIRTIO_GPU_FORMAT_R8G8B8X8_UNORM  = 134,
+
+  /* We can only use below formats under VirGL, e.g., virtio-gpu-gl-device
+   * Example:
+   *   -device virtio-gpu-gl-device,bus=virtio-mmio-bus.1 -display sdl,gl=on
+   */
+
+  VIRTIO_GPU_FORMAT_B5G5R5A1_UNORM  = 5,
+  VIRTIO_GPU_FORMAT_B4G4R4A4_UNORM  = 6,
+  VIRTIO_GPU_FORMAT_B5G6R5_UNORM    = 7,
 };
 
 /* VIRTIO_GPU_CMD_RESOURCE_ASSIGN_UUID */
@@ -510,11 +519,8 @@ begin_packed_struct struct virtio_gpu_resource_unmap_blob
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -525,7 +531,6 @@ int virtio_register_gpu_driver(void);
 
 int virtio_gpu_fb_register(int display);
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

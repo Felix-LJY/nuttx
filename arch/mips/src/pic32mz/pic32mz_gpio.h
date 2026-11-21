@@ -115,7 +115,7 @@
 #  define GPIO_PULLDOWN      (4  << GPIO_CN_SHIFT)  /* Bit 10: Change notification pull-down */
 #  define GPIO_EDGE_DETECT   (8  << GPIO_CN_SHIFT)  /* Bit 11: Change notification interrupt mode */
 #  define GPIO_MISMATCH      (0)
-#  define GPIO_EDGE_RISING   (12 << GPIO_CN_SHIFT)  /* Bit 12: Change notification edge type */
+#  define GPIO_EDGE_RISING   (16 << GPIO_CN_SHIFT)  /* Bit 12: Change notification edge type */
 #  define GPIO_EDGE_FALLING  (0)
 
 /* GPIO Port.
@@ -172,13 +172,9 @@ typedef uint32_t pinset_t;
  * Public Data
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /* This table can be used to map a port number to a IOPORT base address.  For
@@ -186,7 +182,7 @@ extern "C"
  * etc.
  */
 
-EXTERN const uintptr_t g_gpiobase[CHIP_NPORTS];
+extern const uintptr_t g_gpiobase[CHIP_NPORTS];
 
 /****************************************************************************
  * Public Function Prototypes
@@ -314,7 +310,6 @@ void pic32mz_dumpgpio(pinset_t pinset, const char *msg);
 #  define pic32mz_dumpgpio(p,m)
 #endif
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

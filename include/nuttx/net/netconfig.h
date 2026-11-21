@@ -2,8 +2,7 @@
  * include/nuttx/net/netconfig.h
  *
  * SPDX-License-Identifier: BSD-3-Clause
- * SPDX-FileCopyrightText: 2007, 2011, 2014-2015, 2017-2019 Gregory Nutt.
- * All rights reserved.
+ * SPDX-FileCopyrightText: 2007, 2011, 2014-2015, 2017-2019 Gregory Nutt. All rights reserved.
  * SPDX-FileCopyrightText: 2001-2003, Adam Dunkels. All rights reserved.
  * SPDX-FileContributor: Gregory Nutt <gnutt@nuttx.org>
  * SPDX-FileContributor: Adam Dunkels <adam@dunkels.com>
@@ -642,7 +641,7 @@
 #endif
 
 #ifndef CONFIG_NET_ARP_MAXAGE
-/* The maximum age of ARP table entries measured in 10ths of seconds.
+/* The maximum age of ARP table entries in units of 10 seconds.
  *
  * An CONFIG_NET_ARP_MAXAGE of 120 corresponds to 20 minutes (BSD
  * default).

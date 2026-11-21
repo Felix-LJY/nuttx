@@ -193,7 +193,8 @@ static const char *g_white_prefix[] =
   "ASCII_",  /* Ref:  include/nuttx/ascii.h */
   "Dl_info", /* Ref:  include/dlfcn.h */
   "Elf",     /* Ref:  include/elf.h, include/elf32.h, include/elf64.h */
-  "Ifx",     /* Ref:  arch/tricore/src */
+  "GL",      /* Ref:  apps/graphics/tinygl/tinygl/include/GL/gl.h */
+  "PDC_",    /* Ref:  apps/include/graphics/curses.h */
   "PRId",    /* Ref:  inttypes.h */
   "PRIi",    /* Ref:  inttypes.h */
   "PRIo",    /* Ref:  inttypes.h */
@@ -213,6 +214,8 @@ static const char *g_white_prefix[] =
   "b16",     /* Ref:  include/fixedmath.h */
   "b32",     /* Ref:  include/fixedmath.h */
   "cJSON",   /* Ref:  apps/wireless/wapi/src */
+  "gl",      /* Ref:  apps/graphics/tinygl/tinygl/include/GL/gl.h */
+  "ZB",      /* Ref:  apps/graphics/tinygl/tinygl/include/zbuffer.h */
   "ub8",     /* Ref:  include/fixedmath.h */
   "ub16",    /* Ref:  include/fixedmath.h */
   "ub32",    /* Ref:  include/fixedmath.h */
@@ -230,6 +233,17 @@ static const char *g_white_prefix[] =
   "tClass",  /* Ref:  arch/tricore/src */
   "tCpu",    /* Ref:  arch/tricore/src */
   "tId",     /* Ref:  arch/tricore/src */
+
+  /* Ref:  arch/arm/src/rzv2h */
+
+  "R_IOPORT_",
+  "R_SCI_B_UART_",
+  "R_FSP_",
+  "RCR",
+  "R_BSP",
+  "R_CPG",
+  "R_XSPI_",
+  "RSP_INT_STSn",
 
   /* Ref:  apps/system/microros, apps/examples/microros_*
    * ROS 2 standard message package names and rosidl scalar type names
@@ -285,6 +299,8 @@ static const char *g_white_prefix[] =
   "Cache_",
   "DCache_",
   "ChipInfo_",
+  "CPU_",             /* CPU_InInterrupt — amebasmart SDK exception check */
+  "Diag",             /* DiagPrintf, DiagVprintf, DiagPrintfNano — SDK log */
   "EFUSE_",
   "FLASH_",
   "GPIO_",
@@ -299,6 +315,7 @@ static const char *g_white_prefix[] =
   "PAD_",
   "PLL_",             /* PLL_ClkGet — amebadplus SPI ip_clk query */
   "Pinmux_",
+  "_Pinmux_",           /* _Pinmux_Config — ROM symbol for RTL8730E pad mux */
   "RCC_",
   "RTC_",             /* RTC_InitTypeDef, RTC_Enable, RTC_SetTime, etc. */
   "RTCIO_",
@@ -309,8 +326,11 @@ static const char *g_white_prefix[] =
   "SYSCFG_",
   "SYSTIMER_",
   "SYS_PLL_",         /* SYS_PLL_ClkGet — RTL8720F SPI ip_clk query */
+  "System_",          /* System_Reset — amebasmart SDK power management */
+  "TRNG_",            /* TRNG_get_random_bytes — amebasmart SDK TRNG */
   "UART_",
   "WDG_",             /* WDG_Init, WDG_Refresh, WDG_INTConfig, etc. */
+  "vPort",            /* vPortGateOtherCore, vPortWakeOtherCore — FreeRTOS SMP */
   "SystemCoreClock",  /* SystemCoreClock, SystemCoreClockUpdate */
   "cmse_",            /* ARM CMSE TrustZone intrinsics (arm_cmse.h) */
   "MQTTErrors",       /* apps/tools/netutils/mqttc/MQTT-C/include/mqtt.h */
@@ -319,6 +339,20 @@ static const char *g_white_prefix[] =
 
   "SOPC_",
   "OpcUa_",
+
+  /* Ref:  drivers/crypto/pnt, NXP Plug&Trust middleware */
+
+  "Se05x",
+  "SE05x_",
+  "kSE05x_",
+  "smStatus_t",
+  "pScp03_",
+
+  /* Ref:  arch/mips/src/pic32mz/pic32mz_w1_wlan.c, callbacks of Microchip's
+   * PIC32MZ-W1 WLAN library
+   */
+
+  "DRV_PIC32MZW_",
   NULL
 };
 
@@ -343,6 +377,18 @@ static const char *g_white_suffix[] =
 
 static const char *g_white_content_list[] =
 {
+  /* Ref:  arch/arm/src/rzv2h (Renesas FSP register bitfield union
+   * member, e.g. R_CPG->CPG_CSDIV0_b.DIVCTL3)
+   */
+
+  "CPG_CSDIV0_b",
+
+  /* Ref:  arch/arm/src/rzv2h/rzv2h_qspi.c (Renesas FSP register
+   * bitfield union member)
+   */
+
+  "LIOCTL_b",
+
   /* Ref:
    * nuttx-apps/examples/wamr_module/module_hello.c
    * nuttx-apps/interpreters/wamr/wamr_custom_init.c
@@ -484,6 +530,12 @@ static const char *g_white_content_list[] =
   "SETATTR3args",
   "SETATTR3resok",
   "FS3args",
+  "SYMLINK3args",
+  "SYMLINK3resok",
+  "READLINK3args",
+  "READLINK3resok",
+  "LINK3args",
+  "LINK3resok",
   "SIZEOF_rpc_reply_read",
   "SIZEOF_rpc_call_write",
   "SIZEOF_rpc_reply_readdir",
@@ -749,6 +801,12 @@ static const char *g_white_content_list[] =
   "unzGoToFirstFile",
 
   /* Ref:
+   * arch/tricore/src/common
+   */
+
+  "__jumpBackToLink",
+
+  /* Ref:
    * apps/netutils/telnetc/telnetc.c
    */
 
@@ -795,12 +853,6 @@ static const char *g_white_content_list[] =
 static const char *g_white_headers[] =
 {
   "windows.h",
-
-  /* Ref:
-   * arch/tricore/src/common/tricore_serial.c
-   */
-
-  "IfxAsclin_Asc.h",
   NULL
 };
 
@@ -850,14 +902,13 @@ static const char *g_white_files[] =
   "phy62xx/start.c",
   "lpc4370-link2/src/lpc43_spifilib_init.c",
 
-  /* Skip infineon illd files
+  /* Skip Mixed case in the NXP LPC43xx SPIFI family command set
+   * (vendor SDK code).
    * Ref:
-   * arch/tricore/src/illd
+   * arch/arm/src/lpc43xx/spifi/src/spifilib_fam_standard_cmd.c
    */
 
-  "Ifx_Cfg_Ssw.c",
-  "Ifx_Cfg_Ssw.h",
-  "Ifx_Cfg.h",
+  "lpc43xx/spifi/src/spifilib_fam_standard_cmd.c",
 
   /* Skip the GigaDevice GD32VW55x Wi-Fi/BLE SDK glue: the vendor config
    * headers, the lwIP-compat shims and the OS-facade files reference vendor
@@ -870,6 +921,10 @@ static const char *g_white_files[] =
   "gd32vw55x/gdwifi/gdwifi_glue.c",
   "gd32vw55x/gdwifi/gdwifi_newlib_compat.c",
   "gd32vw55x/gdble/gd32_ble.c",
+
+  /* Skip libcxx support header (C++ file, not NuttX style) */
+
+  "from_chars_support.h",
   NULL
 };
 
@@ -2157,6 +2212,31 @@ int main(int argc, char **argv, char **envp)
 
                   ppline = PPLINE_OTHER;
 
+                  /* A header does not define or undefine EXTERN: its
+                   * #undef removes the definition of a program that
+                   * includes it.
+                   */
+
+                  if (g_file_type == C_HEADER &&
+                      (strncmp(&line[ii], "define", 6) == 0 ||
+                       strncmp(&line[ii], "undef", 5) == 0))
+                    {
+                      int jj = ii + (line[ii] == 'd' ? 6 : 5);
+
+                      while (line[jj] != '\0' && isspace(line[jj]))
+                        {
+                          jj++;
+                        }
+
+                      if (strncmp(&line[jj], "EXTERN", 6) == 0 &&
+                          !isalnum(line[jj + 6]) && line[jj + 6] != '_')
+                        {
+                          ERROR("Do not define EXTERN, declare global data "
+                                "with extern",
+                                lineno, jj);
+                        }
+                    }
+
                   if (strncmp(&line[ii], "define", 6) == 0)
                     {
                       ppline = PPLINE_DEFINE;
@@ -2190,7 +2270,11 @@ int main(int argc, char **argv, char **envp)
 
                   else if (strncmp(&line[ii], "include", 7) == 0)
                     {
-                      if (g_section != INCLUDED_FILES)
+                      /* A file included in an initializer provides the
+                       * data of the initializer.
+                       */
+
+                      if (g_section != INCLUDED_FILES && dnest == 0)
                         {
                           /* Only a warning because there is some usage of
                            * include outside the Included Files section
@@ -2445,6 +2529,7 @@ int main(int argc, char **argv, char **envp)
                    strncmp(&line[indent], "struct ", 7) == 0 ||
                    strncmp(&line[indent], "struct\n", 7) == 0 || /* May be unnamed */
                    strncmp(&line[indent], "enum ", 5) == 0 ||
+                   strncmp(&line[indent], "enum\n", 5) == 0 ||   /* May be unnamed */
                    strncmp(&line[indent], "extern ", 7) == 0 ||
                    strncmp(&line[indent], "EXTERN ", 7) == 0 ||
                    strncmp(&line[indent], "FAR ", 4) == 0 ||
@@ -3074,16 +3159,20 @@ int main(int argc, char **argv, char **envp)
                     {
                       if (n > indent)
                         {
-                          /* REVISIT: dnest is always > 0 here if bfunctions ==
-                           * false.
+                          /* A left brace must always be on its own line,
+                           * whether it opens a compound statement at file
+                           * scope or inside a function body.  dnest > 0
+                           * only means that a nested initializer brace
+                           * (e.g. "{ 1, 2 }," within an array of structs)
+                           * is in progress starting at column 'indent';
+                           * it must not excuse the opening brace of the
+                           * declaration itself from this rule just
+                           * because that declaration happens to be local
+                           * to a function.
                            */
 
-                          if (dnest == 0 || !bfunctions ||
-                              lineno == rbrace_lineno)
-                            {
-                              ERROR("Left bracket not on separate line", lineno,
-                                    n);
-                            }
+                          ERROR("Left bracket not on separate line", lineno,
+                                n);
                         }
                       else if (line[n + 1] != '\n')
                         {
@@ -3885,6 +3974,14 @@ int main(int argc, char **argv, char **envp)
               if (lineno == 2)
                 {
                   INFO("Skipping checking line 2: path file\n", 2, m);
+                }
+              else if (strstr(line, "SPDX-") != NULL)
+                {
+                  /* Ignore an SPDX tag line: a copyright notice must stay
+                   * as it is, even when it is longer than the line width.
+                   */
+
+                  INFO("Skipping checking an SPDX line\n", lineno, m);
                 }
               else
                 {

@@ -1,8 +1,8 @@
-==================
-ESP32-C3 SuperMini
-==================
+================================
+Tenstar Robot ESP32-C3 SuperMini
+================================
 
-.. tags:: chip:ESP32-C3
+.. tags:: arch:risc-v, chip:esp32c3, vendor:espressif
 
 The ESP32-C3 SuperMini is a compact third-party board based on the
 Espressif ESP32-C3 RISC-V SoC.

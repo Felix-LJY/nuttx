@@ -42,6 +42,7 @@
 #include <nuttx/usb/usbdev_trace.h>
 
 #include <nuttx/irq.h>
+#include <nuttx/spinlock.h>
 #include <arch/board/board.h>
 
 #include "xtensa.h"
@@ -63,14 +64,18 @@
 
 /* USB hardware definition */
 
-#define ESP32S3_FIFO_SIZE       (1280)
+/* GHWCFG3 reports a 200-word data FIFO.  Sizing past it places the IN
+ * TxFIFOs beyond the FIFO RAM, where they alias the RxFIFO.
+ */
+
+#define ESP32S3_FIFO_SIZE       (800)
 #define ESP32S3_FIFO_WORDS      (ESP32S3_FIFO_SIZE >> 2)
 
 /* EP0 + additional EP */
 
 #define ESP32S3_ENDPOINT_NUM    (CONFIG_ESP32S3_OTG_ENDPOINT_NUM + 1)
 
-/* There is 1.25Kb of FIFO memory.  The default partitions this memory
+/* There are 800 bytes of FIFO memory.  The default partitions this memory
  * so that there is a TxFIFO allocated for each endpoint and with more
  * memory provided for the common RxFIFO.  A more knowledge-able
  * configuration would not allocate any TxFIFO space to OUT endpoints.
@@ -410,6 +415,7 @@ struct esp32s3_req_s
 {
   struct usbdev_req_s req;      /* Standard USB request */
   struct esp32s3_req_s *flink;  /* Supports a singly linked list */
+  uint32_t sent;                /* Bytes completed by XFRC */
 };
 
 /* This is the internal representation of an endpoint */
@@ -435,6 +441,11 @@ struct esp32s3_ep_s
   uint8_t isin:1;               /* 1: IN Endpoint */
   uint8_t odd:1;                /* 1: Odd frame */
   uint8_t zlp:1;                /* 1: Transmit a zero-length-packet (IN EPs only) */
+
+  /* Request whose packet is in the FIFO */
+
+  struct esp32s3_req_s *inflight;
+  uint32_t inflight_len;        /* Length of the in-flight packet */
 };
 
 /* This structure retains the state of the USB device controller */
@@ -451,6 +462,10 @@ struct esp32s3_usbdev_s
   /* The bound device class driver */
 
   struct usbdevclass_driver_s *driver;
+
+  /* Protects the per-endpoint request queues and active state. */
+
+  spinlock_t lock;
 
   /* ESP32-S3-specific fields */
 
@@ -920,7 +935,11 @@ static void esp32s3_putreg(uint32_t val, uint32_t addr)
 static struct esp32s3_req_s *esp32s3_req_remfirst(
                                 struct esp32s3_ep_s *privep)
 {
-  struct esp32s3_req_s *ret = privep->head;
+  struct esp32s3_req_s *ret;
+  irqstate_t flags;
+
+  flags = spin_lock_irqsave(&privep->dev->lock);
+  ret = privep->head;
 
   if (ret)
     {
@@ -933,6 +952,7 @@ static struct esp32s3_req_s *esp32s3_req_remfirst(
       ret->flink = NULL;
     }
 
+  spin_unlock_irqrestore(&privep->dev->lock, flags);
   return ret;
 }
 
@@ -947,7 +967,11 @@ static struct esp32s3_req_s *esp32s3_req_remfirst(
 static bool esp32s3_req_addlast(struct esp32s3_ep_s *privep,
                                 struct esp32s3_req_s *req)
 {
-  bool is_empty = !privep->head;
+  bool is_empty;
+  irqstate_t flags;
+
+  flags = spin_lock_irqsave(&privep->dev->lock);
+  is_empty = !privep->head;
 
   req->flink = NULL;
   if (is_empty)
@@ -961,6 +985,7 @@ static bool esp32s3_req_addlast(struct esp32s3_ep_s *privep,
       privep->tail = req;
     }
 
+  spin_unlock_irqrestore(&privep->dev->lock, flags);
   return is_empty;
 }
 
@@ -1180,6 +1205,7 @@ static void esp32s3_epin_transfer(struct esp32s3_ep_s *privep,
        */
 
       uint32_t status = esp32s3_getreg(ESP32S3_OTG_DSTS);
+
       if ((status & OTG_DSTS_SOFFN0) == OTG_DSTS_SOFFN_EVEN)
         {
           regval |= OTG_DIEPCTL_SEVNFRM;
@@ -1223,6 +1249,28 @@ static void esp32s3_epin_request(struct esp32s3_usbdev_s *priv,
   int nwords;
   int bytesleft;
 
+  if (privep->active)
+    {
+      return;
+    }
+
+  /* If the FIFO still contains stale bytes from a disabled transfer, drop
+   * them before programming the next request.
+   */
+
+  {
+    uint32_t depth = esp32s3_getreg(ESP32S3_OTG_DIEPTXF(privep->epphy));
+    uint32_t free  = esp32s3_getreg(ESP32S3_OTG_DTXFSTS(privep->epphy));
+
+    depth &= OTG_DIEPTXF_INEPTXFD_MASK;
+    depth >>= OTG_DIEPTXF_INEPTXFD_SHIFT;
+
+    if (depth > (free & OTG_DTXFSTS_MASK))
+      {
+        esp32s3_txfifo_flush(OTG_GRSTCTL_TXFNUM_D(privep->epphy));
+      }
+  }
+
   /* We get here in one of four possible ways.  From three interrupting
    * events:
    *
@@ -1250,6 +1298,19 @@ static void esp32s3_epin_request(struct esp32s3_usbdev_s *priv,
   if (!privreq)
     {
       usbtrace(TRACE_DEVERROR(ESP32S3_TRACEERR_EPINREQEMPTY), privep->epphy);
+
+      {
+        uint32_t depth = esp32s3_getreg(ESP32S3_OTG_DIEPTXF(privep->epphy));
+        uint32_t free  = esp32s3_getreg(ESP32S3_OTG_DTXFSTS(privep->epphy));
+
+        depth &= OTG_DIEPTXF_INEPTXFD_MASK;
+        depth >>= OTG_DIEPTXF_INEPTXFD_SHIFT;
+
+        if (depth > (free & OTG_DTXFSTS_MASK))
+          {
+            esp32s3_txfifo_flush(OTG_GRSTCTL_TXFNUM_D(privep->epphy));
+          }
+      }
 
       /* There is no TX transfer in progress and no new pending TX requests
        * to send.  To stop transmitting any data on a particular IN endpoint,
@@ -1376,6 +1437,7 @@ static void esp32s3_epin_request(struct esp32s3_usbdev_s *priv,
            */
 
           uint32_t empmsk = esp32s3_getreg(ESP32S3_OTG_DIEPEMPMSK);
+
           empmsk |= OTG_DIEPEMPMSK(privep->epphy);
           esp32s3_putreg(empmsk, ESP32S3_OTG_DIEPEMPMSK);
 
@@ -1408,6 +1470,12 @@ static void esp32s3_epin_request(struct esp32s3_usbdev_s *priv,
        * data.
        */
 
+      if (privep->epphy != EP0)
+        {
+          privep->inflight = privreq;
+          privep->inflight_len = nbytes;
+        }
+
       privep->active = true;
 
       /* EP0 is a special case */
@@ -1428,13 +1496,12 @@ static void esp32s3_epin_request(struct esp32s3_usbdev_s *priv,
    * transfer
    */
 
-  if (privreq->req.xfrd >= privreq->req.len && !privep->zlp)
+  if (privep->epphy == EP0 &&
+      privreq->req.xfrd >= privreq->req.len && !privep->zlp)
     {
       usbtrace(TRACE_COMPLETE(privep->epphy), privreq->req.xfrd);
 
-      /* We are finished with the request (although the transfer has not yet
-       * completed).
-       */
+      /* EP0 control transfers keep the original early completion path. */
 
       esp32s3_req_complete(privep, OK);
     }
@@ -1512,6 +1579,7 @@ static void esp32s3_rxfifo_discard(struct esp32s3_ep_s *privep, int len)
       for (i = 0; i < len; i += 4)
         {
           volatile uint32_t data = esp32s3_getreg(regaddr);
+
           UNUSED(data);
         }
     }
@@ -1598,6 +1666,7 @@ static inline void esp32s3_ep0out_receive(struct esp32s3_ep_s *privep,
       /* Read the data into our special buffer for SETUP data */
 
       int readlen = MIN(ESP32S3_CDCACM_EP0MAXPACKET, bcnt);
+
       esp32s3_rxfifo_read(privep, priv->ep0data, readlen);
 
       /* Do we have to discard any excess bytes? */
@@ -1895,12 +1964,17 @@ static void esp32s3_req_complete(struct esp32s3_ep_s *privep,
 
   privreq = esp32s3_req_remfirst(privep);
   DEBUGASSERT(privreq != NULL);
+  if (privreq == NULL)
+    {
+      return;
+    }
 
   /* If endpoint 0, temporarily reflect the state of protocol stalled in the
    * callback.
    */
 
   bool stalled = privep->stalled;
+
   if (privep->epphy == EP0)
     {
       privep->stalled = privep->dev->stalled;
@@ -1940,6 +2014,10 @@ static void esp32s3_req_cancel(struct esp32s3_ep_s *privep, int16_t status)
                (esp32s3_rqpeek(privep))->req.xfrd);
       esp32s3_req_complete(privep, status);
     }
+
+  privep->active = false;
+  privep->inflight = NULL;
+  privep->inflight_len = 0;
 }
 
 /****************************************************************************
@@ -2071,6 +2149,8 @@ static void esp32s3_usbreset(struct esp32s3_usbdev_s *priv)
       privep->stalled = false;
       privep->active  = false;
       privep->zlp     = false;
+      privep->inflight = NULL;
+      privep->inflight_len = 0;
 
       /* Return read requests to the class implementation */
 
@@ -2295,6 +2375,7 @@ static void esp32s3_ep0out_stdrequest(struct esp32s3_usbdev_s *priv,
           if (priv->addressed != 0 && ctrlreq->len == 0)
             {
               uint8_t recipient = ctrlreq->type & USB_REQ_RECIPIENT_MASK;
+
               if (recipient == USB_REQ_RECIPIENT_ENDPOINT &&
                   ctrlreq->value == USB_FEATURE_ENDPOINTHALT &&
                   (privep = esp32s3_ep_findbyaddr(priv, ctrlreq->index))
@@ -2336,6 +2417,7 @@ static void esp32s3_ep0out_stdrequest(struct esp32s3_usbdev_s *priv,
           if (priv->addressed != 0 && ctrlreq->len == 0)
             {
               uint8_t recipient = ctrlreq->type & USB_REQ_RECIPIENT_MASK;
+
               if (recipient == USB_REQ_RECIPIENT_ENDPOINT &&
                   ctrlreq->value == USB_FEATURE_ENDPOINTHALT &&
                   (privep = esp32s3_ep_findbyaddr(priv, ctrlreq->index))
@@ -2490,6 +2572,7 @@ static void esp32s3_ep0out_stdrequest(struct esp32s3_usbdev_s *priv,
               if (ret == OK)
                 {
                   uint8_t cfg = (uint8_t)ctrlreq->value;
+
                   if (cfg != 0)
                     {
                       priv->devstate = DEVSTATE_CONFIGURED;
@@ -2833,6 +2916,7 @@ static inline void esp32s3_epout_interrupt(struct esp32s3_usbdev_s *priv)
 static inline void esp32s3_epin_runtestmode(struct esp32s3_usbdev_s *priv)
 {
   uint32_t regval = esp32s3_getreg(ESP32S3_OTG_DCTL);
+
   regval &= OTG_DCTL_TCTL_MASK;
   regval |= (uint32_t)priv->testmode << OTG_DCTL_TCTL_SHIFT;
   esp32s3_putreg(regval, ESP32S3_OTG_DCTL);
@@ -3038,8 +3122,26 @@ static inline void esp32s3_epin_interrupt(struct esp32s3_usbdev_s *priv)
               esp32s3_putreg(empty, ESP32S3_OTG_DIEPEMPMSK);
               esp32s3_putreg(OTG_DIEPINT_XFRC, ESP32S3_OTG_DIEPINT(epno));
 
+              /* Update the completed-byte count only after XFRC. */
+
+              if (epno != 0 && priv->epin[epno].inflight != NULL)
+                {
+                  struct esp32s3_req_s *req = priv->epin[epno].inflight;
+
+                  req->sent += priv->epin[epno].inflight_len;
+                  req->req.xfrd = req->sent;
+                  priv->epin[epno].inflight = NULL;
+                  priv->epin[epno].inflight_len = 0;
+
+                  if (req->sent >= req->req.len && !priv->epin[epno].zlp)
+                    {
+                      esp32s3_req_complete(&priv->epin[epno], OK);
+                    }
+                }
+
               /* IN transfer complete */
 
+              priv->epin[epno].active = false;
               esp32s3_epin(priv, epno);
             }
 
@@ -4253,6 +4355,7 @@ static void esp32s3_epin_disable(struct esp32s3_ep_s *privep)
   regval = esp32s3_getreg(regaddr);
   if ((regval & OTG_DIEPCTL_USBAEP) == 0)
     {
+      esp32s3_req_cancel(privep, -ESHUTDOWN);
       return;
     }
 
@@ -4323,6 +4426,8 @@ static void esp32s3_epin_disable(struct esp32s3_ep_s *privep)
 
   /* Cancel any queued write requests */
 
+  privep->inflight = NULL;
+  privep->inflight_len = 0;
   esp32s3_req_cancel(privep, -ESHUTDOWN);
   leave_critical_section(flags);
 }
@@ -4511,6 +4616,7 @@ static int esp32s3_ep_submit(struct usbdev_ep_s *ep,
 
   req->result = -EINPROGRESS;
   req->xfrd = 0;
+  privreq->sent = 0;
 
   /* Disable Interrupts */
 
@@ -4913,6 +5019,7 @@ static struct usbdev_ep_s *esp32s3_ep_alloc(struct usbdev_s *dev,
       for (epno = 1; epno < ESP32S3_ENDPOINT_NUM; epno++)
         {
           uint8_t bit = 1 << epno;
+
           if ((epavail & bit) != 0)
             {
               /* Mark the endpoint no longer available */
@@ -5070,6 +5177,7 @@ static int esp32s3_pullup(struct usbdev_s *dev, bool enable)
   usbtrace(TRACE_DEVPULLUP, (uint16_t)enable);
 
   irqstate_t flags = enter_critical_section();
+
   if (enable)
     {
       /* Connect the device by clearing the soft disconnect bit in the DCTL
@@ -5228,6 +5336,8 @@ static void esp32s3_swinitialize(struct esp32s3_usbdev_s *priv)
   /* Initialize the device state structure */
 
   memset(priv, 0, sizeof(struct esp32s3_usbdev_s));
+
+  spin_lock_init(&priv->lock);
 
   priv->usbdev.ops = &g_devops;
   priv->usbdev.ep0 = &priv->epin[EP0].ep;

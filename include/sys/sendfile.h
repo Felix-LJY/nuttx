@@ -53,13 +53,9 @@
  * Public Function Prototypes
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -99,16 +95,16 @@ extern "C"
  * Returned Value:
  *   If the transfer was successful, the number of bytes written to outfd is
  *   returned.  On error, -1 is returned, and errno is set appropriately.
- *   There error values are those returned by read() or write() plus:
+ *   These error values are those returned by read() or write() plus:
  *
- *   EINVAL - Bad input parameters.
- *   ENOMEM - Could not allocated an I/O buffer
+ *   EBADF  - A file descriptor is invalid or has wrong access mode.
+ *   EINVAL - Bad input parameters (e.g., negative offset or outfd == infd).
+ *   ENOMEM - Could not allocate an I/O buffer.
  *
  ****************************************************************************/
 
 ssize_t sendfile(int outfd, int infd, FAR off_t *offset, size_t count);
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

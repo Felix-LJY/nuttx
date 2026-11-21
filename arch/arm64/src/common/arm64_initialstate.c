@@ -89,7 +89,7 @@ void arm64_new_task(struct tcb_s * tcb)
   xcp->regs[REG_SCTLR_EL1] = read_sysreg(sctlr_el1) | SCTLR_TCF1_BIT;
 #endif
 
-#ifndef CONFIG_ARM64_DECODEFIQ
+#ifndef CONFIG_ARCH_HIPRI_INTERRUPT
   xcp->regs[REG_SPSR]     |= DAIF_FIQ_BIT;
 #endif
 
@@ -104,6 +104,10 @@ void arm64_new_task(struct tcb_s * tcb)
   xcp->regs[REG_SP_EL0]    = (uint64_t)stack_ptr - XCPTCONTEXT_SIZE;
 #endif
   xcp->regs[REG_EXE_DEPTH] = 0;
+
+  /* TPIDR_EL0 points to the TLS info of the thread, see up_tls_info() */
+
+  xcp->regs[REG_TPIDR_EL0] = (uint64_t)tcb->stack_alloc_ptr;
 
 #ifndef CONFIG_BUILD_FLAT
   tcb->xcp.initregs        = tcb->xcp.regs;
@@ -148,11 +152,9 @@ void up_initial_state(struct tcb_s *tcb)
       tcb->stack_base_ptr  = tcb->stack_alloc_ptr;
       tcb->adj_stack_size  = CONFIG_IDLETHREAD_STACKSIZE;
 
-      /* set initialize idle thread tcb and exception depth
-       * core 0, idle0
-       */
+      /* set initialize idle thread tcb core 0, idle0 */
 
-      write_sysreg(0, tpidrro_el0);
+      write_sysreg(tcb->stack_alloc_ptr, tpidr_el0);
 
 #ifdef CONFIG_STACK_COLORATION
 

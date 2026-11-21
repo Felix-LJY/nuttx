@@ -2,7 +2,7 @@
 FVP ARMv8-r
 ===========
 
-.. tags:: chip:virt, arch:arm64
+.. tags:: arch:arm64, chip:fvp-v8r, part:virt, vendor:arm
 
 This board configuration will use FVP_BaseR_AEMv8R to emulate generic ARM64v8-R
 (Cotex-R82) series hardware platform and provides support for these devices:
@@ -58,7 +58,7 @@ test your software.
      terminal_2: Listening for serial connection on port 5002
      terminal_3: Listening for serial connection on port 5003
 
- FVP has four UART port and UART1 was choosen as tty, so just telnet to port 5001
+ FVP has four UART port and UART1 was chosen as tty, so just telnet to port 5001
  will enter ``nsh``:
 
  .. code:: console

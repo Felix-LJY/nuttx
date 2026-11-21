@@ -82,6 +82,12 @@ there are three important configuration options that can change that.
      successful obtain the child task's exit status whether it is called
      before the child task exits or not.
 
+     This option is on by default in a kernel build
+     (``CONFIG_BUILD_KERNEL``). There, programs start other programs with
+     ``posix_spawn()``, ``vfork()`` and ``exec()``, and POSIX requires
+     that a parent can get the exit status of a child that exited before
+     the parent waits for it.
+
   -  ``CONFIG_PREALLOC_CHILDSTATUS``. To prevent runaway child status
      allocations and to improve allocation performance, child task exit
      status structures are pre-allocated when the system boots. This
@@ -108,6 +114,13 @@ like:
   sa.sa_handler = SIG_IGN;
   sa.sa_flags = SA_NOCLDWAIT;
   int ret = sigaction(SIGCHLD, &sa, NULL);
+
+A later ``sigaction()`` for ``SIGCHLD`` without ``SA_NOCLDWAIT`` (and
+not ``SIG_IGN``) keeps the child status again.  While the status is not
+kept, ``wait()``, ``waitpid()`` and ``waitid()`` block until all
+children exit and then fail with ``ECHILD``.  NuttX decides when a child
+is created if its status is kept: a child created while the status is
+not kept does not become waitable later.
 
 Functions
 =========
@@ -170,8 +183,8 @@ Functions
      for any task to complete execution. With
      ``CONFIG_SCHED_HAVE_PARENT``, ``waitpid()`` will use ``SIGCHLD`` and
      can, therefore, wait for any child of the parent to complete. The
-     implementation is incomplete in either case, however: NuttX does not
-     support any concept of process groups. Nor does NuttX retain the
+     implementation is incomplete in either case, however: it does not
+     support process groups. Nor does NuttX retain the
      status of exited tasks so if ``waitpid()`` is called after a task has
      exited, then no status will be available. The options argument is
      currently ignored.
@@ -310,8 +323,8 @@ Functions
      little more compliant to specifications. ``waitpid()`` simply
      supports waiting a specific child task (``P_PID`` or for any child
      task ``P_ALL`` to complete execution. ``SIGCHLD`` is used. The
-     implementation is incomplete in either case, however: NuttX does not
-     support any concept of process groups. Nor does NuttX retain the
+     implementation is incomplete in either case, however: it does not
+     support process groups. Nor does NuttX retain the
      status of exited tasks so if ``waitpid()`` is called after a task has
      exited, then no status will be available. The options argument is
      currently ignored.
@@ -407,18 +420,24 @@ Functions
   normal process termination, whether via ``exit()`` or via return from
   the program's ``main()``.
 
-  .. note:: ``CONFIG_SCHED_ATEXIT`` must be defined to enable this function.
+  .. note:: ``CONFIG_LIBC_MAX_EXITFUNS`` must be larger than 0 to build
+    ``atexit()``, ``on_exit()`` and ``at_quick_exit()``.  A C++ ELF
+    program (built with ``-fno-use-cxa-atexit``) with a static object
+    calls ``atexit()`` too, so the default is 1 when both ``CONFIG_ELF``
+    and ``CONFIG_HAVE_CXX`` are enabled.
+
+  The number of functions is limited only by memory: the first
+  ``CONFIG_LIBC_MAX_EXITFUNS`` entries are in the task information, the
+  next ones come from the heap.  ``atexit()``, ``on_exit()``,
+  ``at_quick_exit()`` and ``__cxa_atexit()`` share the list.
 
   :param func: A pointer to the function to be called when the task exits.
-  :return: On success, ``atexit()`` returns OK (0). On error,
-    ERROR (-1) is returned, and ```errno`` <#ErrnoAccess>`__ is set to
-    indicate the cause of the failure.
+  :return: On success, ``atexit()`` returns OK (0). On error (no memory),
+    a non-zero value is returned.
 
   **POSIX Compatibility:** Comparable to the ISO C interface of the same
   name. Limitations in the current implementation:
 
-    #. Only a single ``atexit`` function can be registered unless
-       ``CONFIG_SCHED_ATEXIT_MAX`` defines a larger number.
     #. ``atexit()`` functions are not inherited when a new task is created.
 
 .. c:function:: int on_exit(CODE void (*func)(int, FAR void *), FAR void *arg)
@@ -430,8 +449,8 @@ Functions
   given to the last call to ``exit()`` and the ``arg`` argument from
   ``on_exit()``.
 
-  .. note: ``CONFIG_SCHED_ONEXIT`` must be defined to enable this
-    function
+  .. note:: ``CONFIG_LIBC_MAX_EXITFUNS`` must be larger than 0 to build
+    this function.
 
   :param func: A pointer to the function to be called when the task exits.
   :param arg: An argument that will be provided to the ``on_exit()``
@@ -445,6 +464,5 @@ Functions
   present in libc4, libc5 and glibc. It no longer occurs in Solaris (SunOS
   5). Avoid this function, and use the standard ``atexit()`` instead.
 
-    #. Only a single ``on_exit`` function can be registered unless
-       ``CONFIG_SCHED_ONEXIT_MAX`` defines a larger number.
+    #. ``on_exit()`` shares the list of ``atexit()``.
     #. ``on_exit()`` functions are not inherited when a new task is created.

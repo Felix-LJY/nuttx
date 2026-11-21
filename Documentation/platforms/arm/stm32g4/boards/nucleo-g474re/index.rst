@@ -2,7 +2,7 @@
 ST Nucleo G474RE
 ================
 
-.. tags:: chip:stm32, chip:stm32g4, chip:stm32g474
+.. tags:: arch:arm, chip:stm32g4, part:stm32g474, vendor:st
 
 This is the page for a port of NuttX to the ST Micro Nucleo G474RE
 board with STM32G474RE MCU. For more information about this board, see:
@@ -77,8 +77,12 @@ The board has 1 user LED.
 Serial Consoles
 ===============
 
+The default console is LPUART1 on PA2/PA3, which the board wires to the
+STLINK-V3E virtual COM port, so the console is available on the USB
+connection without extra wiring (``nsh``, ``lpuartnsh`` and ``usbserial``).
+
 The MCU's USART3 is exposed to the pin 1 and 2 of the "Morpho connector" CN7
-on the board.
+on the board and can be selected as console instead.
 
 FLASH Bootloader Support
 ========================

@@ -1,6 +1,8 @@
 /****************************************************************************
  * arch/arm64/src/bcm2711/bcm2711_mailbox.h
  *
+ * SPDX-License-Identifier: Apache-2.0
+ *
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.  The
@@ -172,13 +174,9 @@
 
 #ifndef __ASSEMBLY__
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -568,7 +566,6 @@ int bcm2711_mbox_getoscan(uint32_t *top, uint32_t *bot, uint32_t *left,
 int bcm2711_mbox_fbinit(uint32_t *x, uint32_t *y, uint32_t *bpp, void **fb,
                         uint32_t *fblen);
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

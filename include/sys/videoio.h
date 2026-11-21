@@ -73,9 +73,15 @@ extern "C"
 #define V4L2_PIX_FMT_BGR32    v4l2_fourcc('B', 'G', 'R', '4')
 #define V4L2_PIX_FMT_ABGR32   v4l2_fourcc('A', 'R', '2', '4')
 #define V4L2_PIX_FMT_XBGR32   v4l2_fourcc('X', 'R', '2', '4')
+#define V4L2_PIX_FMT_BGRA32   v4l2_fourcc('R', 'A', '2', '4')
+#define V4L2_PIX_FMT_BGRX32   v4l2_fourcc('R', 'X', '2', '4')
 #define V4L2_PIX_FMT_RGB32    v4l2_fourcc('R', 'G', 'B', '4')
+#define V4L2_PIX_FMT_RGBA32   v4l2_fourcc('A', 'B', '2', '4')
+#define V4L2_PIX_FMT_RGBX32   v4l2_fourcc('X', 'B', '2', '4')
 #define V4L2_PIX_FMT_ARGB32   v4l2_fourcc('B', 'A', '2', '4')
 #define V4L2_PIX_FMT_XRGB32   v4l2_fourcc('B', 'X', '2', '4')
+#define V4L2_PIX_FMT_BGR48    v4l2_fourcc('B', 'G', 'R', '6')
+#define V4L2_PIX_FMT_RGB48    v4l2_fourcc('R', 'G', 'B', '6')
 
 /* Grey formats */
 
@@ -87,9 +93,17 @@ extern "C"
 #define V4L2_PIX_FMT_Y16      v4l2_fourcc('Y', '1', '6', ' ')
 #define V4L2_PIX_FMT_Y16_BE   v4l2_fourcc_be('Y', '1', '6', ' ')
 
+/* Depth formats: 16-bit little endian distance per pixel */
+
+#define V4L2_PIX_FMT_Z16      v4l2_fourcc('Z', '1', '6', ' ')
+
 /* Grey bit-packed formats */
 
 #define V4L2_PIX_FMT_Y10BPACK v4l2_fourcc('Y', '1', '0', 'B')
+#define V4L2_PIX_FMT_Y10P     v4l2_fourcc('Y', '1', '0', 'P')
+#define V4L2_PIX_FMT_IPU3_Y10 v4l2_fourcc('i', 'p', '3', 'y')
+#define V4L2_PIX_FMT_Y12P     v4l2_fourcc('Y', '1', '2', 'P')
+#define V4L2_PIX_FMT_Y14P     v4l2_fourcc('Y', '1', '4', 'P')
 
 /* Palette formats */
 
@@ -110,7 +124,14 @@ extern "C"
 #define V4L2_PIX_FMT_YUV444   v4l2_fourcc('Y', '4', '4', '4')
 #define V4L2_PIX_FMT_YUV555   v4l2_fourcc('Y', 'U', 'V', 'O')
 #define V4L2_PIX_FMT_YUV565   v4l2_fourcc('Y', 'U', 'V', 'P')
+#define V4L2_PIX_FMT_YUV24    v4l2_fourcc('Y', 'U', 'V', '3')
 #define V4L2_PIX_FMT_YUV32    v4l2_fourcc('Y', 'U', 'V', '4')
+#define V4L2_PIX_FMT_AYUV32   v4l2_fourcc('A', 'Y', 'U', 'V')
+#define V4L2_PIX_FMT_XYUV32   v4l2_fourcc('X', 'Y', 'U', 'V')
+#define V4L2_PIX_FMT_VUYA32   v4l2_fourcc('V', 'U', 'Y', 'A')
+#define V4L2_PIX_FMT_VUYX32   v4l2_fourcc('V', 'U', 'Y', 'X')
+#define V4L2_PIX_FMT_YUVA32   v4l2_fourcc('Y', 'U', 'V', 'A')
+#define V4L2_PIX_FMT_YUVX32   v4l2_fourcc('Y', 'U', 'V', 'X')
 #define V4L2_PIX_FMT_HI240    v4l2_fourcc('H', 'I', '2', '4')
 #define V4L2_PIX_FMT_HM12     v4l2_fourcc('H', 'M', '1', '2')
 #define V4L2_PIX_FMT_M420     v4l2_fourcc('M', '4', '2', '0')
@@ -191,10 +212,52 @@ extern "C"
 #define V4L2_PIX_FMT_SGRBG16      v4l2_fourcc('G', 'R', '1', '6')
 #define V4L2_PIX_FMT_SRGGB16      v4l2_fourcc('R', 'G', '1', '6')
 
+/* 12bit raw bayer packed, 6 bytes for every 4 pixels */
+
+#define V4L2_PIX_FMT_SBGGR12P     v4l2_fourcc('p', 'B', 'C', 'C')
+#define V4L2_PIX_FMT_SGBRG12P     v4l2_fourcc('p', 'G', 'C', 'C')
+#define V4L2_PIX_FMT_SGRBG12P     v4l2_fourcc('p', 'g', 'C', 'C')
+#define V4L2_PIX_FMT_SRGGB12P     v4l2_fourcc('p', 'R', 'C', 'C')
+#define V4L2_PIX_FMT_SBGGR14      v4l2_fourcc('B', 'G', '1', '4')
+#define V4L2_PIX_FMT_SGBRG14      v4l2_fourcc('G', 'B', '1', '4')
+#define V4L2_PIX_FMT_SGRBG14      v4l2_fourcc('G', 'R', '1', '4')
+#define V4L2_PIX_FMT_SRGGB14      v4l2_fourcc('R', 'G', '1', '4')
+
+/* 14bit raw bayer packed, 7 bytes for every 4 pixels */
+
+#define V4L2_PIX_FMT_SBGGR14P     v4l2_fourcc('p', 'B', 'E', 'E')
+#define V4L2_PIX_FMT_SGBRG14P     v4l2_fourcc('p', 'G', 'E', 'E')
+#define V4L2_PIX_FMT_SGRBG14P     v4l2_fourcc('p', 'g', 'E', 'E')
+#define V4L2_PIX_FMT_SRGGB14P     v4l2_fourcc('p', 'R', 'E', 'E')
+#define V4L2_PIX_FMT_SBGGR16      v4l2_fourcc('B', 'Y', 'R', '2')
+#define V4L2_PIX_FMT_SGBRG16      v4l2_fourcc('G', 'B', '1', '6')
+#define V4L2_PIX_FMT_SGRBG16      v4l2_fourcc('G', 'R', '1', '6')
+#define V4L2_PIX_FMT_SRGGB16      v4l2_fourcc('R', 'G', '1', '6')
+
 /* HSV formats */
 
 #define V4L2_PIX_FMT_HSV24    v4l2_fourcc('H', 'S', 'V', '3')
 #define V4L2_PIX_FMT_HSV32    v4l2_fourcc('H', 'S', 'V', '4')
+
+/* 10bit raw packed, 32 bytes for every 25 pixels, last LSB 6 bits unused */
+
+#define V4L2_PIX_FMT_IPU3_SBGGR10  v4l2_fourcc('i', 'p', '3', 'b')
+#define V4L2_PIX_FMT_IPU3_SGBRG10  v4l2_fourcc('i', 'p', '3', 'g')
+#define V4L2_PIX_FMT_IPU3_SGRBG10  v4l2_fourcc('i', 'p', '3', 'G')
+#define V4L2_PIX_FMT_IPU3_SRGGB10  v4l2_fourcc('i', 'p', '3', 'r')
+
+/* Raspberry Pi PiSP compressed formats. */
+
+#define V4L2_PIX_FMT_PISP_COMP1_RGGB  v4l2_fourcc('P', 'C', '1', 'R')
+#define V4L2_PIX_FMT_PISP_COMP1_GRBG  v4l2_fourcc('P', 'C', '1', 'G')
+#define V4L2_PIX_FMT_PISP_COMP1_GBRG  v4l2_fourcc('P', 'C', '1', 'g')
+#define V4L2_PIX_FMT_PISP_COMP1_BGGR  v4l2_fourcc('P', 'C', '1', 'B')
+#define V4L2_PIX_FMT_PISP_COMP1_MONO  v4l2_fourcc('P', 'C', '1', 'M')
+#define V4L2_PIX_FMT_PISP_COMP2_RGGB  v4l2_fourcc('P', 'C', '2', 'R')
+#define V4L2_PIX_FMT_PISP_COMP2_GRBG  v4l2_fourcc('P', 'C', '2', 'G')
+#define V4L2_PIX_FMT_PISP_COMP2_GBRG  v4l2_fourcc('P', 'C', '2', 'g')
+#define V4L2_PIX_FMT_PISP_COMP2_BGGR  v4l2_fourcc('P', 'C', '2', 'B')
+#define V4L2_PIX_FMT_PISP_COMP2_MONO  v4l2_fourcc('P', 'C', '2', 'M')
 
 /* Compressed formats */
 
@@ -215,6 +278,7 @@ extern "C"
 #define V4L2_PIX_FMT_VP8      v4l2_fourcc('V', 'P', '8', '0')
 #define V4L2_PIX_FMT_VP9      v4l2_fourcc('V', 'P', '9', '0')
 #define V4L2_PIX_FMT_HEVC     v4l2_fourcc('H', 'E', 'V', 'C')
+#define V4L2_PIX_FMT_ENTROPY  v4l2_fourcc('E', 'N', 'T', 'R')
 
 /* JPEG + sub image */
 
@@ -228,9 +292,32 @@ extern "C"
 
 #define V4L2_PIX_FMT_SUBIMG_RGB565 v4l2_fourcc('S', 'R', 'G', 'B')
 
+/* Line-based metadata formats */
+
+#define V4L2_META_FMT_GENERIC_8         v4l2_fourcc('M', 'E', 'T', '8')
+#define V4L2_META_FMT_GENERIC_CSI2_10   v4l2_fourcc('M', 'C', '1', 'A')
+#define V4L2_META_FMT_GENERIC_CSI2_12   v4l2_fourcc('M', 'C', '1', 'C')
+#define V4L2_META_FMT_GENERIC_CSI2_14   v4l2_fourcc('M', 'C', '1', 'E')
+#define V4L2_META_FMT_GENERIC_CSI2_16   v4l2_fourcc('M', 'C', '1', 'G')
+#define V4L2_META_FMT_GENERIC_CSI2_20   v4l2_fourcc('M', 'C', '1', 'K')
+#define V4L2_META_FMT_GENERIC_CSI2_24   v4l2_fourcc('M', 'C', '1', 'O')
+
+/* Flags */
+
+#define V4L2_PIX_FMT_FLAG_PREMUL_ALPHA 0x00000001
+#define V4L2_PIX_FMT_FLAG_SET_CSC      0x00000002
+
 /* MAX length of v4l2_fmtdesc description string */
 
 #define V4L2_FMT_DSC_MAX       (32)
+
+#define V4L2_CTRL_ID_MASK           (0x0fffffff)
+#define V4L2_CTRL_ID2CLASS(id)      ((id) & 0x0fff0000UL)
+#define V4L2_CTRL_ID2WHICH(id)      ((id) & 0x0fff0000UL)
+#define V4L2_CTRL_DRIVER_PRIV(id)   (((id) & 0xffff) >= 0x1000)
+#define V4L2_CTRL_WHICH_CUR_VAL     0
+#define V4L2_CTRL_WHICH_DEF_VAL     0x0f000000
+#define V4L2_CTRL_WHICH_REQUEST_VAL 0x0f010000
 
 /* MAX length of v4l2_query_ext_ctrl dims array */
 
@@ -239,10 +326,6 @@ extern "C"
 /* MAX value of VIDIOC_REQBUFS count parameter */
 
 #define V4L2_REQBUFS_COUNT_MAX CONFIG_VIDEO_REQBUFS_COUNT_MAX
-
-/* Buffer error flag */
-
-#define V4L2_BUF_FLAG_ERROR    (0x0001)
 
 /* Values for v4l2_std_id */
 
@@ -393,6 +476,7 @@ struct v4l2_capability
   uint32_t version;      /* Version number of the driver */
   uint32_t capabilities; /* Available capabilities of the physical device */
   uint32_t device_caps;  /* Device capabilities of the opened device */
+  uint32_t reserved[3];  /* Reserved space for future use */
 };
 
 /* Values for 'capabilities' field */
@@ -421,10 +505,13 @@ enum v4l2_capabilities
   V4L2_CAP_SDR_CAPTURE            = 0x00100000,  /* Is a SDR capture device */
   V4L2_CAP_EXT_PIX_FORMAT         = 0x00200000,  /* Supports the extended pixel format */
   V4L2_CAP_SDR_OUTPUT             = 0x00400000,  /* Is a SDR output device */
+  V4L2_CAP_META_CAPTURE           = 0x00800000,  /* Is a metadata capture device */
   V4L2_CAP_READWRITE              = 0x01000000,  /* Read/write systemcalls */
   V4L2_CAP_ASYNCIO                = 0x02000000,  /* Async I/O */
   V4L2_CAP_STREAMING              = 0x04000000,  /* Streaming I/O ioctls */
+  V4L2_CAP_META_OUTPUT            = 0x08000000,  /* Is a metadata output device */
   V4L2_CAP_TOUCH                  = 0x10000000,  /* Is a touch device */
+  V4L2_CAP_IO_MC                  = 0x20000000,  /* Is input/output controlled by the media controller */
   V4L2_CAP_DEVICE_CAPS            = 0x80000000,  /* Sets device capabilities field */
 };
 
@@ -463,10 +550,11 @@ struct v4l2_fract
 
 struct v4l2_selection
 {
-  uint32_t type;       /* Buffer type */
+  uint32_t type;         /* Buffer type */
   uint32_t target;
   uint32_t flags;
-  struct v4l2_rect r;  /* The selection rectangle. */
+  struct v4l2_rect r;    /* The selection rectangle. */
+  uint32_t reserved[9];  /* Reserved space for future use */
 };
 
 typedef uint64_t v4l2_std_id;
@@ -731,13 +819,16 @@ enum v4l2_buf_mode
 
 struct v4l2_requestbuffers
 {
-  uint32_t count;    /* The number of buffers requested.
-                      * Supported maximum is
-                      * is V4L2_REQBUFS_COUNT_MAX
-                      */
-  uint32_t type;     /* enum #v4l2_buf_type */
-  uint32_t memory;   /* enum #v4l2_memory */
-  uint32_t mode;     /* enum #v4l2_buf_mode */
+  uint32_t count;        /* The number of buffers requested.
+                          * Supported maximum is
+                          * is V4L2_REQBUFS_COUNT_MAX
+                          */
+  uint32_t type;         /* enum #v4l2_buf_type */
+  uint32_t memory;       /* enum #v4l2_memory */
+  uint32_t capabilities; /* Requested buffer capabilities */
+  uint8_t  flags;        /* Memory consistency flags */
+  uint8_t  mode;         /* NuttX private: enum #v4l2_buf_mode */
+  uint8_t  reserved[2];  /* Reserved space for future use */
 };
 
 typedef struct v4l2_requestbuffers v4l2_requestbuffers_t;
@@ -763,7 +854,8 @@ struct v4l2_plane
   {
     uint32_t      mem_offset;
     unsigned long userptr;
-    int           fd;
+    int32_t       fd;
+    void          *vaddr;    /* NuttX private: kernel address of plane data */
   } m;
   uint32_t        data_offset;
   uint32_t        reserved[11];
@@ -793,9 +885,16 @@ struct v4l2_buffer
     uint32_t           offset;
     unsigned long      userptr;   /* Address of buffer */
     struct v4l2_plane  *planes;
-    int                fd;
+    int32_t            fd;
+    void               *vaddr;    /* The real kernel address of image data */
   } m;
   uint32_t             length;    /* User set the buffer size */
+  uint32_t             reserved2; /* Reserved, drivers/apps must zero */
+  union
+  {
+    int32_t            request_fd; /* fd of the request this buffer uses */
+    uint32_t           reserved;
+  };
 };
 
 typedef struct v4l2_buffer v4l2_buffer_t;
@@ -804,17 +903,31 @@ typedef struct v4l2_buffer v4l2_buffer_t;
 
 #define V4L2_BUF_FLAG_KEYFRAME                  0x00000008
 
+/* Image is a P-frame */
+
+#define V4L2_BUF_FLAG_PFRAME                    0x00000010
+
+/* Image is a B-frame */
+
+#define V4L2_BUF_FLAG_BFRAME                    0x00000020
+
+/* Buffer is ready, but the data contained within is corrupted. */
+
+#define V4L2_BUF_FLAG_ERROR                     0x00000040
+
 /* mem2mem encoder/decoder */
 
 #define V4L2_BUF_FLAG_LAST                      0x00100000
 
 struct v4l2_fmtdesc
 {
-  uint16_t index;                           /* Format number      */
-  uint16_t type;                            /* enum v4l2_buf_type */
+  uint32_t index;                           /* Format number      */
+  uint32_t type;                            /* enum v4l2_buf_type */
   uint32_t flags;
   char     description[V4L2_FMT_DSC_MAX];   /* Description string */
   uint32_t pixelformat;                     /* Format fourcc      */
+  uint32_t mbus_code;                       /* Media bus code    */
+  uint32_t reserved[3];                     /* Reserved for future use */
 };
 
 enum v4l2_fmt_flag
@@ -832,24 +945,23 @@ enum v4l2_frmsizetypes
 
 struct v4l2_frmsize_discrete
 {
-  uint16_t width;          /* Frame width [pixel] */
-  uint16_t height;         /* Frame height [pixel] */
+  uint32_t width;          /* Frame width [pixel] */
+  uint32_t height;         /* Frame height [pixel] */
 };
 
 struct v4l2_frmsize_stepwise
 {
-  uint16_t min_width;      /* Minimum frame width [pixel] */
-  uint16_t max_width;      /* Maximum frame width [pixel] */
-  uint16_t step_width;     /* Frame width step size [pixel] */
-  uint16_t min_height;     /* Minimum frame height [pixel] */
-  uint16_t max_height;     /* Maximum frame height [pixel] */
-  uint16_t step_height;    /* Frame height step size [pixel] */
+  uint32_t min_width;      /* Minimum frame width [pixel] */
+  uint32_t max_width;      /* Maximum frame width [pixel] */
+  uint32_t step_width;     /* Frame width step size [pixel] */
+  uint32_t min_height;     /* Minimum frame height [pixel] */
+  uint32_t max_height;     /* Maximum frame height [pixel] */
+  uint32_t step_height;    /* Frame height step size [pixel] */
 };
 
 struct v4l2_frmsizeenum
 {
   uint32_t  index;              /* Frame size number */
-  uint32_t  buf_type;           /* enum #v4l2_buf_type */
   uint32_t  pixel_format;       /* Pixel format */
   uint32_t  type;               /* Frame size type the device supports. */
 
@@ -862,6 +974,8 @@ struct v4l2_frmsizeenum
     struct v4l2_frmsize_discrete discrete;
     struct v4l2_frmsize_stepwise stepwise;
   };
+
+  uint32_t  reserved[2];        /* Reserved space for future use */
 };
 
 /* Type of frame interval enumeration */
@@ -885,16 +999,17 @@ struct v4l2_frmival_stepwise
 struct v4l2_frmivalenum
 {
   uint32_t index;               /* Frame format index */
-  uint32_t buf_type;            /* enum #v4l2_buf_type */
   uint32_t pixel_format;        /* Pixel format */
-  uint16_t width;               /* Frame width */
-  uint16_t height;              /* Frame height */
+  uint32_t width;               /* Frame width */
+  uint32_t height;              /* Frame height */
   uint32_t type;                /* Frame interval type */
   union
   {                             /* Frame interval */
     struct v4l2_fract               discrete;
     struct v4l2_frmival_stepwise    stepwise;
   };
+
+  uint32_t reserved[2];         /* Reserved space for future use */
 };
 
 /* Single-planar format structure. */
@@ -928,12 +1043,12 @@ typedef struct v4l2_pix_format v4l2_pix_format_t;
  * adjacent lines
  */
 
-struct v4l2_plane_pix_format
+begin_packed_struct struct v4l2_plane_pix_format
 {
   uint32_t  sizeimage;
   uint32_t  bytesperline;
   uint16_t  reserved[6];
-};
+} end_packed_struct;
 
 /* struct v4l2_pix_format_mplane - multiplanar format definition
  * width: image width in pixels
@@ -949,7 +1064,7 @@ struct v4l2_plane_pix_format
  * xfer_func: enum v4l2_xfer_func, colorspace transfer function
  */
 
-struct v4l2_pix_format_mplane
+begin_packed_struct struct v4l2_pix_format_mplane
 {
   uint32_t      width;
   uint32_t      height;
@@ -968,15 +1083,26 @@ struct v4l2_pix_format_mplane
   uint8_t                      quantization;
   uint8_t                      xfer_func;
   uint8_t                      reserved[7];
-};
+} end_packed_struct;
+
+begin_packed_struct struct v4l2_meta_format
+{
+    uint32_t                   dataformat;
+    uint32_t                   buffersize;
+    uint32_t                   width;
+    uint32_t                   height;
+    uint32_t                   bytesperline;
+} end_packed_struct;
 
 struct v4l2_format
 {
   uint32_t  type;                         /* enum #v4l2_buf_type. */
-  union
+  union aligned_data(sizeof(void *))
   {
     struct v4l2_pix_format        pix;    /* Image format */
     struct v4l2_pix_format_mplane pix_mp; /* V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE */
+    struct v4l2_meta_format       meta;   /* V4L2_BUF_TYPE_META_CAPTURE */
+    uint8_t                       raw_data[200];
   } fmt;
 };
 
@@ -989,6 +1115,7 @@ struct v4l2_captureparm
   struct v4l2_fract  timeperframe;  /*  Time per frame in seconds */
   uint32_t           extendedmode;  /*  Driver-specific extensions */
   uint32_t           readbuffers;   /*  # of buffers for read */
+  uint32_t           reserved[4];
 };
 
 struct v4l2_outputparm
@@ -1028,8 +1155,8 @@ struct v4l2_streamparm
   {
     struct v4l2_captureparm capture;
     struct v4l2_outputparm  output;
+    uint8_t                 raw_data[200]; /* user-defined */
   } parm;
-  uint8_t  raw_data[200];            /* user-defined */
 };
 
 /* E V E N T S */
@@ -1157,21 +1284,21 @@ enum v4l2_ctrl_type
 
 struct v4l2_queryctrl
 {
-  uint16_t   ctrl_class;               /* Control class(not used) */
-  uint16_t   id;                       /* Control id */
-  uint16_t   type;                     /* enum #v4l2_ctrl_type */
+  uint32_t   id;                       /* Control id */
+  uint32_t   type;                     /* enum #v4l2_ctrl_type */
   char       name[32];                 /* Name of control */
   int32_t    minimum;                  /* Minimum value */
   int32_t    maximum;                  /* Maximum value */
-  uint32_t   step;                     /* Step */
+  int32_t    step;                     /* Step */
   int32_t    default_value;            /* Default value */
-  uint32_t   flags;                    /* Flag */};
+  uint32_t   flags;                    /* Flag */
+  uint32_t   reserved[2];              /* Reserved space for future use */
+};
 
 struct v4l2_query_ext_ctrl
 {
-  uint16_t   ctrl_class;               /* Control class(not used) */
-  uint16_t   id;                       /* Control id */
-  uint16_t   type;                     /* enum #v4l2_ctrl_type */
+  uint32_t   id;                       /* Control id */
+  uint32_t   type;                     /* enum #v4l2_ctrl_type */
   char       name[32];                 /* Name of control */
   int64_t    minimum;                  /* Minimum value */
   int64_t    maximum;                  /* Maximum value */
@@ -1182,19 +1309,48 @@ struct v4l2_query_ext_ctrl
   uint32_t   elems;                    /* Number of elements */
   uint32_t   nr_of_dims;               /* Number of dimensions */
   uint32_t   dims[V4L2_CTRL_MAX_DIMS]; /* Dimensions */
+  uint32_t   reserved[32];             /* Reserved space for future use */
 };
 
-struct v4l2_querymenu
+begin_packed_struct struct v4l2_querymenu
 {
-  uint16_t   ctrl_class;    /* Camera control class(not used) */
-  uint16_t   id;            /* Camera control id    */
+  uint32_t   id;            /* Camera control id    */
   uint32_t   index;         /* Index of menu.       */
   union
   {
     char    name[32];       /* Name of menu  */
     int64_t value;          /* Value of menu */
   };
-};
+  uint32_t   reserved;
+} end_packed_struct;
+
+/* Control flags */
+
+#define V4L2_CTRL_FLAG_DISABLED         0x0001
+#define V4L2_CTRL_FLAG_GRABBED          0x0002
+#define V4L2_CTRL_FLAG_READ_ONLY        0x0004
+#define V4L2_CTRL_FLAG_UPDATE           0x0008
+#define V4L2_CTRL_FLAG_INACTIVE         0x0010
+#define V4L2_CTRL_FLAG_SLIDER           0x0020
+#define V4L2_CTRL_FLAG_WRITE_ONLY       0x0040
+#define V4L2_CTRL_FLAG_VOLATILE         0x0080
+#define V4L2_CTRL_FLAG_HAS_PAYLOAD      0x0100
+#define V4L2_CTRL_FLAG_EXECUTE_ON_WRITE 0x0200
+#define V4L2_CTRL_FLAG_MODIFY_LAYOUT    0x0400
+#define V4L2_CTRL_FLAG_DYNAMIC_ARRAY    0x0800
+
+/*  Query flags, to be ORed with the control ID */
+
+#define V4L2_CTRL_FLAG_NEXT_CTRL        0x80000000
+#define V4L2_CTRL_FLAG_NEXT_COMPOUND    0x40000000
+
+/*  User-class control IDs defined by V4L2 */
+
+#define V4L2_CID_MAX_CTRLS              1024
+
+/*  IDs reserved for driver specific controls */
+
+#define V4L2_CID_PRIVATE_BASE           0x08000000
 
 struct v4l2_input
 {
@@ -1304,7 +1460,7 @@ enum v4l2_output_capabilites_compat
 
 struct v4l2_control
 {
-  uint16_t id;
+  uint32_t id;
   int32_t  value;
 };
 
@@ -1312,31 +1468,34 @@ struct v4l2_control
  *  ioctl(VIDIOC_G_EXT_CTRLS / VIDIOC_S_EXT_CTRLS)
  */
 
-struct v4l2_ext_control
+begin_packed_struct struct v4l2_ext_control
 {
-  uint16_t   id;       /* Camera control id */
-  uint16_t   size;     /* Size of value(not use) */
+  uint32_t   id;         /* Camera control id */
+  uint32_t   size;       /* Size of value(not use) */
+  uint32_t   reserved2[1];
   union
   {
-    int32_t  value;    /* QUERY_EXT_CTRL type = INTEGER, xxx */
-    int64_t  value64;  /* QUERY_EXT_CTRL type = INTEGER64, MENU */
+    int32_t  value;      /* QUERY_EXT_CTRL type = INTEGER, xxx */
+    int64_t  value64;    /* QUERY_EXT_CTRL type = INTEGER64, MENU */
     char     *string;
-    uint8_t  *p_u8;    /* QUERY_EXT_CTRL type = U8  */
-    uint16_t *p_u16;   /* QUERY_EXT_CTRL type = U16 */
-    uint32_t *p_u32;   /* QUERY_EXT_CTRL type = U32 */
+    uint8_t  *p_u8;      /* QUERY_EXT_CTRL type = U8  */
+    uint16_t *p_u16;     /* QUERY_EXT_CTRL type = U16 */
+    uint32_t *p_u32;     /* QUERY_EXT_CTRL type = U32 */
     void     *ptr;
   };
-};
+} end_packed_struct;
 
 struct v4l2_ext_controls
 {
   union
   {
-    uint16_t              ctrl_class;  /* Camera control class         */
-    uint16_t              which;
+    uint32_t              ctrl_class;  /* Camera control class         */
+    uint32_t              which;
   };
-  uint16_t                count;       /* Number of requests           */
-  uint16_t                error_idx;   /* Index in that error occurred */
+  uint32_t                count;       /* Number of requests           */
+  uint32_t                error_idx;   /* Index in that error occurred */
+  int32_t                 request_fd;  /* File descriptor of request   */
+  uint32_t                reserved[1];
   struct v4l2_ext_control *controls;   /* Each control information     */
 };
 
@@ -1362,6 +1521,18 @@ struct v4s_querymenu_scene
 {
   enum v4l2_scene_mode       mode;     /* Scene mode to be queried */
   struct v4l2_querymenu      menu;     /* Same as VIDIOC_QUERYMENU */
+};
+
+/* Structure for VIDIOC_EXPBUF */
+
+struct v4l2_exportbuffer
+{
+  uint32_t type; /* enum v4l2_buf_type */
+  uint32_t index;
+  uint32_t plane;
+  uint32_t flags;
+  int32_t  fd;
+  uint32_t reserved[11];
 };
 
 #define V4L2_ENC_CMD_START      (0)
@@ -1586,9 +1757,13 @@ struct v4l2_decoder_cmd
 
 #define VIDIOC_DQEVENT                _VIDIOC(0x0059)
 
-/* Subscribe or unsubscribe event */
+/* Subscribe event */
 
 #define VIDIOC_SUBSCRIBE_EVENT        _VIDIOC(0x005a)
+
+/* Unsubscribe event */
+
+#define VIDIOC_UNSUBSCRIBE_EVENT      _VIDIOC(0x005b)
 
 /* Get clip
  * Address pointing to struct v4l2_selection

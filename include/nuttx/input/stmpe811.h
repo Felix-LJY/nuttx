@@ -33,6 +33,7 @@
  ****************************************************************************/
 
 #include <nuttx/config.h>
+#include <stdbool.h>
 
 #include <nuttx/i2c/i2c_master.h>
 #include <nuttx/spi/spi.h>
@@ -519,11 +520,8 @@ typedef FAR void *STMPE811_HANDLE;
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -784,7 +782,6 @@ uint16_t stmpe811_tempread(STMPE811_HANDLE handle);
 
 /* Not implemented */
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

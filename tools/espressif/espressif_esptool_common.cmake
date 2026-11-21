@@ -53,9 +53,12 @@ if(NOT DEFINED CHIP_SERIES)
   string(REPLACE "\"" "" CHIP_SERIES "${CONFIG_ESPRESSIF_CHIP_SERIES}")
 endif()
 
-# Bootloader base (MCUboot placement; simple boot app start on ESP32-P4)
+# Bootloader base (MCUboot placement; simple boot app start): where the ROM
+# loads the second stage from (tools/<chip>/Config.mk APP_OFFSET)
 if(CONFIG_ARCH_CHIP_ESP32P4)
   set(BL_OFFSET 0x2000)
+elseif(CONFIG_ARCH_CHIP_ESP32 OR CONFIG_ARCH_CHIP_ESP32S2)
+  set(BL_OFFSET 0x1000)
 else()
   set(BL_OFFSET 0x0000)
 endif()
@@ -70,6 +73,20 @@ endif()
 set(EFUSE_OFFSET ${EFUSE_FLASH_OFFSET})
 
 # MCUboot application slot (Config.mk APP_OFFSET); default when not MCUboot boot
+# The Xtensa chips name their MCUboot options per chip (tools/<chip>/Config.mk)
+
+if(CONFIG_ARCH_XTENSA AND CONFIG_ESPRESSIF_BOOTLOADER_MCUBOOT)
+  string(TOUPPER "${CHIP_SERIES}" _chip)
+  foreach(
+    _opt
+    ESPTOOL_TARGET_PRIMARY ESPTOOL_TARGET_SECONDARY APP_MCUBOOT_HEADER_SIZE
+    OTA_PRIMARY_SLOT_OFFSET OTA_SECONDARY_SLOT_OFFSET OTA_SLOT_SIZE)
+    if(DEFINED CONFIG_${_chip}_${_opt})
+      set(CONFIG_ESPRESSIF_${_opt} "${CONFIG_${_chip}_${_opt}}")
+    endif()
+  endforeach()
+endif()
+
 if(CONFIG_ESPRESSIF_BOOTLOADER_MCUBOOT)
   if(CONFIG_ESPRESSIF_ESPTOOL_TARGET_PRIMARY)
     set(MCUBOOT_APP_OFFSET ${CONFIG_ESPRESSIF_OTA_PRIMARY_SLOT_OFFSET})

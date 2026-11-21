@@ -40,18 +40,8 @@
 
 /* Configuration ************************************************************/
 
-#define HAVE_PROC             1
 #define HAVE_RTC_DRIVER       1
 #define HAVE_AT45DB           1
-
-#if !defined(CONFIG_FS_PROCFS)
-#  undef HAVE_PROC
-#endif
-
-#if defined(HAVE_PROC) && defined(CONFIG_DISABLE_MOUNTPOINT)
-#  warning Mountpoints disabled.  No procfs support
-#  undef HAVE_PROC
-#endif
 
 /* Check if we can support the RTC driver */
 
@@ -63,6 +53,14 @@
 
 #if !defined(CONFIG_STM32_SPI1) || !defined(CONFIG_MTD_AT45DB)
 #  undef HAVE_AT45DB
+#endif
+
+/* Check if we can support W25 FLASH file system */
+
+#if !defined(CONFIG_STM32_SPI1) || !defined(CONFIG_MTD_W25)
+#  undef HAVE_W25
+#else
+#  define HAVE_W25 1
 #endif
 
 /* LED.  User LD3: the green LED is a user LED connected to Arduino signal
@@ -82,6 +80,12 @@
 
 #ifdef CONFIG_MTD_AT45DB
 #  define AT45DB_SPI1_CS \
+     (GPIO_PORTA | GPIO_PIN11 | GPIO_OUTPUT_SET | GPIO_OUTPUT | GPIO_PUSHPULL | \
+      GPIO_SPEED_50MHz)
+#endif
+
+#ifdef CONFIG_MTD_W25
+#  define W25_SPI1_CS \
      (GPIO_PORTA | GPIO_PIN11 | GPIO_OUTPUT_SET | GPIO_OUTPUT | GPIO_PUSHPULL | \
       GPIO_SPEED_50MHz)
 #endif
@@ -236,6 +240,18 @@ int stm32_at45dbinitialize(int minor);
 #endif
 
 /****************************************************************************
+ * Name: stm32_w25initialize
+ *
+ * Description:
+ *   Initialize and register the W25 driver.
+ *
+ ****************************************************************************/
+
+#ifdef HAVE_W25
+int stm32_w25initialize(int minor);
+#endif
+
+/****************************************************************************
  * Name: stm32_ina226initialize
  *
  * Description:
@@ -269,18 +285,6 @@ int stm32_ina219initialize(const char *devpath);
 
 #ifdef CONFIG_SENSORS_ZEROCROSS
 int stm32_zerocross_initialize(void);
-#endif
-
-/****************************************************************************
- * Name: board_timer_driver_initialize
- *
- * Description:
- *   Initialize and register a timer
- *
- ****************************************************************************/
-
-#ifdef CONFIG_TIMER
-int board_timer_driver_initialize(const char *devpath, int timer);
 #endif
 
 /****************************************************************************

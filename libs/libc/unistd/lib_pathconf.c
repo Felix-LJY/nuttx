@@ -125,10 +125,10 @@ long fpathconf(int fildes, int name)
         return LINK_MAX;
 
       case _PC_NAME_MAX:
-        return _POSIX_NAME_MAX;
+        return NAME_MAX;
 
       case _PC_PIPE_BUF:
-        return _POSIX_PIPE_BUF;
+        return PIPE_BUF;
 
       case _PC_MAX_CANON:
         return _POSIX_MAX_CANON;
@@ -138,6 +138,9 @@ long fpathconf(int fildes, int name)
 
       case _PC_PRIO_IO:
         return _POSIX_PRIO_IO;
+
+      case _PC_VDISABLE:
+        return _POSIX_VDISABLE;
 
       default:
 

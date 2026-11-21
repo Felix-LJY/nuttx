@@ -38,6 +38,7 @@
 #  define STM32_FMC_BANK3       0x80000000  /* 0x80000000-0x8fffffff:   256Mb NAND FLASH */
 #  define STM32_OCTOSPI1_BANK   0x90000000  /* 0x90000000-0x9fffffff:   256Mb QUADSPI */
 #define STM32_CORTEX_BASE       0xE0000000  /* 0xe0000000-0xffffffff: 512Mb Cortex-M4 block */
+#define STM32_DBGMCU_BASE       0xE0044000  /* 0xe0044000-0xe00443ff: DBGMCU */
 
 #define STM32_REGION_MASK       0xF0000000
 #define STM32_IS_SRAM(a)        ((((uint32_t)(a)) & STM32_REGION_MASK) == STM32_SRAM_BASE)
@@ -127,7 +128,11 @@
 
 /* AHB1 Base Addresses ******************************************************/
 
-#define STM32_GPDMA1_BASE       0x40020000
+/* DMA1 is the GPDMA1 instance and DMA2 is the LPDMA1 instance.  All
+ * STM32 DMA instances of the GPDMA/LPDMA IP family are named DMAx.
+ */
+
+#define STM32_DMA1_BASE         0x40020000
 #define STM32_CORDIC_BASE       0x40021000
 #define STM32_FMAC_BASE         0x40021400
 #define STM32_FLASHIF_BASE      0x40022000
@@ -206,6 +211,6 @@
 #define STM32_GTZC2_TZIC_BASE   0x46023400
 #define STM32_GTZC2_MPCBB4_BASE 0x46023800
 #define STM32_ADF1_BASE         0x46024000
-#define STM32_LPDMA1_BASE       0x46025000
+#define STM32_DMA2_BASE         0x46025000
 
 #endif /* __ARCH_ARM_SRC_STM32U5_STM32_MEMORYMAP_H */

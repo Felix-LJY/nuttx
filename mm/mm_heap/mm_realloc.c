@@ -137,6 +137,8 @@ FAR void *mm_realloc(FAR struct mm_heap_s *heap, FAR void *oldmem,
   /* We need to hold the MM mutex while we muck with the nodelist. */
 
   DEBUGVERIFY(mm_lock(heap));
+  kasan_bypass(true);
+
   DEBUGASSERT(MM_NODE_IS_ALLOC(oldnode));
 
   /* Check if this is a request to reduce the size of the allocation. */
@@ -159,6 +161,7 @@ FAR void *mm_realloc(FAR struct mm_heap_s *heap, FAR void *oldmem,
 
       /* Then return the original address */
 
+      kasan_bypass(false);
       mm_unlock(heap);
       MM_ADD_BACKTRACE(heap, oldnode);
 
@@ -390,6 +393,8 @@ FAR void *mm_realloc(FAR struct mm_heap_s *heap, FAR void *oldmem,
                       heap->mm_curused);
 
       size = MM_SIZEOF_NODE(oldnode);
+
+      kasan_bypass(false);
       mm_unlock(heap);
       MM_ADD_BACKTRACE(heap, (FAR char *)newmem - MM_SIZEOF_ALLOCNODE);
 
@@ -398,11 +403,12 @@ FAR void *mm_realloc(FAR struct mm_heap_s *heap, FAR void *oldmem,
       oldmem = kasan_set_tag(oldmem, kasan_get_tag(newmem));
       if (newmem != oldmem)
         {
-          /* Now we have to move the user contents 'down' in memory.  memcpy
-           * should be safe for this.
+          /* Now we have to move the user contents 'down' in memory.  The
+           * source and destination regions overlap, so memmove() must be
+           * used instead of memcpy().
            */
 
-          memcpy(newmem, oldmem, oldsize - MM_ALLOCNODE_OVERHEAD);
+          memmove(newmem, oldmem, oldsize - MM_ALLOCNODE_OVERHEAD);
         }
 
       return newmem;
@@ -418,6 +424,7 @@ FAR void *mm_realloc(FAR struct mm_heap_s *heap, FAR void *oldmem,
        * leave the original memory in place.
        */
 
+      kasan_bypass(false);
       mm_unlock(heap);
       newmem = mm_malloc(heap, size);
       if (newmem)

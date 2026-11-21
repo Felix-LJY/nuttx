@@ -20,8 +20,6 @@
 #
 ############################################################################
 
-include $(TOPDIR)/Make.defs
-
 CSRCS = stm32_boot.c stm32_bringup.c
 
 ifeq ($(CONFIG_ARCH_LEDS),y)
@@ -36,15 +34,6 @@ endif
 
 ifeq ($(CONFIG_ADC),y)
 CSRCS += stm32_adc.c
-endif
-
-ifeq ($(CONFIG_STM32_FDCAN),y)
-ifeq ($(CONFIG_STM32_FDCAN_CHARDRIVER),y)
-CSRCS += stm32_can.c
-endif
-ifeq ($(CONFIG_STM32_FDCAN_SOCKET),y)
-CSRCS += stm32_cansock.c
-endif
 endif
 
 DEPPATH += --dep-path board

@@ -154,7 +154,7 @@
 #define REG_SP_EL0          (34)
 #define REG_EXE_DEPTH       (35)
 #define REG_SCTLR_EL1       (36)
-#define REG_RESERVED        (37)
+#define REG_TPIDR_EL0       (37)
 
 /* In Armv8-A Architecture, the stack must align with 16 byte */
 
@@ -250,11 +250,8 @@
 #ifndef __ASSEMBLY__
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -340,6 +337,36 @@ struct xcptcontext
 #endif
 };
 
+/* The machine context of getcontext() and makecontext().  The assembly code
+ * in libs/libc/machine/arm64/arch_ucontext.S knows this layout.
+ */
+
+typedef struct mcontext_s
+{
+  uint64_t args[8];    /* x0-x7, the arguments of makecontext() */
+  uint64_t regs[12];   /* x19-x30, the callee-saved registers */
+  uint64_t sp;
+  uint64_t pc;
+#ifdef CONFIG_ARCH_FPU
+  uint64_t fpregs[8];  /* d8-d15, the callee-saved FP registers */
+#endif
+} mcontext_t;
+
+/* Return program counter */
+
+static inline_function uint64_t up_getpc(void)
+{
+  register uint64_t pc;
+
+  __asm__ __volatile__
+  (
+    "adr %0, .\n"
+    : "=r" (pc)
+  );
+
+  return pc;
+}
+
 /* Name: up_irq_save, up_irq_restore, and friends.
  *
  * NOTE: This function should never be called from application code and,
@@ -371,11 +398,7 @@ static inline_function irqstate_t up_irq_save(void)
       "mrs %0, daif\n"
       "msr daifset, %1\n"
       : "=r" (flags)
-#if defined(CONFIG_ARCH_TRUSTZONE_SECURE)
-      : "i" (FIQ_DAIF_MASK)
-#else
       : "i" (IRQ_DAIF_MASK)
-#endif
       : "memory"
     );
 
@@ -395,8 +418,6 @@ static inline_function irqstate_t up_irq_enable(void)
       : "=r" (flags)
 #if defined(CONFIG_ARCH_HIPRI_INTERRUPT)
       : "i" (IRQ_FIQ_DAIF_MASK)
-#elif defined(CONFIG_ARCH_TRUSTZONE_SECURE)
-      : "i" (FIQ_DAIF_MASK)
 #else
       : "i" (IRQ_DAIF_MASK)
 #endif
@@ -505,7 +526,6 @@ static inline_function void up_irq_restore(irqstate_t flags)
     ((uintptr_t)((uint64_t *)(regs))[REG_SP_EL0])
 #endif
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

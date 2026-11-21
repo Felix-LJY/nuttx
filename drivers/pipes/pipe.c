@@ -67,7 +67,9 @@ static const struct file_operations g_pipe_fops =
   pipecommon_ioctl,    /* ioctl */
   pipe_mmap,           /* mmap */
   NULL,                /* truncate */
-  pipecommon_poll      /* poll */
+  pipecommon_poll,     /* poll */
+  NULL,                /* readv */
+  pipecommon_writev    /* writev */
 };
 
 static mutex_t g_pipelock = NXMUTEX_INITIALIZER;
@@ -188,6 +190,18 @@ int file_pipe(FAR struct file *filep[2], size_t bufsize, int flags)
   int nonblock = !!(flags & O_NONBLOCK);
   int ret;
 
+  /* Check parameters */
+
+  if (filep == NULL || filep[0] == NULL || filep[1] == NULL)
+    {
+      return -EINVAL;
+    }
+
+  if ((flags & ~(O_CLOEXEC | O_NONBLOCK)) != 0)
+    {
+      return -EINVAL;
+    }
+
   /* Register a new pipe device */
 
   ret = pipe_register(bufsize, flags, devname, sizeof(devname));
@@ -211,7 +225,7 @@ int file_pipe(FAR struct file *filep[2], size_t bufsize, int flags)
       ret = file_ioctl(filep[1], FIONBIO, &nonblock);
       if (ret < 0)
         {
-          goto errout_with_driver;
+          goto errout_with_wrfd;
         }
     }
 
@@ -261,6 +275,20 @@ int pipe2(int fd[2], int flags)
   int nonblock = !!(flags & O_NONBLOCK);
   int ret;
 
+  /* Check parameters */
+
+  if (fd == NULL)
+    {
+      set_errno(EFAULT);
+      return ERROR;
+    }
+
+  if ((flags & ~(O_CLOEXEC | O_NONBLOCK)) != 0)
+    {
+      set_errno(EINVAL);
+      return ERROR;
+    }
+
   /* Register a new pipe device */
 
   ret = pipe_register(CONFIG_DEV_PIPE_SIZE, flags, devname, sizeof(devname));
@@ -285,7 +313,7 @@ int pipe2(int fd[2], int flags)
       ret = ioctl(fd[1], FIONBIO, &nonblock);
       if (ret < 0)
         {
-          goto errout_with_driver;
+          goto errout_with_wrfd;
         }
     }
 

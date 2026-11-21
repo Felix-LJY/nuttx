@@ -1,6 +1,8 @@
-===========
-lm3s6965-ek
-===========
+========================
+TI Stellaris LM3S6965-EK
+========================
+
+.. tags:: arch:arm, chip:tiva, vendor:ti
 
 The `Stellaris LM3S6965 Evaluation Kit
 <https://www.ti.com/tool/EK-LM3S6965>`_ is an ARM Cortex-M3 based

@@ -20,8 +20,6 @@
 #
 ############################################################################
 
-include $(TOPDIR)/Make.defs
-
 CSRCS = stm32_boot.c
 
 ifeq ($(CONFIG_ARCH_LEDS),y)
@@ -30,10 +28,6 @@ endif
 
 ifeq ($(CONFIG_ADC),y)
 CSRCS += stm32_adc.c
-endif
-
-ifeq ($(CONFIG_DAC),y)
-CSRCS += stm32_dac.c
 endif
 
 ifeq ($(CONFIG_STM32_HRTIM),y)

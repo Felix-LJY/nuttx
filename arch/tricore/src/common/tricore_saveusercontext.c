@@ -54,15 +54,15 @@ int up_saveusercontext(void *saveregs)
   uintptr_t pcxi;
   int csa_size = TC_CONTEXT_REGS * sizeof(uintptr_t);
 
-  pcxi = __mfcr(CPU_PCXI);
+  pcxi = tricore_mfcr(TRICORE_CPU_PCXI);
   regs = tricore_csa2addr(pcxi);
   memcpy((char *)saveregs + csa_size, regs, csa_size);
 
   /* to unify the trap processing, extra save lowcsa */
 
-  __asm("svlcx");
+  __asm__("svlcx");
 
-  regs = tricore_csa2addr(__mfcr(CPU_PCXI));
+  regs = tricore_csa2addr(tricore_mfcr(TRICORE_CPU_PCXI));
   memcpy(saveregs, regs, csa_size);
 
   /* lowcsa[REG_LPCXI] saves the upcsa's pcxi, but if lowcsa and upcsa is
@@ -73,7 +73,7 @@ int up_saveusercontext(void *saveregs)
 
   ((uintptr_t *)saveregs)[REG_LPCXI] = pcxi & (~PCXI_UL);
 
-  __asm("rslcx");
+  __asm__("rslcx");
 
   return 0;
 }

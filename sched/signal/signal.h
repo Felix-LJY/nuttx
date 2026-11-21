@@ -34,8 +34,10 @@
 #include <sched.h>
 
 #include <nuttx/sched.h>
+#include <nuttx/signal.h>
 #include <nuttx/kmalloc.h>
 #include <nuttx/queue.h>
+#include <nuttx/spinlock.h>
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -89,6 +91,7 @@ struct sigpendq
 {
   FAR struct sigpendq *flink;    /* Forward link */
   FAR struct tcb_s *tcb;         /* TCB of thread to deliver to */
+  FAR const void *source;        /* The POSIX timer of the signal, or NULL */
   siginfo_t info;                /* Signal information */
   uint8_t   type;                /* (Used to manage allocations) */
 };
@@ -107,6 +110,7 @@ struct sigq_s
   } action;                      /* Signal action */
   sigset_t  mask;                /* Additional signals to mask while the
                                   * the signal-catching function executes */
+  FAR const void *source;        /* The POSIX timer of the signal, or NULL */
   siginfo_t info;                /* Signal information */
   uint8_t   type;                /* (Used to manage allocations) */
 };
@@ -154,6 +158,8 @@ extern sq_queue_t  g_sigpendingsignal;
 
 extern sq_queue_t  g_sigpendingirqsignal;
 
+extern spinlock_t  g_sigspinlock;
+
 /****************************************************************************
  * Public Function Prototypes
  ****************************************************************************/
@@ -163,6 +169,7 @@ extern sq_queue_t  g_sigpendingirqsignal;
 /* Forward references */
 
 struct task_group_s;
+struct sigwork_s;
 
 /* sig_initializee.c */
 
@@ -170,6 +177,8 @@ void               nxsig_initialize(void);
 
 /* sig_action.c */
 
+void               nxsig_dupactions(FAR struct task_group_s *group,
+                                    FAR struct task_group_s *parent);
 void               nxsig_release_action(FAR sigactq_t *sigact);
 
 /* sig_default.c */
@@ -186,13 +195,25 @@ int                nxsig_default_initialize(FAR struct tcb_s *tcb);
 
 int                nxsig_tcbdispatch(FAR struct tcb_s *stcb,
                                      FAR siginfo_t *info,
-                                     bool group_dispatch);
+                                     bool group_dispatch,
+                                     FAR const void *source, bool limit);
 int                nxsig_dispatch(pid_t pid, FAR siginfo_t *info,
-                                  bool thread);
+                                  bool thread, FAR const void *source,
+                                  bool limit);
+bool               nxsig_source_queued(pid_t pid, FAR const void *source,
+                                       int signo);
+
+/* sig_notification.c */
+
+int                nxsig_notification_source(pid_t pid,
+                                             FAR struct sigevent *event,
+                                             int code,
+                                             FAR struct sigwork_s *work,
+                                             FAR const void *source);
 
 /* sig_cleanup.c */
 
-void               nxsig_cleanup(FAR struct tcb_s *stcb);
+void               nxsig_discard_threadsignals(FAR struct tcb_s *stcb);
 void               nxsig_release(FAR struct task_group_s *group);
 
 /* sig_timedwait.c */
@@ -206,18 +227,67 @@ FAR sigq_t        *nxsig_alloc_pendingsigaction(void);
 void               nxsig_deliver(FAR struct tcb_s *stcb);
 FAR sigactq_t     *nxsig_find_action(FAR struct task_group_s *group,
                                      int signo);
-int                nxsig_lowest(FAR sigset_t *set);
 void               nxsig_release_pendingsigaction(FAR sigq_t *sigq);
 void               nxsig_release_pendingsignal(FAR sigpendq_t *sigpend);
 FAR sigpendq_t    *nxsig_remove_pendingsignal(FAR struct tcb_s *stcb,
                                               int signo);
 #ifndef CONFIG_DISABLE_ALL_SIGNALS
 bool               nxsig_unmask_pendingsignal(void);
+void               nxsig_restoremask(FAR struct tcb_s *rtcb,
+                                     FAR const sigset_t *mask);
 #else
 static inline bool nxsig_unmask_pendingsignal(void)
 {
   return false;
 }
 #endif
+
+/* Inlined from sig_cleanup.c and sig_lowest.c: tiny helpers that are
+ * called from several translation units, so keeping them out of line
+ * pulls whole extra files into every build.
+ */
+
+#ifndef CONFIG_DISABLE_ALL_SIGNALS
+static inline void nxsig_cleanup(FAR struct tcb_s *stcb)
+{
+#ifdef CONFIG_ENABLE_ALL_SIGNALS
+  FAR sigq_t *sigq;
+
+  /* Deallocate all entries in the list of pending signal actions */
+
+  while ((sigq = (FAR sigq_t *)sq_remfirst(&stcb->sigpendactionq)) != NULL)
+    {
+      nxsig_release_pendingsigaction(sigq);
+    }
+
+  /* Deallocate all entries in the list of posted signal actions */
+
+  while ((sigq = (FAR sigq_t *)sq_remfirst(&stcb->sigpostedq)) != NULL)
+    {
+      nxsig_release_pendingsigaction(sigq);
+    }
+#endif
+
+  /* Misc. signal-related clean-up */
+
+  sigfillset(&stcb->sigprocmask);
+  sigemptyset(&stcb->sigwaitmask);
+}
+#endif
+
+static inline int nxsig_lowest(FAR sigset_t *set)
+{
+  int signo;
+
+  for (signo = MIN_SIGNO; signo <= MAX_SIGNO; signo++)
+    {
+      if (nxsig_ismember(set, signo) == 1)
+        {
+          return signo;
+        }
+    }
+
+  return ERROR;
+}
 
 #endif /* __SCHED_SIGNAL_SIGNAL_H */

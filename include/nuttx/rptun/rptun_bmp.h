@@ -28,6 +28,7 @@
  ****************************************************************************/
 
 #include <nuttx/config.h>
+#include <stdbool.h>
 #include <nuttx/rptun/rptun.h>
 
 /****************************************************************************
@@ -35,11 +36,8 @@
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -65,7 +63,6 @@ int rptun_bmp_init(FAR const char *cpuname, bool master,
                    FAR struct rptun_rsc_s *rsc, int irq_event,
                    int irq_trigger, cpu_set_t remote_cpu);
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

@@ -75,6 +75,7 @@ int statfs(FAR const char *path, FAR struct statfs *buf)
 {
   struct inode_search_s desc;
   FAR struct inode *inode;
+  struct statfs kbuf;
   int ret = OK;
 
   /* Sanity checks */
@@ -93,9 +94,13 @@ int statfs(FAR const char *path, FAR struct statfs *buf)
 
   /* Get an inode for this file */
 
-  SETUP_SEARCH(&desc, path, false);
+  ret = inode_search_setup(&desc, path, false);
+  if (ret < 0)
+    {
+      goto errout;
+    }
 
-  ret = inode_find(&desc);
+  ret = inode_find(&desc, &inode);
   if (ret < 0)
     {
       /* This name does not refer to a psudeo-inode and there is no
@@ -107,10 +112,9 @@ int statfs(FAR const char *path, FAR struct statfs *buf)
 
   /* Get the search results */
 
-  inode = desc.node;
   DEBUGASSERT(inode != NULL);
 
-  ret = inode_checkpathperm(inode, 0, 0);
+  ret = inode_checkpathperm(inode, INODE_PATH_AMODE(&desc), 0);
   if (ret < 0)
     {
       inode_release(inode);
@@ -118,10 +122,12 @@ int statfs(FAR const char *path, FAR struct statfs *buf)
     }
 
   /* The way we handle the statfs depends on the type of inode that we
-   * are dealing with.
+   * are dealing with.  Fill a local buffer: it is copied to the caller's
+   * buffer when the inode and the path buffer are released, so that a bad
+   * buffer faults with nothing held.
    */
 
-  memset(buf, 0, sizeof(struct statfs));
+  memset(&kbuf, 0, sizeof(kbuf));
 #ifndef CONFIG_DISABLE_MOUNTPOINT
   if (INODE_IS_MOUNTPT(inode))
     {
@@ -133,7 +139,7 @@ int statfs(FAR const char *path, FAR struct statfs *buf)
         {
           /* Perform the statfs() operation */
 
-          ret = inode->u.i_mops->statfs(inode, buf);
+          ret = inode->u.i_mops->statfs(inode, &kbuf);
         }
     }
   else
@@ -141,7 +147,7 @@ int statfs(FAR const char *path, FAR struct statfs *buf)
     {
       /* The node is part of the root pseudo file system */
 
-      ret = statpseudofs(inode, buf);
+      ret = statpseudofs(inode, &kbuf);
     }
 
   /* Check if the statfs operation was successful */
@@ -154,7 +160,8 @@ int statfs(FAR const char *path, FAR struct statfs *buf)
   /* Successfully statfs'ed the file */
 
   inode_release(inode);
-  RELEASE_SEARCH(&desc);
+  inode_search_release(&desc);
+  memcpy(buf, &kbuf, sizeof(kbuf));
   return OK;
 
   /* Failure conditions always set the errno appropriately */
@@ -163,7 +170,7 @@ errout_with_inode:
   inode_release(inode);
 
 errout_with_search:
-  RELEASE_SEARCH(&desc);
+  inode_search_release(&desc);
 
 errout:
   set_errno(-ret);

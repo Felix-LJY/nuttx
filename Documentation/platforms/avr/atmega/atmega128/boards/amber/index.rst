@@ -1,8 +1,8 @@
-=====
-Amber
-=====
+==================
+SoC Robotics Amber
+==================
 
-.. tags:: chip:atmega128, arch:avr
+.. tags:: arch:avr, chip:atmega, part:atmega128, vendor:microchip
 
 This is the documentation for the `SoC Robotics Amber Web Server
 <https://soc-robotics.com/product/Amber_Specs/Amber_Processor.html>`_ that is

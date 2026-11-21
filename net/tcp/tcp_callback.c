@@ -298,7 +298,7 @@ uint32_t tcp_callback(FAR struct net_driver_s *dev,
    *                 not set, then dev->d_len should also be cleared).
    */
 
-  flags = devif_conn_event(dev, flags, conn->sconn.list);
+  flags = devif_conn_event(dev, flags, conn->sconn.s_list);
 
   /* There may be no new data handler in place at them moment that the new
    * incoming data is received.  If the new incoming data was not handled,
@@ -385,6 +385,15 @@ uint16_t tcp_datahandler(FAR struct net_driver_s *dev,
 {
   FAR struct iob_s *iob = dev->d_iob;
   uint16_t buflen;
+
+#if CONFIG_IOB_THROTTLE > 0
+  /* Keep the throttled IOBs for sending */
+
+  if (iob_navail(false) < CONFIG_IOB_THROTTLE)
+    {
+      return 0;
+    }
+#endif
 
   if (offset > 0)
     {

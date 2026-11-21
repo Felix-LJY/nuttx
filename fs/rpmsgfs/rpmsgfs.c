@@ -328,15 +328,15 @@ static int rpmsgfs_open(FAR struct file *filep, FAR const char *relpath,
 
   if ((oflags & O_APPEND) && (oflags & O_ACCMODE) != O_RDONLY)
     {
-      ret = rpmsgfs_client_lseek(fs->handle, hf->fd, 0, SEEK_END);
-      if (ret >= 0)
+      off_t pos = rpmsgfs_client_lseek(fs->handle, hf->fd, 0, SEEK_END);
+
+      if (pos < 0)
         {
-          filep->f_pos = ret;
+          ret = pos;
+          goto errout_with_fd;
         }
-      else
-        {
-          goto errout_with_buffer;
-        }
+
+      filep->f_pos = pos;
     }
 
   /* Attach the private date to the struct file instance */
@@ -356,6 +356,9 @@ static int rpmsgfs_open(FAR struct file *filep, FAR const char *relpath,
 
   ret = OK;
   goto errout_with_lock;
+
+errout_with_fd:
+  rpmsgfs_client_close(fs->handle, hf->fd);
 
 errout_with_buffer:
   fs_heap_free(hf);
@@ -678,10 +681,10 @@ static int rpmsgfs_sync(FAR struct file *filep)
       return ret;
     }
 
-  rpmsgfs_client_sync(fs->handle, hf->fd);
+  ret = rpmsgfs_client_sync(fs->handle, hf->fd);
 
   nxmutex_unlock(&fs->fs_lock);
-  return OK;
+  return ret;
 }
 
 /****************************************************************************
@@ -1054,6 +1057,7 @@ static int rpmsgfs_bind(FAR struct inode *blkdriver, FAR const void *data,
   FAR struct rpmsgfs_mountpt_s  *fs;
   FAR const char *cpuname = NULL;
   FAR char *options;
+  size_t data_size;
   char *saveptr;
   char *ptr;
   int len;
@@ -1081,12 +1085,15 @@ static int rpmsgfs_bind(FAR struct inode *blkdriver, FAR const void *data,
    *  "timeout=xx", connect timeout, unit (ms)
    */
 
-  options = fs_heap_strdup(data);
+  data_size = strlen(data) + 1;
+  options = lib_get_tempbuffer(data_size);
   if (!options)
     {
       fs_heap_free(fs);
       return -ENOMEM;
     }
+
+  memcpy(options, data, data_size);
 
   /* Set timeout default value */
 
@@ -1112,7 +1119,7 @@ static int rpmsgfs_bind(FAR struct inode *blkdriver, FAR const void *data,
     }
 
   ret = rpmsgfs_client_bind(&fs->handle, cpuname);
-  fs_heap_free(options);
+  lib_put_tempbuffer(options);
   if (ret < 0)
     {
       fs_heap_free(fs);

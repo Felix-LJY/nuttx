@@ -37,7 +37,13 @@
 #  include <nuttx/wqueue.h>
 #endif
 
+#ifdef CONFIG_NET_TIMESTAMP
+#  include <sys/time.h>
+#endif
+
 #ifdef CONFIG_MM_IOB
+
+struct iovec; /* Forward declaration for scatter-gather I/O */
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -126,6 +132,18 @@ struct iob_s
 #endif
   unsigned int io_pktlen; /* Total length of the packet */
 
+  FAR struct socket_conn_s *io_conn;
+
+#ifdef CONFIG_NET_TIMESTAMP
+  /* timestamp of the packet.
+   * d_features is the member of net_driver_s struct, if the NETDEV_RX_STAMP
+   * bit of d_features is set, the timestamp is provided by hardware driver.
+   * Otherwise it is filled in by kernel when the packet is passed into
+   * respective protocol layer. The timestamp is in CLOCK_REALTIME.
+   */
+
+  struct timespec io_time;
+#endif
 #ifdef CONFIG_IOB_ALLOC
   iob_free_cb_t io_free;  /* Custom free callback */
   FAR uint8_t  *io_data;
@@ -526,6 +544,46 @@ int iob_trycopyin(FAR struct iob_s *iob, FAR const uint8_t *src,
 
 int iob_copyout(FAR uint8_t *dest, FAR const struct iob_s *iob,
                 unsigned int len, int offset);
+
+/****************************************************************************
+ * Name: iob_copyin_iov
+ *
+ * Description:
+ *  Copy data from an 'iov' array of user buffers into the I/O buffer chain,
+ *  starting at 'offset', extending the chain as necessary.
+ *
+ ****************************************************************************/
+
+int iob_copyin_iov(FAR struct iob_s *iob,
+                   FAR const struct iovec *iov, unsigned int iovlen,
+                   int offset, bool throttled);
+
+/****************************************************************************
+ * Name: iob_trycopyin_iov
+ *
+ * Description:
+ *  Copy data from an 'iov' array of user buffers into the I/O buffer chain,
+ *  starting at 'offset', extending the chain as necessary BUT without
+ *  waiting if buffers are not available.
+ *
+ ****************************************************************************/
+
+int iob_trycopyin_iov(FAR struct iob_s *iob,
+                      FAR const struct iovec *iov, unsigned int iovlen,
+                      int offset, bool throttled);
+
+/****************************************************************************
+ * Name: iob_copyout_iov
+ *
+ * Description:
+ *  Copy data 'len' bytes of data from the I/O buffer chain starting at
+ *  'offset' into the user 'iov' array of buffers.
+ *
+ ****************************************************************************/
+
+int iob_copyout_iov(FAR const struct iovec *iov, unsigned int iovlen,
+                    FAR const struct iob_s *iob, unsigned int len,
+                    int offset);
 
 /****************************************************************************
  * Name: iob_tailroom

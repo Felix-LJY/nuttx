@@ -296,6 +296,12 @@
 
 #define ARCH_ELFDATA_SET_PLTREL(d, v)    (d)->pltrel = (v)
 
+/* Whether the value a relocation resolved to is itself a descriptor, which
+ * it is when the symbol came from another object rather than from this one.
+ */
+
+#define ARCH_ELFDATA_SET_SYMISDESC(d, v) (d)->symisdesc = (v)
+
 /****************************************************************************
  * Public Types
  ****************************************************************************/
@@ -315,6 +321,7 @@ struct arch_elfdata_s
   uintptr_t gotbase;       /* DT_PLTGOT: this object's data base */
   uint16_t  ndesc;         /* Capacity, in descriptors */
   uint16_t  usedesc;       /* Next free slot */
+  uint8_t   symisdesc;     /* Symbol value is a descriptor, not code */
 
   /* The pool the descriptors are taken from */
 
@@ -350,17 +357,13 @@ typedef unsigned long elf_gregset_t[18];
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 extern __EIT_entry __exidx_start[];
 extern __EIT_entry __exidx_end[];
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

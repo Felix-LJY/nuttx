@@ -1,6 +1,8 @@
-====
-p112
-====
+=========
+P112 Z180
+=========
+
+.. tags:: arch:z80, chip:z180, vendor:zilog
 
 The P112 is notable because it was the first of the hobbyist single board
 computers to reach the production stage. The P112 hobbyist computers

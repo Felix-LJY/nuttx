@@ -78,6 +78,13 @@
 
 #define PR_SET_DUMPABLE 5
 #define PR_GET_DUMPABLE 6
+#define PR_CAPS_DROP    7
+#define PR_CAPS_GET     8
+
+#define PR_CAP_RAWIO    (1 << 0)
+#define PR_CAP_SPAWN    (1 << 1)
+#define PR_CAP_ADMIN    (1 << 2)
+#define PR_CAP_ALL      (PR_CAP_RAWIO | PR_CAP_SPAWN | PR_CAP_ADMIN)
 
 /****************************************************************************
  * Public Type Definitions
@@ -87,13 +94,9 @@
  * Public Function Prototypes
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -118,7 +121,6 @@ extern "C"
 
 int prctl(int option, ...);
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

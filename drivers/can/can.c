@@ -44,6 +44,7 @@
 #include <nuttx/clock.h>
 #include <nuttx/signal.h>
 #include <nuttx/fs/fs.h>
+#include <nuttx/can.h>
 #include <nuttx/can/can.h>
 #include <nuttx/can/can_sender.h>
 #include <nuttx/kmalloc.h>
@@ -118,8 +119,9 @@ static inline ssize_t can_rtrread(FAR struct file *filep,
 static int            can_ioctl(FAR struct file *filep, int cmd,
                                 unsigned long arg);
 static int            can_poll(FAR struct file *filep,
-                               FAR struct pollfd *fds,
+                               FAR struct pollfd_s *fds,
                                bool setup);
+static int            can_datalen(FAR const struct can_hdr_s *hdr);
 
 /****************************************************************************
  * Private Data
@@ -141,6 +143,27 @@ static const struct file_operations g_canops =
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
+
+/****************************************************************************
+ * Name: can_datalen
+ *
+ * Description:
+ *   Return the number of data bytes of a CAN message.  The DLC codes 9..15
+ *   mean 12..64 bytes in a CAN FD frame but 8 bytes in a classic frame.
+ *
+ ****************************************************************************/
+
+static int can_datalen(FAR const struct can_hdr_s *hdr)
+{
+#ifdef CONFIG_CAN_FD
+  if (hdr->ch_edl)
+    {
+      return can_dlc2bytes(hdr->ch_dlc);
+    }
+#endif
+
+  return MIN(hdr->ch_dlc, CAN_MAX_DLEN);
+}
 
 /****************************************************************************
  * Name: can_txready_work
@@ -198,6 +221,7 @@ static void can_txready_work(FAR void *arg)
 static FAR struct can_reader_s *init_can_reader(FAR struct file *filep)
 {
   FAR struct can_reader_s *reader = kmm_zalloc(sizeof(struct can_reader_s));
+
   DEBUGASSERT(reader != NULL);
 
   nxsem_init(&reader->fifo.rx_sem, 0, 0);
@@ -512,7 +536,7 @@ static ssize_t can_read(FAR struct file *filep, FAR char *buffer,
           /* Will the next message in the FIFO fit into the user buffer? */
 
           FAR struct can_msg_s *msg = &fifo->rx_buffer[fifo->rx_head];
-          int nbytes = can_dlc2bytes(msg->cm_hdr.ch_dlc);
+          int nbytes = can_datalen(&msg->cm_hdr);
           int msglen = CAN_MSGLEN(nbytes);
 
           if (ret + msglen > buflen)
@@ -805,7 +829,7 @@ static ssize_t can_write(FAR struct file *filep, FAR const char *buffer,
         }
       else
         {
-          nbytes = can_dlc2bytes(msg->cm_hdr.ch_dlc);
+          nbytes = can_datalen(&msg->cm_hdr);
         }
 
       msglen = CAN_MSGLEN(nbytes);
@@ -854,6 +878,47 @@ static ssize_t can_write(FAR struct file *filep, FAR const char *buffer,
 return_with_irqdisabled:
   leave_critical_section(flags);
   return ret;
+}
+
+/****************************************************************************
+ * Name: can_rxfifo_flush
+ *
+ * Description:
+ *   Discard all messages in a reader's RX FIFO.  rx_sem counts a non-empty
+ *   FIFO, so it is reset too.  A pending internal error report is also
+ *   returned by read(), so it is discarded as well.
+ *
+ * Assumptions:
+ *   Called with interrupts disabled
+ *
+ ****************************************************************************/
+
+static void can_rxfifo_flush(FAR struct can_rxfifo_s *fifo)
+{
+  fifo->rx_head = 0;
+  fifo->rx_tail = 0;
+#ifdef CONFIG_CAN_ERRORS
+  fifo->rx_error = 0;
+#endif
+  nxsem_reset(&fifo->rx_sem, 0);
+}
+
+/****************************************************************************
+ * Name: can_flush_ioctl
+ *
+ * Description:
+ *   Pass a flush command to the lower half.  The upper half has already
+ *   flushed its own buffers, so a lower half that does not handle the
+ *   command (-ENOTTY) is not an error.
+ *
+ ****************************************************************************/
+
+static int can_flush_ioctl(FAR struct can_dev_s *dev, int cmd,
+                           unsigned long arg)
+{
+  int ret = dev_ioctl(dev, cmd, arg);
+
+  return ret == -ENOTTY ? OK : ret;
 }
 
 /****************************************************************************
@@ -992,12 +1057,11 @@ static int can_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
 
       case CANIOC_IFLUSH:
         {
-          reader->fifo.rx_head = 0;
-          reader->fifo.rx_tail = 0;
+          can_rxfifo_flush(&reader->fifo);
 
           /* invoke lower half ioctl */
 
-          ret = dev_ioctl(dev, cmd, arg);
+          ret = can_flush_ioctl(dev, cmd, arg);
         }
         break;
 
@@ -1009,7 +1073,7 @@ static int can_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
 
           /* invoke lower half ioctl */
 
-          ret = dev_ioctl(dev, cmd, arg);
+          ret = can_flush_ioctl(dev, cmd, arg);
         }
         break;
 
@@ -1020,13 +1084,11 @@ static int can_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
       case CANIOC_IOFLUSH:
         {
           can_sender_init(&dev->cd_sender);
-
-          reader->fifo.rx_head = 0;
-          reader->fifo.rx_tail = 0;
+          can_rxfifo_flush(&reader->fifo);
 
           /* invoke lower half ioctl */
 
-          ret = dev_ioctl(dev, cmd, arg);
+          ret = can_flush_ioctl(dev, cmd, arg);
         }
         break;
 
@@ -1043,11 +1105,18 @@ static int can_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
 
       case FIONREAD:
         {
-          *(FAR uint8_t *)arg =
+          int count = reader->fifo.rx_tail - reader->fifo.rx_head;
+
+          if (count < 0)
+            {
+              count += CONFIG_CAN_RXFIFOSIZE;
+            }
+
 #ifdef CONFIG_CAN_ERRORS
-                            (reader->fifo.rx_error != 0) +
+          count += (reader->fifo.rx_error != 0);
 #endif
-                            reader->fifo.rx_tail - reader->fifo.rx_head;
+
+          *(FAR int *)arg = count;
         }
         break;
 
@@ -1064,6 +1133,7 @@ static int can_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
             {
               FAR const struct can_transv_ops_s *ct_ops =
                                                 dev->cd_transv->ct_ops;
+
               ret = ct_ops->ct_setstate(dev->cd_transv, arg);
             }
           else
@@ -1088,6 +1158,7 @@ static int can_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
               int *state = (FAR int *)arg;
               FAR const struct can_transv_ops_s *ct_ops =
                                                 dev->cd_transv->ct_ops;
+
               ret = ct_ops->ct_getstate(dev->cd_transv, state);
             }
           else
@@ -1133,7 +1204,7 @@ static int can_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
  * Name: can_poll
  ****************************************************************************/
 
-static int can_poll(FAR struct file *filep, FAR struct pollfd *fds,
+static int can_poll(FAR struct file *filep, FAR struct pollfd_s *fds,
                     bool setup)
 {
   FAR struct inode        *inode    = filep->f_inode;
@@ -1223,7 +1294,7 @@ static int can_poll(FAR struct file *filep, FAR struct pollfd *fds,
     {
       /* This is a request to tear down the poll */
 
-      FAR struct pollfd **slot = (FAR struct pollfd **)fds->priv;
+      FAR struct pollfd_s **slot = (FAR struct pollfd_s **)fds->priv;
 
 #ifdef CONFIG_DEBUG_FEATURES
       if (slot == NULL)
@@ -1369,7 +1440,7 @@ int can_receive(FAR struct can_dev_s *dev, FAR struct can_hdr_s *hdr,
 
               memcpy(&waitmsg->cm_hdr, hdr, sizeof(struct can_hdr_s));
 
-              nbytes = can_dlc2bytes(hdr->ch_dlc);
+              nbytes = can_datalen(hdr);
               if (nbytes)
                 {
                   memcpy(waitmsg->cm_data, data, nbytes);
@@ -1387,6 +1458,7 @@ int can_receive(FAR struct can_dev_s *dev, FAR struct can_hdr_s *hdr,
   list_for_every(&dev->cd_readers, node)
     {
       FAR struct can_reader_s *reader = (FAR struct can_reader_s *)node;
+
       fifo = &reader->fifo;
       was_empty = fifo->rx_head == fifo->rx_tail;
 
@@ -1402,20 +1474,12 @@ int can_receive(FAR struct can_dev_s *dev, FAR struct can_hdr_s *hdr,
         {
           int nbytes;
 
-          /* Add the new, decoded CAN message at the tail of the FIFO.
-           *
-           * REVISIT:  In the CAN FD format, the coding of the DLC differs
-           * from the standard CAN format. The DLC codes 0 to 8 have the
-           * same coding as in standard CAN, the codes 9 to 15, which in
-           * standard CAN all code a data field of 8 bytes, are encoded:
-           *
-           *   9->12, 10->16, 11->20, 12->24, 13->32, 14->48, 15->64
-           */
+          /* Add the new, decoded CAN message at the tail of the FIFO */
 
           memcpy(&fifo->rx_buffer[fifo->rx_tail].cm_hdr, hdr,
                  sizeof(struct can_hdr_s));
 
-          nbytes = can_dlc2bytes(hdr->ch_dlc);
+          nbytes = can_datalen(hdr);
           if (nbytes)
             {
               memcpy(fifo->rx_buffer[fifo->rx_tail].cm_data, data, nbytes);
@@ -1565,6 +1629,7 @@ int can_txdone(FAR struct can_dev_s *dev)
       list_for_every(&dev->cd_readers, node)
         {
           FAR struct can_reader_s *reader = (FAR struct can_reader_s *)node;
+
           poll_notify(&reader->cd_fds, 1, POLLOUT);
         }
 

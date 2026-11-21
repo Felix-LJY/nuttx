@@ -41,7 +41,7 @@ list(
   binfmt_copyactions.c
   binfmt_dumpmodule.c)
 
-if(CONFIG_SCHED_USER_IDENTITY)
+if(CONFIG_BINFMT_CHECKEXEC)
   list(APPEND SRCS binfmt_checkexec.c)
 endif()
 
@@ -65,6 +65,10 @@ endif()
 
 if(CONFIG_BUILTIN)
   list(APPEND SRCS builtin.c)
+endif()
+
+if(CONFIG_BINFMT_SCRIPT)
+  list(APPEND SRCS script.c)
 endif()
 
 target_sources(binfmt PRIVATE ${SRCS})

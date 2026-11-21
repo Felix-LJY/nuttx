@@ -52,16 +52,36 @@
 
 #ifndef __ASSEMBLY__
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
  * Inline functions
  ****************************************************************************/
+
+/* Return program counter */
+
+static inline_function uint32_t up_getpc(void)
+{
+  uint32_t pc;
+
+#ifdef CONFIG_ARCH_CHIP_LM32
+  __asm__ __volatile__
+    (
+      "calli 1f\n"
+      "1:\n\t"
+      "or %0, ra, r0"
+      : "=r"(pc)
+      :
+      : "ra"
+    );
+#else /* CONFIG_ARCH_CHIP_MINERVA */
+  __asm__ __volatile__ ("auipc %0, 0" : "=r"(pc));
+#endif
+
+  return pc;
+}
 
 /* Return the current value of the stack pointer */
 
@@ -82,7 +102,7 @@ static inline_function uint32_t up_getsp(void)
  * structure.  It is non-NULL only during interrupt processing.
  */
 
-EXTERN volatile uint32_t *g_current_regs;
+extern volatile uint32_t *g_current_regs;
 
 /****************************************************************************
  * Public Function Prototypes
@@ -121,7 +141,6 @@ irqstate_t up_irq_save(void);
 irqstate_t up_irq_enable(void);
 void up_irq_restore(irqstate_t flags);
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

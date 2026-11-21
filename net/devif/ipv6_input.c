@@ -50,7 +50,7 @@
 
 #include "nat/nat.h"
 #include "netdev/netdev.h"
-#include "ipforward/ipforward.h"
+#include "netforward/netforward.h"
 #include "inet/inet.h"
 #include "devif/devif.h"
 #include "ipfilter/ipfilter.h"
@@ -229,6 +229,17 @@ static int ipv6_in(FAR struct net_driver_s *dev)
   bool isfrag = false;
 #endif
 
+  /* Storing reception timestamp provided by realtime
+   * if timestamp no provided by hardware.
+   */
+
+#ifdef CONFIG_NET_TIMESTAMP
+  if ((dev->d_features & NETDEV_RX_STAMP) == 0)
+    {
+      clock_gettime(CLOCK_REALTIME, &dev->d_iob->io_time);
+    }
+#endif /* CONFIG_NET_TIMESTAMP */
+
   /* This is where the input processing starts. */
 
 #ifdef CONFIG_NET_STATISTICS
@@ -311,6 +322,12 @@ static int ipv6_in(FAR struct net_driver_s *dev)
       FAR struct ipv6_extension_s *exthdr;
       uint16_t extlen;
 
+      if (sizeof(struct ipv6_extension_s) > dev->d_len - iphdrlen)
+        {
+          nwarn("WARNING: Extension header truncated\n");
+          goto drop;
+        }
+
       /* Just skip over the extension header */
 
       exthdr    = (FAR struct ipv6_extension_s *)payload;
@@ -324,6 +341,12 @@ static int ipv6_in(FAR struct net_driver_s *dev)
       else
         {
           extlen = EXTHDR_LEN((unsigned int)exthdr->len);
+        }
+
+      if (extlen > dev->d_len - iphdrlen)
+        {
+          nwarn("WARNING: Extension header exceeds packet length\n");
+          goto drop;
         }
 
       payload  += extlen;
@@ -543,7 +566,7 @@ static int ipv6_in(FAR struct net_driver_s *dev)
 
             goto drop;
           }
-#endif /* CONFIG_NET_6LOWPAN && CONFIG_NET_ICMPV6 */
+#endif /* CONFIG_NET_6LOWPAN && CONFIG_NET_ICMPv6 */
 
         break;
 #endif
@@ -705,12 +728,6 @@ int ipv6_input(FAR struct net_driver_s *dev)
   int ret;
 
   netdev_lock(dev);
-
-  /* Store reception timestamp if enabled and not provided by hardware. */
-
-#if defined(CONFIG_NET_TIMESTAMP) && !defined(CONFIG_ARCH_HAVE_NETDEV_TIMESTAMP)
-  clock_gettime(CLOCK_REALTIME, &dev->d_rxtime);
-#endif
 
   if (dev->d_iob != NULL)
     {

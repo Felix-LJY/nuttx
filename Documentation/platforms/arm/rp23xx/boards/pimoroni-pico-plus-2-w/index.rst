@@ -2,7 +2,7 @@
 Pimoroni Pico Plus 2 W
 ======================
 
-.. tags:: chip:rp2350, chip:rp2350b, wifi
+.. tags:: arch:arm, chip:rp23xx, part:rp2350, part:rp2350b, vendor:raspberry-pi
 
 The `Pimoroni Pico Plus 2 W <https://shop.pimoroni.com/products/pimoroni-pico-plus-2-w>`_
 is a Raspberry Pi Pico form-factor board built around the RP2350B -- the 80-pin
@@ -107,7 +107,8 @@ has two consequences:
 
 With ``CONFIG_USERLED`` the LED appears as ``/dev/userleds`` and can be driven
 with the ``leds`` example.  Board code can also reach it, and the CYW43439's
-other two GPIOs, through ``include/rp23xx_extra_gpio.h``:
+other two GPIOs, through
+``boards/arm/rp23xx/common/include/rp23xx_extra_gpio.h``:
 
 ===== ========= ==============================================================
 GPIO  Direction Function

@@ -116,11 +116,8 @@
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 long smh_call(unsigned int nbr, void *parm);
@@ -150,6 +147,16 @@ uintptr_t sys_call6(unsigned int nbr, uintptr_t parm1, uintptr_t parm2,
  * in; otherwise there is no fp-chain consumer to fix up for.
  */
 
+/* The instruction that enters the kernel.  Cores without the standard trap
+ * architecture (CONFIG_ARCH_RV_CUSTOM_TRAP) provide their own.
+ */
+
+#ifdef CONFIG_ARCH_RV_CUSTOM_TRAP
+#  include <arch/chip/irq.h>
+#else
+#  define RISCV_SYSCALL_INSN "ecall"
+#endif
+
 #if defined(CONFIG_FRAME_POINTER) && defined(CONFIG_SCHED_BACKTRACE)
 #  define RISCV_ECALL_CLOBBERS "memory", "ra"
 #else
@@ -166,16 +173,16 @@ uintptr_t sys_call6(unsigned int nbr, uintptr_t parm1, uintptr_t parm2,
 
 static inline uintptr_t sys_call0(unsigned int nbr)
 {
-  register long r0 asm("a0") = (long)(nbr);
+  register long r0 __asm__("a0") = (long)(nbr);
 
-  asm volatile
+  __asm__ __volatile__
     (
-     "ecall"
+     RISCV_SYSCALL_INSN
      :: "r"(r0)
      : RISCV_ECALL_CLOBBERS
      );
 
-  asm volatile("nop" : "=r"(r0));
+  __asm__ __volatile__("nop" : "=r"(r0));
 
   return r0;
 }
@@ -190,17 +197,17 @@ static inline uintptr_t sys_call0(unsigned int nbr)
 
 static inline uintptr_t sys_call1(unsigned int nbr, uintptr_t parm1)
 {
-  register long r0 asm("a0") = (long)(nbr);
-  register long r1 asm("a1") = (long)(parm1);
+  register long r0 __asm__("a0") = (long)(nbr);
+  register long r1 __asm__("a1") = (long)(parm1);
 
-  asm volatile
+  __asm__ __volatile__
     (
-     "ecall"
+     RISCV_SYSCALL_INSN
      :: "r"(r0), "r"(r1)
      : RISCV_ECALL_CLOBBERS
      );
 
-  asm volatile("nop" : "=r"(r0));
+  __asm__ __volatile__("nop" : "=r"(r0));
 
   return r0;
 }
@@ -216,18 +223,18 @@ static inline uintptr_t sys_call1(unsigned int nbr, uintptr_t parm1)
 static inline uintptr_t sys_call2(unsigned int nbr, uintptr_t parm1,
                                   uintptr_t parm2)
 {
-  register long r0 asm("a0") = (long)(nbr);
-  register long r1 asm("a1") = (long)(parm1);
-  register long r2 asm("a2") = (long)(parm2);
+  register long r0 __asm__("a0") = (long)(nbr);
+  register long r1 __asm__("a1") = (long)(parm1);
+  register long r2 __asm__("a2") = (long)(parm2);
 
-  asm volatile
+  __asm__ __volatile__
     (
-     "ecall"
+     RISCV_SYSCALL_INSN
      :: "r"(r0), "r"(r1), "r"(r2)
      : RISCV_ECALL_CLOBBERS
      );
 
-  asm volatile("nop" : "=r"(r0));
+  __asm__ __volatile__("nop" : "=r"(r0));
 
   return r0;
 }
@@ -243,19 +250,19 @@ static inline uintptr_t sys_call2(unsigned int nbr, uintptr_t parm1,
 static inline uintptr_t sys_call3(unsigned int nbr, uintptr_t parm1,
                                   uintptr_t parm2, uintptr_t parm3)
 {
-  register long r0 asm("a0") = (long)(nbr);
-  register long r1 asm("a1") = (long)(parm1);
-  register long r2 asm("a2") = (long)(parm2);
-  register long r3 asm("a3") = (long)(parm3);
+  register long r0 __asm__("a0") = (long)(nbr);
+  register long r1 __asm__("a1") = (long)(parm1);
+  register long r2 __asm__("a2") = (long)(parm2);
+  register long r3 __asm__("a3") = (long)(parm3);
 
-  asm volatile
+  __asm__ __volatile__
     (
-     "ecall"
+     RISCV_SYSCALL_INSN
      :: "r"(r0), "r"(r1), "r"(r2), "r"(r3)
      : RISCV_ECALL_CLOBBERS
      );
 
-  asm volatile("nop" : "=r"(r0));
+  __asm__ __volatile__("nop" : "=r"(r0));
 
   return r0;
 }
@@ -272,20 +279,20 @@ static inline uintptr_t sys_call4(unsigned int nbr, uintptr_t parm1,
                                   uintptr_t parm2, uintptr_t parm3,
                                   uintptr_t parm4)
 {
-  register long r0 asm("a0") = (long)(nbr);
-  register long r1 asm("a1") = (long)(parm1);
-  register long r2 asm("a2") = (long)(parm2);
-  register long r3 asm("a3") = (long)(parm3);
-  register long r4 asm("a4") = (long)(parm4);
+  register long r0 __asm__("a0") = (long)(nbr);
+  register long r1 __asm__("a1") = (long)(parm1);
+  register long r2 __asm__("a2") = (long)(parm2);
+  register long r3 __asm__("a3") = (long)(parm3);
+  register long r4 __asm__("a4") = (long)(parm4);
 
-  asm volatile
+  __asm__ __volatile__
     (
-     "ecall"
+     RISCV_SYSCALL_INSN
      :: "r"(r0), "r"(r1), "r"(r2), "r"(r3), "r"(r4)
      : RISCV_ECALL_CLOBBERS
      );
 
-  asm volatile("nop" : "=r"(r0));
+  __asm__ __volatile__("nop" : "=r"(r0));
 
   return r0;
 }
@@ -302,21 +309,21 @@ static inline uintptr_t sys_call5(unsigned int nbr, uintptr_t parm1,
                                   uintptr_t parm2, uintptr_t parm3,
                                   uintptr_t parm4, uintptr_t parm5)
 {
-  register long r0 asm("a0") = (long)(nbr);
-  register long r1 asm("a1") = (long)(parm1);
-  register long r2 asm("a2") = (long)(parm2);
-  register long r3 asm("a3") = (long)(parm3);
-  register long r4 asm("a4") = (long)(parm4);
-  register long r5 asm("a5") = (long)(parm5);
+  register long r0 __asm__("a0") = (long)(nbr);
+  register long r1 __asm__("a1") = (long)(parm1);
+  register long r2 __asm__("a2") = (long)(parm2);
+  register long r3 __asm__("a3") = (long)(parm3);
+  register long r4 __asm__("a4") = (long)(parm4);
+  register long r5 __asm__("a5") = (long)(parm5);
 
-  asm volatile
+  __asm__ __volatile__
     (
-     "ecall"
+     RISCV_SYSCALL_INSN
      :: "r"(r0), "r"(r1), "r"(r2), "r"(r3), "r"(r4), "r"(r5)
      : RISCV_ECALL_CLOBBERS
      );
 
-  asm volatile("nop" : "=r"(r0));
+  __asm__ __volatile__("nop" : "=r"(r0));
 
   return r0;
 }
@@ -334,28 +341,27 @@ static inline uintptr_t sys_call6(unsigned int nbr, uintptr_t parm1,
                                   uintptr_t parm4, uintptr_t parm5,
                                   uintptr_t parm6)
 {
-  register long r0 asm("a0") = (long)(nbr);
-  register long r1 asm("a1") = (long)(parm1);
-  register long r2 asm("a2") = (long)(parm2);
-  register long r3 asm("a3") = (long)(parm3);
-  register long r4 asm("a4") = (long)(parm4);
-  register long r5 asm("a5") = (long)(parm5);
-  register long r6 asm("a6") = (long)(parm6);
+  register long r0 __asm__("a0") = (long)(nbr);
+  register long r1 __asm__("a1") = (long)(parm1);
+  register long r2 __asm__("a2") = (long)(parm2);
+  register long r3 __asm__("a3") = (long)(parm3);
+  register long r4 __asm__("a4") = (long)(parm4);
+  register long r5 __asm__("a5") = (long)(parm5);
+  register long r6 __asm__("a6") = (long)(parm6);
 
-  asm volatile
+  __asm__ __volatile__
     (
-     "ecall"
+     RISCV_SYSCALL_INSN
      :: "r"(r0), "r"(r1), "r"(r2), "r"(r3), "r"(r4), "r"(r5), "r"(r6)
      : RISCV_ECALL_CLOBBERS
      );
 
-  asm volatile("nop" : "=r"(r0));
+  __asm__ __volatile__("nop" : "=r"(r0));
 
   return r0;
 }
 #endif
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

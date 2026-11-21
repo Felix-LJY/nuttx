@@ -1,0 +1,171 @@
+.. _file-permission:
+
+========================================
+Filesystem Permission Interface
+========================================
+
+When ``CONFIG_FS_PERMISSION`` is enabled, the VFS applies POSIX-style
+discretionary access control (DAC) using the caller's effective credentials
+(``tg_euid`` / ``tg_egid``).  This page describes the common inode helpers,
+how mountpoints participate, and how access across a mount is gated by
+pseudoFS directory modes.
+
+Prerequisite reading: :ref:`user-identity`.
+
+Configuration
+=============
+
+=============================== =============================================
+Option                          Role
+=============================== =============================================
+``CONFIG_SCHED_USER_IDENTITY``  Per-task-group UID/GID credentials
+``CONFIG_PSEUDOFS_ATTRIBUTES``  Store ``i_mode`` / ``i_owner`` / ``i_group``
+                                on pseudoFS inodes
+``CONFIG_FS_PERMISSION``        Enable DAC helpers and VFS enforcement
+                                (depends on the two options above)
+=============================== =============================================
+
+Without ``CONFIG_FS_PERMISSION``, the helpers described here return success
+and no mode-based checks are performed.
+
+Helpers
+=======
+
+``inode_checkperm``
+  Check ``amode`` (``R_OK`` / ``W_OK`` / ``X_OK``) against an inode's
+  ``i_owner`` / ``i_group`` / ``i_mode``.  Empty macro returning ``0``
+  when ``CONFIG_FS_PERMISSION`` is disabled.
+
+``inode_checkpathperm``
+  Require ``X_OK`` on every ancestor of an inode (directory search /
+  traverse).  If ``amode`` is non-zero, also require that access on the
+  inode.  Takes the inode tree read lock unless ``INODE_CHECK_LOCKED`` is
+  set (caller already holds ``inode_lock`` / ``inode_rlock``).  Empty
+  macro returning ``0`` when ``CONFIG_FS_PERMISSION`` is disabled.
+
+``INODE_PATH_AMODE``
+  The ``amode`` for the inode that ``inode_find`` returns: ``X_OK`` on a
+  mountpoint when the path goes into the volume, and nothing on the last
+  path component.
+
+``inode_checkopenperm``
+  Validate that the inode supports the requested open access, then apply
+  mode checks for non-mountpoint inodes.
+
+``fs_checkmode``
+  Core owner/group/other test used by the helpers above and by filesystems
+  such as tmpfs and littlefs.
+
+Optional mountpoint hook
+------------------------
+
+``struct mountpt_operations`` may provide a ``permission`` method for
+in-volume DAC.  The field is at the **end** of the structure so existing
+positional initialisers remain valid.
+
+* **tmpfs** implements ``tmpfs_permission``.
+* Filesystems without Unix ownership on disk (for example FAT and ROMFS)
+  leave the method ``NULL``.
+
+The VFS mount-crossing gate does **not** depend on this hook.  Entry into a
+volume is enforced with ``inode_checkpathperm`` against the mountpoint
+inode's stored ``i_mode``.  In-volume checks remain the filesystem's job
+(tmpfs and littlefs enforce DAC inside their own open/mkdir/path helpers.
+``mops->permission`` is an optional common entry point for the same policy;
+the VFS does not invoke it for mount-crossing).
+
+Open vs traverse
+================
+
+Mountpoint inodes are **not** open-mode-checked by ``inode_checkopenperm``.
+Applying the mount directory's mode bits as file open modes would require
+read/write on the mount directory merely to open a file beneath it.
+
+Traverse is separate: callers use ``inode_checkpathperm`` so parent
+directories, and the mountpoint for a path that goes into the volume, still
+require ``X_OK``.  As POSIX specifies, the last path component needs no search
+permission: a directory with no execute bit can still be found with ``stat()``
+and changed with ``chmod()``.  ``chdir()`` is different: it needs search
+permission on the directory itself.
+
+Typical order after a successful ``inode_find``:
+
+1. ``inode_checkpathperm(inode, INODE_PATH_AMODE(&desc), 0)`` — search
+   permission on the path prefix (and on the mountpoint when entering a
+   volume).  Call sites that already hold the tree lock pass
+   ``INODE_CHECK_LOCKED``; mount and pseudoFS create/remove pass
+   ``W_OK | X_OK`` on the directory to combine traverse and target checks in
+   one call.
+2. Operation-specific checks — ``inode_checkopenperm``, or the
+   filesystem's own methods for paths inside a mount.
+
+Mount-crossing
+==============
+
+Path walk stops at a mountpoint and returns that inode plus a relative path
+into the volume.  Without traverse checks, a restrictive mode on a pseudoFS
+parent would not protect objects under a filesystem mounted beneath it.
+
+Example::
+
+  /secure_dir          # pseudoFS directory, mode 0700, owner root
+  /secure_dir/mnt      # mounted volume (tmpfs, FAT, ...)
+  /secure_dir/mnt/a    # object inside the volume
+
+``inode_checkpathperm`` requires ``X_OK`` on ``secure_dir`` and on the
+mountpoint ``mnt``.  A non-root open of ``/secure_dir/mnt/a`` therefore
+returns ``EACCES``, even if the mounted filesystem itself has no Unix DAC.
+
+Where the checks run
+--------------------
+
+* After ``inode_find`` in open, unlink, mkdir, rmdir, rename, stat, chstat,
+  statfs, readlink, mount, and umount.  ``inode_checkpathperm`` takes
+  ``inode_rlock`` unless the caller already holds the tree lock
+  (``INODE_CHECK_LOCKED``).
+* Inside ``inode_reserve`` / ``inode_remove`` for pseudoFS create and remove
+  (ancestor and parent ``X_OK`` and parent ``W_OK`` in one call, under
+  ``inode_lock``).
+
+Who enforces what
+-----------------
+
+* **PseudoFS parent dirs** — ``X_OK`` (and ``W_OK`` when creating/removing)
+* **Mountpoint inode** — ``X_OK`` to enter the volume (stored ``i_mode``)
+* **Inside the volume** — Filesystem methods; optional ``mops->permission``
+* **FAT / ROMFS** — No Unix ownership on disk; entry still gated by the
+  mountpoint ``i_mode``
+
+Execute permission
+==================
+
+With ``CONFIG_BINFMT_CHECKEXEC`` (the default with
+``CONFIG_SCHED_USER_IDENTITY``), ``exec()``, ``posix_spawn()`` and the other
+functions that start a program from a file refuse a file that has no execute
+permission, with ``EACCES``.  Each binary format checks the mode of the file
+that it opens, also for scripts and for their interpreters.  With
+``CONFIG_SCHED_USER_IDENTITY``, the owner, group or other execute bit is
+checked for the effective user and group IDs, and root needs any execute bit.
+Without it, any execute bit is enough.
+
+The mode is the one that ``stat()`` reports:
+
+* File systems without a stored mode (FAT, xipfs, zipfs, spiffs, nxffs, and
+  tmpfs without ``CONFIG_FS_PERMISSION``) report execute permission for all
+  files.
+* File systems that store the mode (littlefs, smartfs, mnemofs, tmpfs with
+  ``CONFIG_FS_PERMISSION``, romfs, cromfs, hostfs, NFS, v9fs) report it.  A
+  program that was created with a mode without execute bits needs ``chmod``
+  before it can run.
+* A file system mounted with ``MS_NOEXEC`` reports its regular files without
+  execute permission.
+
+References
+==========
+
+* ``fs/inode/fs_inode.c`` — ``inode_checkperm``, ``inode_checkpathperm``
+* ``include/nuttx/fs/fs.h`` — ``struct mountpt_operations``
+* ``fs/tmpfs/fs_tmpfs.c`` — ``tmpfs_permission``
+* :ref:`user-identity` — credential model
+* :doc:`/os/filesystem/littlefs` — littlefs in-volume DAC
+* :doc:`/os/filesystem/tmpfs` — tmpfs overview

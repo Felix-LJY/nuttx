@@ -35,11 +35,13 @@
 
 #include <nuttx/arch.h>
 #include <nuttx/sched_note.h>
+#include <arch/board/board.h>
 
 #include "nvic.h"
 #include "sched/sched.h"
 #include "init/init.h"
 #include "arm_internal.h"
+#include "rp23xx_mpu.h"
 #include "hardware/rp23xx_memorymap.h"
 #include "hardware/rp23xx_sio.h"
 #include "hardware/rp23xx_psm.h"
@@ -111,13 +113,14 @@ static int fifo_comm(uint32_t msg)
 {
   uint32_t rcv;
 
-  while (!(getreg32(RP23XX_SIO_FIFO_ST) & RP23XX_SIO_FIFO_ST_RDY))
-    ;
+  while (!(getreg32(RP23XX_SIO_FIFO_ST) & RP23XX_SIO_FIFO_ST_RDY));
   putreg32(msg, RP23XX_SIO_FIFO_WR);
   __asm__ volatile ("sev");
 
   while (!(getreg32(RP23XX_SIO_FIFO_ST) & RP23XX_SIO_FIFO_ST_VLD))
-    __asm__ volatile ("wfe");
+    {
+      __asm__ volatile ("wfe");
+    }
 
   rcv = getreg32(RP23XX_SIO_FIFO_RD);
 
@@ -146,11 +149,21 @@ static void core1_boot(void)
 
   arm_fpuconfig();
 
+  /* Let the atomic operations exclude the other core */
+
+  rp23xx_mpu_share_sram();
+
   fifo_drain();
 
   /* Setup NVIC */
 
   up_irqinitialize();
+
+#ifdef CONFIG_ARCH_PERF_EVENTS
+  /* The cycle counter (DWT) is a register of each core */
+
+  up_perf_init((void *)BOARD_SYS_FREQ);
+#endif
 
   /* Enable inter-processor FIFO interrupt */
 
@@ -218,8 +231,7 @@ int up_cpu_start(int cpu)
   /* Reset Core 1 */
 
   setbits_reg32(RP23XX_PSM_PROC1, RP23XX_PSM_FRCE_OFF);
-  while (!(getreg32(RP23XX_PSM_FRCE_OFF) & RP23XX_PSM_PROC1))
-    ;
+  while (!(getreg32(RP23XX_PSM_FRCE_OFF) & RP23XX_PSM_PROC1));
   clrbits_reg32(RP23XX_PSM_PROC1, RP23XX_PSM_FRCE_OFF);
 
   /* Send initial VTOR, MSP, PC for Core 1 boot */

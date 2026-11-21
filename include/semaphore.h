@@ -149,18 +149,18 @@ typedef struct sem_s sem_t;
 /* semcount, flags, waitlist, hhead */
 
 #    define SEM_INITIALIZER(c) \
-       {{(c)}, 0, SEM_WAITLIST_INITIALIZER, NULL}
+       {{(c)}, SEM_PRIO_NONE, SEM_WAITLIST_INITIALIZER, NULL}
 #  else
 /* semcount, flags, waitlist, holder[2] */
 
 #    define SEM_INITIALIZER(c) \
-       {{(c)}, 0, SEM_WAITLIST_INITIALIZER, SEMHOLDER_INITIALIZER}
+       {{(c)}, SEM_PRIO_NONE, SEM_WAITLIST_INITIALIZER, SEMHOLDER_INITIALIZER}
 #  endif
 #else
 /* semcount, flags, waitlist */
 
 #  define SEM_INITIALIZER(c) \
-     {{(c)}, 0, SEM_WAITLIST_INITIALIZER}
+     {{(c)}, SEM_PRIO_NONE, SEM_WAITLIST_INITIALIZER}
 #endif
 
 #define SEM_WAITLIST(sem)       (&((sem)->waitlist))
@@ -170,11 +170,8 @@ typedef struct sem_s sem_t;
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -259,7 +256,6 @@ int sem_setprotocol(FAR sem_t *sem, int protocol);
 
 int sem_getprotocol(FAR sem_t *sem, FAR int *protocol);
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

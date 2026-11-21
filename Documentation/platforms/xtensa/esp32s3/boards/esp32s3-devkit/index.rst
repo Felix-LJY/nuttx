@@ -1,8 +1,8 @@
-==============
-ESP32S3-DevKit
-==============
+============================
+Espressif ESP32-S3-DevKitC-1
+============================
 
-.. tags:: chip:esp32, chip:esp32s3
+.. tags:: arch:xtensa, chip:esp32s3, vendor:espressif
 
 The `ESP32S3 DevKit <https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/hw-reference/esp32s3/user-guide-devkitc-1.html>`_ is a development board for the ESP32-S3 SoC from Espressif, based on a ESP32-S3-WROOM-1 module.
 
@@ -372,6 +372,88 @@ After successfully built and flashed, run on the boards's terminal::
 
 The corresponding output should show related debug information.
 
+kernel_n8r2
+-----------
+
+A KERNEL build for a module with 2 MB of PSRAM, such as the
+ESP32-S3-WROOM-1-N8R2.  The flash is quad and runs in DIO mode.
+
+The page pool is smaller than in ``kernel_oct`` (all of the PSRAM but its
+first page: 31 pages of 64 KiB), and each of the text, data and heap regions
+of a process is 2 pages of 64 KiB.  A process therefore takes
+384 KiB, and a ``fork()`` needs 768 KiB while the parent and the child both
+exist.
+
+This is tight on purpose.  ``ostest`` has 115 KiB of text against a 128 KiB
+text region.  A larger program needs a module with more PSRAM, not a larger
+page pool.
+
+kernel_oct
+----------
+
+A KERNEL build for a module with octal flash and 8 MB of PSRAM, such as the
+ESP32-S3-WROOM-2-N32R8V.
+
+A KERNEL build gives each process its own address environment.  This is the
+only build mode in which ``fork()`` is available on this chip:  the child
+receives its own copy of the memory of the parent, at the same virtual
+addresses.  ``vfork()`` is available in every build mode.
+
+The page pool holds the pages of every process.  It is all of the PSRAM but
+its first page (to the page allocator the physical address 0 means "no
+page"): 127 pages of 64 KiB.  The kernel runs in the internal SRAM and keeps
+no mapping of the PSRAM after the boot.  It reaches a page of the pool
+through a small scratch region, mapped for one operation and invalidated
+afterwards.
+
+Build the kernel first, then the applications, then the boot ROMFS, and then
+link the kernel again.  The ROMFS is linked into the kernel image, so a change
+to an application needs the whole chain::
+
+    make -j
+    make export
+    cd ../apps
+    ./tools/mkimport.sh -z -x ../nuttx/nuttx-export-*.tar.gz
+    make import -j
+    ./tools/mkromfsimg.sh ../nuttx/arch/xtensa/src/board/board/romfs_boot.c
+    cd ../nuttx
+    make -j
+
+Confirm that the ROMFS is in the image.  ``romfs_img`` must be a strong symbol
+of a few hundred kilobytes::
+
+    xtensa-esp32s3-elf-nm -S nuttx | grep " romfs_img$"
+
+A one byte symbol means that the linker took the stub.  Delete
+``boards/xtensa/esp32s3/esp32s3-devkit/src/romfs_stub.o`` and ``libboard.a``,
+then link again.
+
+The programs are in ``/system/bin``, which is in ``PATH``, so the shell finds
+them by name.
+
+A process runs in the unprivileged world and cannot reach kernel memory, the
+peripherals or the pages of another process.  If it tries, only that process
+is terminated.  See
+:ref:`Memory Protection and Build Modes <platforms/xtensa/esp32s3/index:Memory Protection and Build Modes>`.
+
+Two programs in the ROMFS show this on the board.  ``ostest`` includes the
+``fork()`` and ``vfork()`` tests::
+
+    nsh> ostest
+    ...
+    fork_test: Parent and child had independent memory
+    ...
+    ostest_main: Exiting with status 0
+
+``sandbox`` makes one allowed access and three forbidden ones: to kernel
+memory, to a peripheral register and to an address without a mapping.  Each
+offender must be terminated, the caller must survive, and the memory and the
+file descriptors of the offender must be given back::
+
+    nsh> sandbox
+    ...
+    sandbox: CONTAINED - 4 target(s), every check passed
+
 knsh
 ----
 
@@ -391,6 +473,13 @@ Flash and PSRAM).
 
 .. warning:: The World Controller and Permission Control **do not** prevent
   the application from accessing CPU System Registers.
+
+ksta_softap
+-----------
+
+A PROTECTED build, like ``knsh``, with Wi-Fi in station and SoftAP mode at
+the same time.  It includes ``wapi``, a DHCP server and ``iperf``.  The Wi-Fi
+commands are the same as in :ref:`esp32s3-devkit:sta_softap <platforms/xtensa/esp32s3/boards/esp32s3-devkit/index:sta_softap>`.
 
 mbedtls
 -------
@@ -1317,14 +1406,14 @@ Then check the partition::
 
   nsh> ls -l /dev/
   /dev:
-   dr--r--r--           0 adb0/
+   dr-xr-xr-x           0 adb0/
    crw-rw-rw-           0 console
    frw-rw-rw-     1044480 data
    frw-rw-rw-     1048576 esp32s3flash
    c-w--w--w-           0 log
    crw-rw-rw-           0 null
    crw-rw-rw-           0 ptmx
-   dr--r--r--           0 pts/
+   dr-xr-xr-x           0 pts/
    brw-rw-rw-        1024 ram0
    crw-rw-rw-           0 ttyS0
    frw-rw-rw-        4096 txtable

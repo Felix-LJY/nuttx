@@ -20,8 +20,6 @@
 #
 ############################################################################
 
-include $(TOPDIR)/Make.defs
-
 CSRCS = nrf91_boot.c nrf91_bringup.c nrf91_sensors.c
 
 ifeq ($(CONFIG_ARCH_BUTTONS),y)
@@ -38,6 +36,10 @@ endif
 
 ifeq ($(CONFIG_I2C),y)
 CSRCS += nrf91_i2c.c
+endif
+
+ifeq ($(CONFIG_RGBLED),y)
+CSRCS += nrf91_rgbled.c
 endif
 
 DEPPATH += --dep-path board

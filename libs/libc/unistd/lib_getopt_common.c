@@ -168,18 +168,18 @@ static int getopt_long_option(FAR struct getopt_s *go,
                   FAR char *next;
 
                   case no_argument:
-                    /* No, no arguments. Just return the argument that we
-                     * found.
-                     */
+                  /* No, no arguments. Just return the argument that we
+                   * found.
+                   */
 
                     go->go_optptr = NULL;
                     go->go_optind++;
                     break;
 
                   case optional_argument:
-                    /* Check if there is a following argument and if that
-                     * following argument is another option.
-                     */
+                  /* Check if there is a following argument and if that
+                   * following argument is another option.
+                   */
 
                     next = argv[go->go_optind + 1];
                     if (next == NULL || next[0] == '-')
@@ -345,6 +345,7 @@ int getopt_common(int argc, FAR char * const argv[],
   /* Get thread-specific getopt() variables */
 
   FAR struct getopt_s *go = getoptvars();
+
   if (go == NULL)
     {
       return '?';
@@ -406,10 +407,21 @@ int getopt_common(int argc, FAR char * const argv[],
            * the first character must be '-'
            */
 
-          if (*go->go_optptr != '-')
+          if (*go->go_optptr != '-' || go->go_optptr[1] == '\0')
             {
-              /* The argument does not start with '-', we are finished */
+              /* The argument does not start with '-' or it is "-" (an
+               * operand), we are finished
+               */
 
+              go->go_binitialized = false;
+              return ERROR;
+            }
+
+          /* "--" ends the options: skip over it and stop */
+
+          if (strcmp(go->go_optptr, "--") == 0)
+            {
+              go->go_optind++;
               go->go_binitialized = false;
               return ERROR;
             }
@@ -417,16 +429,6 @@ int getopt_common(int argc, FAR char * const argv[],
           /* Skip over the '-' */
 
           go->go_optptr++;
-        }
-
-      /* Special case handling of "-" and "-:" */
-
-      if (!*go->go_optptr)
-        {
-          /* We'll fix up optptr the next time we are called */
-
-          go->go_optopt = '\0';
-          return '?';
         }
 
       /* Handle the case of "-:" */

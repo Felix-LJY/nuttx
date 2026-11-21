@@ -30,11 +30,61 @@
 #include <stdbool.h>
 #include <errno.h>
 #include <assert.h>
+#include <nuttx/debug.h>
 
 #include <nuttx/fs/fs.h>
+#include <nuttx/sched.h>
 
 #include "inode/inode.h"
+#include "mount/mount.h"
 #include "vfs/vfs.h"
+
+/****************************************************************************
+ * Private Functions
+ ****************************************************************************/
+
+#ifndef CONFIG_DISABLE_MOUNTPOINT
+
+/****************************************************************************
+ * Name: umount_all_handler
+ *
+ * Description:
+ *   foreach_mountpoint() callback for umount_all() (readonly=false).
+ *   Flushes and force-unmounts the mountpoint it is handed, then returns 0
+ *   so the single traversal continues to the next one.
+ *
+ *   This is safe even though nx_umount2() may remove (and free) this very
+ *   inode: the traversal core snapshots each inode's sibling/child links
+ *   before invoking the callback, so it never dereferences the freed node.
+ *   A mountpoint that cannot be unmounted (e.g. a read-only or proxy fs
+ *   whose unbind returns an error) is simply left in the tree; returning 0
+ *   moves on without revisiting it, so the traversal always terminates.
+ *
+ ****************************************************************************/
+
+static int umount_all_handler(FAR const char *mountpoint, FAR void *arg)
+{
+  int ret;
+
+  UNUSED(arg);
+
+  /* Force-unmount the mountpoint.  nx_umount2() re-resolves the path and
+   * flushes (syncfs) before unbind under the inode write lock that
+   * foreach_mountpoint() holds for the whole traversal (readonly=false);
+   * the NuttX rwsem is recursive for the current holder, so the nested
+   * acquisition is safe.
+   */
+
+  ret = nx_umount2(mountpoint, MNT_FORCE);
+  if (ret < 0)
+    {
+      ferr("Failed to unmount %s during reboot: %d\n", mountpoint, ret);
+    }
+
+  return 0;
+}
+
+#endif /* CONFIG_DISABLE_MOUNTPOINT */
 
 /****************************************************************************
  * Public Functions
@@ -62,6 +112,11 @@ int nx_umount2(FAR const char *target, unsigned int flags)
   struct inode_search_s desc;
   int ret;
 
+  if (!nxsched_capable(PR_CAP_RAWIO))
+    {
+      return -EPERM;
+    }
+
   /* Verify required pointer arguments */
 
   if (!target)
@@ -72,9 +127,13 @@ int nx_umount2(FAR const char *target, unsigned int flags)
 
   /* Find the mountpt */
 
-  SETUP_SEARCH(&desc, target, false);
+  ret = inode_search_setup(&desc, target, false);
+  if (ret < 0)
+    {
+      return ret;
+    }
 
-  ret = inode_find(&desc);
+  ret = inode_find(&desc, &mountpt_inode);
   if (ret < 0)
     {
       goto errout_with_search;
@@ -82,12 +141,14 @@ int nx_umount2(FAR const char *target, unsigned int flags)
 
   /* Get the search results */
 
-  mountpt_inode = desc.node;
   DEBUGASSERT(mountpt_inode != NULL);
 
-  /* Verify that the inode is a mountpoint */
+  /* Verify that the inode is a mountpoint and that the path names the
+   * mountpoint itself, not a file or directory in the mounted volume.
+   */
 
-  if (!INODE_IS_MOUNTPT(mountpt_inode))
+  if (!INODE_IS_MOUNTPT(mountpt_inode) ||
+      (desc.relpath != NULL && *desc.relpath != '\0'))
     {
       ret = -EINVAL;
       goto errout_with_mountpt;
@@ -116,10 +177,15 @@ int nx_umount2(FAR const char *target, unsigned int flags)
 
   inode_lock();
 
-  ret = inode_checkpathperm(mountpt_inode, W_OK, INODE_CHECK_LOCKED);
+  ret = inode_checkpathperm(mountpt_inode, W_OK | X_OK, INODE_CHECK_LOCKED);
   if (ret < 0)
     {
       goto errout_with_lock;
+    }
+
+  if (mountpt_inode->u.i_mops->syncfs)
+    {
+      mountpt_inode->u.i_mops->syncfs(mountpt_inode);
     }
 
   ret = mountpt_inode->u.i_mops->unbind(mountpt_inode->i_private,
@@ -136,11 +202,11 @@ int nx_umount2(FAR const char *target, unsigned int flags)
       goto errout_with_lock;
     }
 
-  /* Successfully unbound.  Convert the mountpoint inode to regular
+  /* Successfully unbound.  Convert the mountpoint inode to a regular
    * pseudo-file inode.
    */
 
-  mountpt_inode->i_flags  &= ~FSNODEFLAG_TYPE_MASK;
+  mountpt_inode->i_flags  &= ~(FSNODEFLAG_TYPE_MASK | FSNODEFLAG_NOEXEC);
   mountpt_inode->i_private = NULL;
   mountpt_inode->u.i_mops  = NULL;
 
@@ -189,7 +255,7 @@ int nx_umount2(FAR const char *target, unsigned int flags)
       inode_release(blkdrvr_inode);
     }
 
-  RELEASE_SEARCH(&desc);
+  inode_search_release(&desc);
 #ifdef CONFIG_FS_NOTIFY
   notify_unmount(target);
 #endif
@@ -208,7 +274,7 @@ errout_with_mountpt:
     }
 
 errout_with_search:
-  RELEASE_SEARCH(&desc);
+  inode_search_release(&desc);
 
 errout:
   return ret;
@@ -245,3 +311,36 @@ int umount2(FAR const char *target, unsigned int flags)
 
   return ret;
 }
+
+#ifndef CONFIG_DISABLE_MOUNTPOINT
+
+/****************************************************************************
+ * Name: umount_all
+ *
+ * Description:
+ *   Flush (syncfs) and force-unmount every mountpoint.  Intended for the
+ *   reboot/poweroff path so that every filesystem's unbind() logic runs
+ *   (e.g. metadata a filesystem only writes at unmount), which a bare
+ *   sync() does not reach.
+ *
+ *   foreach_mountpoint() with readonly=false holds the inode write lock for
+ *   whole traversal; nx_umount2() then re-takes the write lock inside the
+ *   callback, which is safe because the NuttX rwsem is recursive for the
+ *   current writer (holder == tid).  Holding one lock across the (now
+ *   bounded) filesystem operations also serializes the whole teardown, which
+ *   is exactly what the reboot path wants.
+ *
+ *   A single traversal unmounts every mountpoint: the handler unmounts the
+ *   inode it is handed and returns 0 to continue.  The traversal core
+ *   snapshots each inode's sibling/child links before the callback, so
+ *   freeing the current inode from nx_umount2() is safe, and a mountpoint
+ *   that cannot be unmounted is simply left in the tree and stepped over.
+ *
+ ****************************************************************************/
+
+void umount_all(void)
+{
+  foreach_mountpoint(umount_all_handler, NULL, false);
+}
+
+#endif /* CONFIG_DISABLE_MOUNTPOINT */

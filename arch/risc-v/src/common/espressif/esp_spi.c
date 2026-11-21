@@ -41,6 +41,7 @@
 #include <nuttx/arch.h>
 #include <nuttx/irq.h>
 #include <nuttx/clock.h>
+#include <nuttx/kmalloc.h>
 #include <nuttx/mutex.h>
 #include <nuttx/spi/spi.h>
 #include <nuttx/nuttx.h>
@@ -93,7 +94,12 @@
 #  define MISO_PIN_ATTR (INPUT_FUNCTION_2 | PULLUP)
 #endif
 
-#if defined(CONFIG_ARCH_CHIP_ESP32C3)
+#if defined(CONFIG_ARCH_CHIP_ESP32C2)
+#define SPI2_IOMUX_MISOPIN  2
+#define SPI2_IOMUX_MOSIPIN  7
+#define SPI2_IOMUX_CLKPIN   6
+#define SPI2_IOMUX_CSPIN    10
+#elif defined(CONFIG_ARCH_CHIP_ESP32C3)
 #define SPI2_IOMUX_MISOPIN  2
 #define SPI2_IOMUX_MOSIPIN  7
 #define SPI2_IOMUX_CLKPIN   6
@@ -277,7 +283,7 @@ static int esp_spi_hwfeatures(struct spi_dev_s *dev,
                               spi_hwfeatures_t features);
 #endif
 static uint32_t esp_spi_send(struct spi_dev_s *dev, uint32_t wd);
-static void esp_spi_exchange(struct spi_dev_s *dev,
+static int  esp_spi_exchange(struct spi_dev_s *dev,
                              const void *txbuffer,
                              void *rxbuffer, size_t nwords);
 #if defined(CONFIG_ESPRESSIF_SPI2_DMA) || defined(CONFIG_ESPRESSIF_SPI3_DMA)
@@ -1068,6 +1074,7 @@ static void esp_spi_dma_exchange(struct esp_spi_priv_s *priv,
 #if SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
   esp_err_t ret = esp_cache_msync((void *)txbuffer_temp,
                                   tx_byte_len, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+
   assert(ret == ESP_OK);
 #endif
 
@@ -1388,11 +1395,11 @@ static void esp_spi_poll_exchange(struct esp_spi_priv_s *priv,
  *              uint16_t's
  *
  * Returned Value:
- *   None.
+ *   Returns zero (OK) on success; a negated errno value on failure.
  *
  ****************************************************************************/
 
-static void esp_spi_exchange(struct spi_dev_s *dev,
+static int  esp_spi_exchange(struct spi_dev_s *dev,
                              const void *txbuffer,
                              void *rxbuffer,
                              size_t nwords)
@@ -1418,6 +1425,8 @@ static void esp_spi_exchange(struct spi_dev_s *dev,
 #ifdef CONFIG_PM
   esp_pm_lock_release(priv->pm_lock);
 #endif
+
+  return OK;
 }
 
 #ifndef CONFIG_SPI_EXCHANGE

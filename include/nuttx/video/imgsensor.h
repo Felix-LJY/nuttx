@@ -125,6 +125,8 @@
 #define IMGSENSOR_PIX_FMT_YUV420P          (7)
 #define IMGSENSOR_PIX_FMT_NV12             (8)
 #define IMGSENSOR_PIX_FMT_RGB565X          (9)
+#define IMGSENSOR_PIX_FMT_ENTROPY          (10)
+#define IMGSENSOR_PIX_FMT_Z16              (11)
 
 /* Method access helper macros */
 
@@ -405,11 +407,8 @@ struct imgsensor_s
 };
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -420,7 +419,6 @@ extern "C"
 
 int imgsensor_register(FAR struct imgsensor_s *sensor);
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

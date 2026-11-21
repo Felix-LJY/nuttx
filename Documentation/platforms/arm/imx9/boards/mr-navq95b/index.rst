@@ -1,8 +1,8 @@
-=========
-MR-NAVQ95
-=========
+==============
+NXP MR-NAVQ95B
+==============
 
-.. tags:: chip:imx9, chip:imx95, vendor:nxp
+.. tags:: arch:arm, chip:imx9, part:imx95, vendor:nxp
 
 The `MR-NAVQ95 <https://github.com/NXP-Robotics/MR-NAVQ95>`_ is an open-source
 development board designed for mobile robotics applications.

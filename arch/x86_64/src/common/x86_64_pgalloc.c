@@ -103,7 +103,7 @@ uintptr_t x86_64_get_pgtable(arch_addrenv_t *addrenv, uintptr_t vaddr)
         {
           /* Determine page table flags */
 
-          if (x86_64_uservaddr(vaddr))
+          if (up_addrenv_user_vaddr(vaddr))
             {
               flags = MMU_UPGT_FLAGS;
             }
@@ -171,8 +171,12 @@ uintptr_t pgalloc(uintptr_t brkaddr, unsigned int npages)
   uintptr_t              paddr;
   uintptr_t              vaddr;
 
-  DEBUGASSERT(tcb && tcb->addrenv_own);
-  addrenv = &tcb->addrenv_own->addrenv;
+  /* The address environment that is selected: exec() selects the one of
+   * the new program while it loads it
+   */
+
+  DEBUGASSERT(tcb && tcb->addrenv_curr);
+  addrenv = &tcb->addrenv_curr->addrenv;
 
   /* The current implementation only supports extending the user heap
    * region as part of the implementation of user sbrk().  This function

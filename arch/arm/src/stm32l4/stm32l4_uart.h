@@ -93,6 +93,14 @@
 #  undef CONFIG_STM32_UART5_1WIREDRIVER
 #endif
 
+/* Is the 1-Wire driver? */
+
+#if defined(CONFIG_STM32_USART1_1WIREDRIVER) || defined(CONFIG_STM32_USART2_1WIREDRIVER) || \
+    defined(CONFIG_STM32_USART3_1WIREDRIVER) || defined(CONFIG_STM32_UART4_1WIREDRIVER) || \
+    defined(CONFIG_STM32_UART5_1WIREDRIVER)
+#  define HAVE_1WIREDRIVER 1
+#endif
+
 /* Is there a USART enabled? */
 
 #if defined(CONFIG_STM32_LPUART1) || defined(CONFIG_STM32_USART1) || \
@@ -268,13 +276,9 @@
 
 #ifndef __ASSEMBLY__
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -298,7 +302,6 @@ extern "C"
 void stm32_serial_dma_poll(void);
 #endif
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

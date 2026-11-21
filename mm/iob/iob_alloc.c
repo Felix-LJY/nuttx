@@ -96,6 +96,7 @@ static FAR struct iob_s *iob_alloc_committed(void)
       iob->io_len    = 0;    /* Length of the data in the entry */
       iob->io_offset = 0;    /* Offset to the beginning of data */
       iob->io_pktlen = 0;    /* Total length of the packet */
+      iob->io_conn   = NULL;
     }
 
   spin_unlock_irqrestore(&g_iob_lock, flags);
@@ -135,6 +136,8 @@ static FAR struct iob_s *iob_tryalloc_internal(bool throttled)
           iob->io_len    = 0;    /* Length of the data in the entry */
           iob->io_offset = 0;    /* Offset to the beginning of data */
           iob->io_pktlen = 0;    /* Total length of the packet */
+          iob->io_conn   = NULL;
+
           return iob;
         }
     }
@@ -340,11 +343,8 @@ FAR struct iob_s *iob_alloc_dynamic(uint16_t size)
   iob = kmm_memalign(IOB_ALIGNMENT, alignsize);
   if (iob)
     {
-      iob->io_flink   = NULL;             /* Not in a chain */
-      iob->io_len     = 0;                /* Length of the data in the entry */
-      iob->io_offset  = 0;                /* Offset to the beginning of data */
+      memset(iob, 0, offsetof(struct iob_s, io_data));
       iob->io_bufsize = size;             /* Total length of the iob buffer */
-      iob->io_pktlen  = 0;                /* Total length of the packet */
       iob->io_free    = iob_free_dynamic; /* Customer free callback */
       iob->io_data    = (FAR uint8_t *)ALIGN_UP((uintptr_t)(iob + 1),
                                                 IOB_ALIGNMENT);
@@ -383,14 +383,10 @@ FAR struct iob_s *iob_alloc_with_data(FAR void *data, uint16_t size,
 
   DEBUGASSERT(free_cb != NULL);
 
-  iob = kmm_malloc(sizeof(struct iob_s));
+  iob = kmm_zalloc(sizeof(struct iob_s));
   if (iob)
     {
-      iob->io_flink   = NULL;    /* Not in a chain */
-      iob->io_len     = 0;       /* Length of the data in the entry */
-      iob->io_offset  = 0;       /* Offset to the beginning of data */
       iob->io_bufsize = size;    /* Total length of the iob buffer */
-      iob->io_pktlen  = 0;       /* Total length of the packet */
       iob->io_free    = free_cb; /* Customer free callback */
       iob->io_data    = data;
     }
@@ -426,10 +422,7 @@ FAR struct iob_s *iob_init_with_data(FAR void *data, uint16_t size,
 {
   FAR struct iob_s *iob = (FAR struct iob_s *)data;
 
-  iob->io_flink   = NULL;    /* Not in a chain */
-  iob->io_len     = 0;       /* Length of the data in the entry */
-  iob->io_offset  = 0;       /* Offset to the beginning of data */
-  iob->io_pktlen  = 0;       /* Total length of the packet */
+  memset(iob, 0, offsetof(struct iob_s, io_data));
   iob->io_free    = free_cb; /* Customer free callback */
   iob->io_data    = (FAR uint8_t *)ALIGN_UP((uintptr_t)(iob + 1),
                                             IOB_ALIGNMENT);

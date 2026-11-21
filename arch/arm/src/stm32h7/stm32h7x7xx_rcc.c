@@ -696,8 +696,8 @@ void stm32_stdclockconfig(void)
     }
 #endif
 
-#ifdef CONFIG_STM32_HSI48
-  /* Enable HSI48 */
+#if defined(CONFIG_STM32_HSI48) || defined(CONFIG_STM32_RNG)
+  /* Enable HSI48, also the RNG kernel clock (RNGSEL reset value) */
 
   regval  = getreg32(STM32_RCC_CR);
   regval |= RCC_CR_HSI48ON;
@@ -741,7 +741,7 @@ void stm32_stdclockconfig(void)
       /* Set PCLK1 */
 
       regval = getreg32(STM32_RCC_D2CFGR);
-      regval &= ~RCC_D2CFGR_D2PPRE2_MASK;
+      regval &= ~RCC_D2CFGR_D2PPRE1_MASK;
       regval |= STM32_RCC_D2CFGR_D2PPRE1;
       putreg32(regval, STM32_RCC_D2CFGR);
 

@@ -239,9 +239,11 @@ Built-In Variables
 ==================
 
 ======  ====================================================
-``$?`` 	The result of the last simple command execution. |br|
+``$?`` 	The exit status of the last simple command. |br|
         On backgrounded commands, this variable holds only |br|
         the result of spawning the background command.
+``$!`` 	The PID of the last command started in the |br|
+        background.
 ======  ====================================================
 
 Current Working Directory

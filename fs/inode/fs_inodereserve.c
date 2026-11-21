@@ -92,7 +92,7 @@ static FAR struct inode *inode_alloc(FAR const char *name, mode_t mode)
   inode   = fs_heap_zalloc(FSNODE_SIZE(namelen));
   if (inode)
     {
-      inode->i_ino   = g_ino++;
+      inode->i_ino   = ++g_ino;
       atomic_set(&inode->i_crefs, 1);
 #ifdef CONFIG_PSEUDOFS_ATTRIBUTES
       inode->i_mode  = mode;
@@ -208,9 +208,13 @@ int inode_reserve(FAR const char *path,
 
   /* Find the location to insert the new subtree */
 
-  SETUP_SEARCH(&desc, path, false);
+  ret = inode_search_setup(&desc, path, false);
+  if (ret < 0)
+    {
+      return ret;
+    }
 
-  ret = inode_search(&desc);
+  ret = inode_search(&desc, NULL);
   if (ret != -ENOENT)
     {
       /* It is an error if the node already exists in the tree (or if it
@@ -233,11 +237,11 @@ int inode_reserve(FAR const char *path,
 
   if (parent != NULL)
     {
-      /* Traverse ancestors (X_OK), then require write on the parent.
-       * Caller holds the inode tree lock.
+      /* Search the ancestors and the parent (X_OK), then require write on
+       * the parent.  Caller holds the inode tree lock.
        */
 
-      ret = inode_checkpathperm(parent, W_OK, INODE_CHECK_LOCKED);
+      ret = inode_checkpathperm(parent, W_OK | X_OK, INODE_CHECK_LOCKED);
       if (ret < 0)
         {
           goto errout_with_search;
@@ -290,7 +294,17 @@ int inode_reserve(FAR const char *path,
       break;
     }
 
+#ifdef CONFIG_PSEUDOFS_ATTRIBUTES
+  /* The directory that received the new entry was modified */
+
+  if (ret >= 0 && desc.parent != NULL)
+    {
+      clock_gettime(CLOCK_REALTIME, &desc.parent->i_ctime);
+      desc.parent->i_mtime = desc.parent->i_ctime;
+    }
+#endif
+
 errout_with_search:
-  RELEASE_SEARCH(&desc);
+  inode_search_release(&desc);
   return ret;
 }

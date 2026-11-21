@@ -61,6 +61,20 @@ static int file_vioctl(FAR struct file *filep, int req, va_list ap)
       return -EBADF;
     }
 
+#ifdef CONFIG_FS_IOCTL_FILEPATH
+  /* A driver may return OK without filling the path buffer */
+
+  if (req == FIOC_FILEPATH && arg != 0)
+    {
+      *(FAR char *)(uintptr_t)arg = '\0';
+    }
+#else
+  if (req == FIOC_FILEPATH)
+    {
+      return -ENOTTY;
+    }
+#endif
+
   /* Does the driver support the ioctl method? */
 
   if (inode->u.i_ops != NULL && inode->u.i_ops->ioctl != NULL)
@@ -76,6 +90,7 @@ static int file_vioctl(FAR struct file *filep, int req, va_list ap)
         if (ret == OK || ret == -ENOTTY)
           {
             FAR int *nonblock = (FAR int *)(uintptr_t)arg;
+
             if (nonblock && *nonblock)
               {
                 filep->f_oflags |= O_NONBLOCK;
@@ -89,12 +104,14 @@ static int file_vioctl(FAR struct file *filep, int req, va_list ap)
           }
         break;
 
+#ifdef CONFIG_FS_IOCTL_FILEPATH
       case FIOC_FILEPATH:
         if (ret == -ENOTTY && !INODE_IS_MOUNTPT(inode))
           {
             ret = inode_getpath(inode, (FAR char *)(uintptr_t)arg, PATH_MAX);
           }
         break;
+#endif
 
       case FIOC_GETLK:
         if (ret == -ENOTTY)
@@ -125,6 +142,7 @@ static int file_vioctl(FAR struct file *filep, int req, va_list ap)
             inode->u.i_ops->ioctl != NULL)
           {
             struct geometry geo;
+
             ret = inode->u.i_ops->ioctl(filep, BIOC_GEOMETRY,
                                         (unsigned long)(uintptr_t)&geo);
             if (ret >= 0)
@@ -139,6 +157,7 @@ static int file_vioctl(FAR struct file *filep, int req, va_list ap)
             inode->u.i_ops->ioctl != NULL)
           {
             struct geometry geo;
+
             ret = inode->u.i_ops->ioctl(filep, BIOC_GEOMETRY,
                                         (unsigned long)(uintptr_t)&geo);
             if (ret >= 0)
@@ -162,7 +181,24 @@ static int nx_vioctl(int fd, int req, va_list ap)
 {
   FAR struct file *filep;
   FAR struct fd *fdp;
+  FAR int *nonblockp = NULL;
+  int nonblock;
   int ret;
+
+  /* FIONBIO passes a pointer to an int.  Read the int before file_get2(),
+   * so that a bad pointer faults with no file reference held, and give the
+   * driver a pointer to the copy.
+   */
+
+  if (req == FIONBIO)
+    {
+      nonblockp = va_arg(ap, FAR int *);
+      if (nonblockp != NULL)
+        {
+          nonblock  = *nonblockp;
+          nonblockp = &nonblock;
+        }
+    }
 
   ret = file_get2(fd, &filep, &fdp);
   if (ret < 0)
@@ -203,6 +239,10 @@ static int nx_vioctl(int fd, int req, va_list ap)
         *va_arg(ap, FAR uint8_t *) = fdp->f_tag_fdcheck;
         break;
 #endif
+
+      case FIONBIO:
+        ret = file_ioctl(filep, req, (unsigned long)(uintptr_t)nonblockp);
+        break;
 
       default:
         ret = file_vioctl(filep, req, ap);

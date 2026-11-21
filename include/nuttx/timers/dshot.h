@@ -30,6 +30,7 @@
  ****************************************************************************/
 
 #include <nuttx/config.h>
+#include <stdbool.h>
 #include <nuttx/compiler.h>
 #include <nuttx/fs/ioctl.h>
 
@@ -268,11 +269,8 @@ struct dshot_lowerhalf_s
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -304,7 +302,6 @@ extern "C"
 
 int dshot_register(FAR const char *path, FAR struct dshot_lowerhalf_s *dev);
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

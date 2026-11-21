@@ -34,6 +34,7 @@
 #include <nuttx/addrenv.h>
 #include <nuttx/board.h>
 
+#include <arch/barriers.h>
 #include <arch/board/board.h>
 
 #include <sched/sched.h>
@@ -44,7 +45,16 @@
  * Public Functions
  ****************************************************************************/
 
-IFX_INTERRUPT_INTERNAL(tricore_doirq, 0, 255)
+/****************************************************************************
+ * Name: tricore_doirq
+ *
+ * Description:
+ *   Common interrupt handler, entered from the interrupt vector in
+ *   tricore_vectors.S/.asm with the lower context saved.
+ *
+ ****************************************************************************/
+
+void tricore_doirq(void)
 {
   struct tcb_s **running_task = &g_running_tasks[this_cpu()];
   struct tcb_s *tcb = this_task();
@@ -52,11 +62,9 @@ IFX_INTERRUPT_INTERNAL(tricore_doirq, 0, 255)
 #ifdef CONFIG_SUPPRESS_INTERRUPTS
   PANIC();
 #else
-  Ifx_CPU_ICR icr;
-  uintptr_t *regs;
-
-  icr.U = __mfcr(CPU_ICR);
-  regs = tricore_csa2addr(__mfcr(CPU_PCXI));
+  int irq = NDX_TO_IRQ(tricore_mfcr(TRICORE_CPU_ICR) &
+                       TRICORE_ICR_CCPN_MASK);
+  uintptr_t *regs = tricore_csa2addr(tricore_mfcr(TRICORE_CPU_PCXI));
 
   if (*running_task != NULL)
     {
@@ -65,24 +73,20 @@ IFX_INTERRUPT_INTERNAL(tricore_doirq, 0, 255)
 
   board_autoled_on(LED_INIRQ);
 
-  /* Nested interrupts are not supported */
-
-  DEBUGASSERT(!up_interrupt_context());
-
-  /* Set irq flag */
-
-  up_set_interrupt_context(true);
-
   /* Deliver the IRQ */
 
-  tricore_ack_irq(NDX_TO_IRQ(icr.B.CCPN));
+  tricore_ack_irq(irq);
 
-  irq_dispatch(NDX_TO_IRQ(icr.B.CCPN), regs);
+  irq_dispatch(irq, regs);
 
   /* Check for a context switch. */
 
   if (*running_task != tcb)
     {
+      /* Update scheduler parameters */
+
+      nxsched_switch_context(*running_task, tcb);
+
 #ifdef CONFIG_ARCH_ADDRENV
       /* Make sure that the address environment for the previously
        * running task is closed down gracefully (data caches dump,
@@ -94,9 +98,10 @@ IFX_INTERRUPT_INTERNAL(tricore_doirq, 0, 255)
       tcb = this_task();
 #endif
 
-      /* Update scheduler parameters */
+      /* Updata PPRS register */
 
-      nxsched_switch_context(*running_task, tcb);
+      tricore_store_pprs(*running_task);
+      tricore_restore_pprs(tcb);
 
       /* Record the new "running" task when context switch occurred.
        * g_running_tasks[] is only used by assertion logic for reporting
@@ -105,19 +110,20 @@ IFX_INTERRUPT_INTERNAL(tricore_doirq, 0, 255)
 
       *running_task = tcb;
 
-      __mtcr(CPU_PCXI, tricore_addr2csa(tcb->xcp.regs));
-      __isync();
+      tricore_mtcr(TRICORE_CPU_PCXI, tricore_addr2csa(tcb->xcp.regs));
+      UP_ISB();
     }
 
-  /* Set irq flag */
-
-  up_set_interrupt_context(false);
-
-  /* running_task->xcp.regs is about to become invalid
-   * and will be marked as NULL to avoid misusage.
+  /* (*running_task)->xcp.regs is about to become invalid and
+   * will be marked as NULL to avoid misusage. the same applies
+   * to (*running_task)->xcp.pprs.
    */
 
   (*running_task)->xcp.regs = NULL;
+  tricore_change_pprs(*running_task, UINT32_MAX);
+
   board_autoled_off(LED_INIRQ);
 #endif
+
+  tricore_jump_backto_link();
 }

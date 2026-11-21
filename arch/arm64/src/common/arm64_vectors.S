@@ -39,6 +39,10 @@
 
     .file    "arm64_vectors.S"
 
+/* Emit CFI to .debug_frame for exception unwinding */
+
+    .cfi_sections .debug_frame
+
 /****************************************************************************
  * Public Functions
  ****************************************************************************/
@@ -89,6 +93,9 @@ SECTION_FUNC(text, up_saveusercontext)
     str    x4,  [x0, #8 * REG_SCTLR_EL1]
 #endif
 
+    mrs    x4,  tpidr_el0
+    str    x4,  [x0, #8 * REG_TPIDR_EL0]
+
     ret
 
 /****************************************************************************
@@ -117,15 +124,29 @@ SECTION_FUNC(text, arm64_jump_to_user)
     str x2,  [sp, #8 * REG_X1]
     str x3,  [sp, #8 * REG_X2]
     str x4,  [sp, #8 * REG_SP_EL0]
-    mrs x0,  spsr_el1
-    and x0,  x0, #~SPSR_MODE_MASK
-    #orr x0, x0, #SPSR_MODE_EL0T # EL0T=0x00, out of range for orr
+
+    /* EL0 with IRQs enabled.  Do not copy SPSR_EL1: it holds the state of
+     * the last exception on this CPU, which can have IRQs masked.
+     */
+
+#ifdef CONFIG_ARCH_HIPRI_INTERRUPT
+    mov x0,  #SPSR_MODE_EL0T
+#else
+    mov x0,  #(SPSR_MODE_EL0T | (1 << SPSR_DAIF_SHIFT)) /* FIQ masked */
+#endif
     str x0,  [sp, #8 * REG_SPSR]
 
 #ifdef CONFIG_ARM64_MTE
     mrs x0,  sctlr_el1
     str x0,  [sp, #8 * REG_SCTLR_EL1]
 #endif
+
+    /* The thread has used this area as stack since its initial context
+     * was set: keep its TLS info address.
+     */
+
+    mrs x0,  tpidr_el0
+    str x0,  [sp, #8 * REG_TPIDR_EL0]
 
     b arm64_exit_exception
 #endif
@@ -140,6 +161,48 @@ SECTION_FUNC(text, arm64_jump_to_user)
 
 GTEXT(arm64_sync_exc)
 SECTION_FUNC(text, arm64_sync_exc)
+    .cfi_startproc simple
+    .cfi_signal_frame
+    .cfi_def_cfa sp, 8 * XCPTCONTEXT_REGS
+    .cfi_offset x0, 8 * REG_X0 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x1, 8 * REG_X1 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x2, 8 * REG_X2 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x3, 8 * REG_X3 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x4, 8 * REG_X4 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x5, 8 * REG_X5 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x6, 8 * REG_X6 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x7, 8 * REG_X7 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x8, 8 * REG_X8 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x9, 8 * REG_X9 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x10, 8 * REG_X10 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x11, 8 * REG_X11 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x12, 8 * REG_X12 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x13, 8 * REG_X13 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x14, 8 * REG_X14 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x15, 8 * REG_X15 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x16, 8 * REG_X16 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x17, 8 * REG_X17 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x18, 8 * REG_X18 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x19, 8 * REG_X19 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x20, 8 * REG_X20 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x21, 8 * REG_X21 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x22, 8 * REG_X22 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x23, 8 * REG_X23 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x24, 8 * REG_X24 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x25, 8 * REG_X25 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x26, 8 * REG_X26 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x27, 8 * REG_X27 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x28, 8 * REG_X28 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x29, 8 * REG_X29 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x30, 8 * REG_X30 - 8 * XCPTCONTEXT_REGS
+    .cfi_return_column 32
+    .cfi_offset 32, 8 * REG_ELR - 8 * XCPTCONTEXT_REGS
+
+    /* Save TPIDR_EL0 here: the vector table entries have no room left */
+
+    mrs    x9,  tpidr_el0
+    str    x9,  [sp, #8 * REG_TPIDR_EL0]
+
     /* checking the EC value to see which exception need to be handle */
 
 #if CONFIG_ARCH_ARM64_EXCEPTION_LEVEL == 3
@@ -203,20 +266,27 @@ reserved_syscall:
     ldr    x1, =(g_interrupt_stack + CONFIG_ARCH_INTERRUPTSTACK)
 #endif
 
-    mov    x0, sp
+    mov    x19, sp              /* Save sp for unwind */
+    .cfi_def_cfa_register x19
     mov    sp, x1
 
+    mov    x0, x19
     bl     arm64_syscall        /* Call the handler */
 
     mov    sp, x0
+    .cfi_def_cfa_register sp
     b      arm64_exit_exception
 2:
-    mov    x0, sp
+    mov    x19, sp               /* Save sp for unwind */
+    .cfi_def_cfa_register x19
     adrp   x5, arm64_fatal_handler
     add    x5, x5, #:lo12:arm64_fatal_handler
+    mov    x0, x19
     blr    x5
     mov    sp, x0
+    .cfi_def_cfa_register sp
     b      arm64_exit_exception
+    .cfi_endproc
 
 /****************************************************************************
  * Name: arm64_irq_handler
@@ -228,6 +298,48 @@ reserved_syscall:
 
 GTEXT(arm64_irq_handler)
 SECTION_FUNC(text, arm64_irq_handler)
+    .cfi_startproc simple
+    .cfi_signal_frame
+    .cfi_def_cfa sp, 8 * XCPTCONTEXT_REGS
+    .cfi_offset x0, 8 * REG_X0 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x1, 8 * REG_X1 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x2, 8 * REG_X2 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x3, 8 * REG_X3 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x4, 8 * REG_X4 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x5, 8 * REG_X5 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x6, 8 * REG_X6 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x7, 8 * REG_X7 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x8, 8 * REG_X8 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x9, 8 * REG_X9 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x10, 8 * REG_X10 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x11, 8 * REG_X11 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x12, 8 * REG_X12 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x13, 8 * REG_X13 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x14, 8 * REG_X14 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x15, 8 * REG_X15 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x16, 8 * REG_X16 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x17, 8 * REG_X17 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x18, 8 * REG_X18 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x19, 8 * REG_X19 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x20, 8 * REG_X20 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x21, 8 * REG_X21 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x22, 8 * REG_X22 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x23, 8 * REG_X23 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x24, 8 * REG_X24 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x25, 8 * REG_X25 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x26, 8 * REG_X26 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x27, 8 * REG_X27 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x28, 8 * REG_X28 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x29, 8 * REG_X29 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x30, 8 * REG_X30 - 8 * XCPTCONTEXT_REGS
+    .cfi_return_column 32
+    .cfi_offset 32, 8 * REG_ELR - 8 * XCPTCONTEXT_REGS
+
+    /* Save TPIDR_EL0 here: the vector table entries have no room left */
+
+    mrs    x9,  tpidr_el0
+    str    x9,  [sp, #8 * REG_TPIDR_EL0]
+
     /* Switch to IRQ stack and save current sp on it. */
 #ifdef CONFIG_SMP
     get_cpu_id x0
@@ -238,17 +350,21 @@ SECTION_FUNC(text, arm64_irq_handler)
     ldr    x1, =(g_interrupt_stack + CONFIG_ARCH_INTERRUPTSTACK)
 #endif
 
-    mov    x0, sp
+    mov    x19, sp
+    .cfi_def_cfa_register x19
     mov    sp, x1
 
     /* Call arm64_decodeirq() on the interrupt stack
      * with interrupts disabled
      */
 
+    mov    x0, x19
     bl     arm64_decodeirq
 
     mov    sp, x0
+    .cfi_def_cfa_register sp
     b      arm64_exit_exception
+    .cfi_endproc
 
 /****************************************************************************
  * Name: arm64_serror_handler
@@ -260,6 +376,43 @@ SECTION_FUNC(text, arm64_irq_handler)
 
 GTEXT(arm64_serror_handler)
 SECTION_FUNC(text, arm64_serror_handler)
+    .cfi_startproc simple
+    .cfi_signal_frame
+    .cfi_def_cfa sp, 8 * XCPTCONTEXT_REGS
+    .cfi_offset x0, 8 * REG_X0 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x1, 8 * REG_X1 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x2, 8 * REG_X2 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x3, 8 * REG_X3 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x4, 8 * REG_X4 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x5, 8 * REG_X5 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x6, 8 * REG_X6 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x7, 8 * REG_X7 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x8, 8 * REG_X8 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x9, 8 * REG_X9 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x10, 8 * REG_X10 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x11, 8 * REG_X11 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x12, 8 * REG_X12 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x13, 8 * REG_X13 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x14, 8 * REG_X14 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x15, 8 * REG_X15 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x16, 8 * REG_X16 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x17, 8 * REG_X17 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x18, 8 * REG_X18 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x19, 8 * REG_X19 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x20, 8 * REG_X20 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x21, 8 * REG_X21 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x22, 8 * REG_X22 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x23, 8 * REG_X23 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x24, 8 * REG_X24 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x25, 8 * REG_X25 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x26, 8 * REG_X26 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x27, 8 * REG_X27 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x28, 8 * REG_X28 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x29, 8 * REG_X29 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x30, 8 * REG_X30 - 8 * XCPTCONTEXT_REGS
+    .cfi_return_column 32
+    .cfi_offset 32, 8 * REG_ELR - 8 * XCPTCONTEXT_REGS
+
     mov    x0, sp
     adrp   x5, arm64_fatal_handler
     add    x5, x5, #:lo12:arm64_fatal_handler
@@ -267,6 +420,7 @@ SECTION_FUNC(text, arm64_serror_handler)
     /* Return here only in case of recoverable error */
 
     b      arm64_exit_exception
+    .cfi_endproc
 
 /****************************************************************************
  * Name: arm64_mode32_handler
@@ -278,6 +432,43 @@ SECTION_FUNC(text, arm64_serror_handler)
 
 GTEXT(arm64_mode32_handler)
 SECTION_FUNC(text, arm64_mode32_handler)
+    .cfi_startproc simple
+    .cfi_signal_frame
+    .cfi_def_cfa sp, 8 * XCPTCONTEXT_REGS
+    .cfi_offset x0, 8 * REG_X0 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x1, 8 * REG_X1 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x2, 8 * REG_X2 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x3, 8 * REG_X3 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x4, 8 * REG_X4 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x5, 8 * REG_X5 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x6, 8 * REG_X6 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x7, 8 * REG_X7 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x8, 8 * REG_X8 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x9, 8 * REG_X9 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x10, 8 * REG_X10 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x11, 8 * REG_X11 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x12, 8 * REG_X12 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x13, 8 * REG_X13 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x14, 8 * REG_X14 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x15, 8 * REG_X15 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x16, 8 * REG_X16 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x17, 8 * REG_X17 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x18, 8 * REG_X18 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x19, 8 * REG_X19 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x20, 8 * REG_X20 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x21, 8 * REG_X21 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x22, 8 * REG_X22 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x23, 8 * REG_X23 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x24, 8 * REG_X24 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x25, 8 * REG_X25 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x26, 8 * REG_X26 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x27, 8 * REG_X27 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x28, 8 * REG_X28 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x29, 8 * REG_X29 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x30, 8 * REG_X30 - 8 * XCPTCONTEXT_REGS
+    .cfi_return_column 32
+    .cfi_offset 32, 8 * REG_ELR - 8 * XCPTCONTEXT_REGS
+
     mov    x0, sp
     adrp   x5, arm64_fatal_handler
     add    x5, x5, #:lo12:arm64_fatal_handler
@@ -285,6 +476,7 @@ SECTION_FUNC(text, arm64_mode32_handler)
     /* Return here only in case of recoverable error */
 
     b      arm64_exit_exception
+    .cfi_endproc
 
 /****************************************************************************
  * Name: arm64_fiq_handler
@@ -296,7 +488,44 @@ SECTION_FUNC(text, arm64_mode32_handler)
 
 GTEXT(arm64_fiq_handler)
 SECTION_FUNC(text, arm64_fiq_handler)
-#ifndef CONFIG_ARM64_DECODEFIQ
+    .cfi_startproc simple
+    .cfi_signal_frame
+    .cfi_def_cfa sp, 8 * XCPTCONTEXT_REGS
+    .cfi_offset x0, 8 * REG_X0 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x1, 8 * REG_X1 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x2, 8 * REG_X2 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x3, 8 * REG_X3 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x4, 8 * REG_X4 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x5, 8 * REG_X5 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x6, 8 * REG_X6 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x7, 8 * REG_X7 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x8, 8 * REG_X8 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x9, 8 * REG_X9 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x10, 8 * REG_X10 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x11, 8 * REG_X11 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x12, 8 * REG_X12 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x13, 8 * REG_X13 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x14, 8 * REG_X14 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x15, 8 * REG_X15 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x16, 8 * REG_X16 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x17, 8 * REG_X17 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x18, 8 * REG_X18 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x19, 8 * REG_X19 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x20, 8 * REG_X20 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x21, 8 * REG_X21 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x22, 8 * REG_X22 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x23, 8 * REG_X23 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x24, 8 * REG_X24 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x25, 8 * REG_X25 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x26, 8 * REG_X26 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x27, 8 * REG_X27 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x28, 8 * REG_X28 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x29, 8 * REG_X29 - 8 * XCPTCONTEXT_REGS
+    .cfi_offset x30, 8 * REG_X30 - 8 * XCPTCONTEXT_REGS
+    .cfi_return_column 32
+    .cfi_offset 32, 8 * REG_ELR - 8 * XCPTCONTEXT_REGS
+
+#ifndef CONFIG_ARCH_HIPRI_INTERRUPT
 
     mov    x0, sp
     adrp   x5, arm64_fatal_handler
@@ -306,7 +535,13 @@ SECTION_FUNC(text, arm64_fiq_handler)
     /* Return here only in case of recoverable error */
 
     b      arm64_exit_exception
+    .cfi_endproc
 #else
+    /* Save TPIDR_EL0 here: the vector table entries have no room left */
+
+    mrs    x9,  tpidr_el0
+    str    x9,  [sp, #8 * REG_TPIDR_EL0]
+
    /* Switch to FIQ stack and save current sp on it. */
 #ifdef CONFIG_SMP
     get_cpu_id x0
@@ -317,15 +552,19 @@ SECTION_FUNC(text, arm64_fiq_handler)
     ldr    x1, =(g_interrupt_fiq_stack + CONFIG_ARCH_INTERRUPTSTACK)
 #endif
 
-    mov    x0, sp
+    mov    x19, sp
+    .cfi_def_cfa_register x19
     mov    sp, x1
 
     /* Call arm64_decodeirq() on the interrupt stack
      * with interrupts disabled
      */
 
+    mov    x0, x19
     bl     arm64_decodefiq
 
     mov    sp, x0
+    .cfi_def_cfa_register sp
     b      arm64_exit_exception
+    .cfi_endproc
 #endif

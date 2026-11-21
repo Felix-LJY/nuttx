@@ -58,9 +58,9 @@
  */
 
 #define tcp_callback_alloc(conn) \
-  devif_callback_alloc((conn)->dev, &(conn)->sconn.list, &(conn)->sconn.list_tail)
+  devif_callback_alloc((conn)->dev, &(conn)->sconn.s_list, &(conn)->sconn.s_listtail)
 #define tcp_callback_free(conn,cb) \
-  devif_conn_callback_free((conn)->dev, (cb), &(conn)->sconn.list, &(conn)->sconn.list_tail)
+  devif_conn_callback_free((conn)->dev, (cb), &(conn)->sconn.s_list, &(conn)->sconn.s_listtail)
 
 #ifdef CONFIG_NET_TCP_WRITE_BUFFERS
 /* TCP write buffer access macros */
@@ -100,6 +100,16 @@
 #define TCP_SEQ_ADD(a, b)   ((uint32_t)((a) + (b)))
 #define TCP_SEQ_SUB(a, b)   ((uint32_t)((a) - (b)))
 
+/* The error of a send on a TCP socket that is not connected: -ECONNRESET
+ * if the peer reset the connection and this is not yet reported, -EPIPE if
+ * the connection was closed (POSIX: the socket is no longer connected),
+ * else -ENOTCONN.
+ */
+
+#define TCP_NOTCONN_ERROR(conn) \
+  (tcp_reset_pending(conn) ? -ECONNRESET : \
+   _SS_ISCLOSED((conn)->sconn.s_flags) ? -EPIPE : -ENOTCONN)
+
 /* The TCP options flags */
 
 #define TCP_WSCALE            0x01U /* Window Scale option enabled */
@@ -113,6 +123,9 @@
 #define TCP_INFT              0x10U /* The flag in Fast Transmitted */
 
 #endif
+
+#define TCP_RESET             0x20U /* The peer reset the connection */
+#define TCP_RESETERR          0x40U /* ECONNRESET of it not yet reported */
 
 /* The Max Range count of TCP Selective ACKs */
 
@@ -134,7 +147,7 @@
 struct file;      /* Forward reference */
 struct sockaddr;  /* Forward reference */
 struct socket;    /* Forward reference */
-struct pollfd;    /* Forward reference */
+struct pollfd_s;  /* Forward reference */
 
 /* Representation of a TCP connection.
  *
@@ -155,7 +168,7 @@ struct tcp_hdr_s;         /* Forward reference */
 struct tcp_poll_s
 {
   FAR struct tcp_conn_s *conn;     /* Needed to handle loss of connection */
-  FAR struct pollfd *fds;          /* Needed to handle poll events */
+  FAR struct pollfd_s *fds;        /* Needed to handle poll events */
   FAR struct devif_callback_s *cb; /* Needed to teardown the poll */
 };
 
@@ -699,6 +712,19 @@ int tcp_connect(FAR struct tcp_conn_s *conn,
                 FAR const struct sockaddr *addr);
 
 /****************************************************************************
+ * Name: tcp_add_active_conn
+ *
+ * Description:
+ *   Add the connection to the list of active TCP connections
+ *
+ * Assumptions:
+ *   This function is called from normal user level code.
+ *
+ ****************************************************************************/
+
+void tcp_add_active_conn(FAR struct tcp_conn_s *conn);
+
+/****************************************************************************
  * Name: tcp_removeconn
  *
  * Description:
@@ -833,6 +859,42 @@ void tcp_stop_monitor(FAR struct tcp_conn_s *conn, uint32_t flags);
 
 void tcp_lost_connection(FAR struct tcp_conn_s *conn,
                          FAR struct devif_callback_s *cb, uint32_t flags);
+
+/****************************************************************************
+ * Name: tcp_reset_pending
+ *
+ * Description:
+ *   Tell if the ECONNRESET of a reset of the peer is not yet reported (by a
+ *   receive, a send or getsockopt(SO_ERROR)).
+ *
+ * Input Parameters:
+ *   conn - The TCP connection
+ *
+ * Returned Value:
+ *   true if a receive or send must give ECONNRESET.
+ *
+ ****************************************************************************/
+
+bool tcp_reset_pending(FAR struct tcp_conn_s *conn);
+
+/****************************************************************************
+ * Name: tcp_reset_report
+ *
+ * Description:
+ *   Give the result of a receive or send that returns now.  If it is
+ *   -ECONNRESET, the reset is reported: the next receive gives end-of-file,
+ *   the next send EPIPE and SO_ERROR 0.
+ *
+ * Input Parameters:
+ *   conn - The TCP connection
+ *   ret  - The result that the receive or send returns
+ *
+ * Returned Value:
+ *   ret
+ *
+ ****************************************************************************/
+
+ssize_t tcp_reset_report(FAR struct tcp_conn_s *conn, ssize_t ret);
 
 /****************************************************************************
  * Name: tcp_close
@@ -1088,7 +1150,7 @@ void tcp_update_keeptimer(FAR struct tcp_conn_s *conn, int timeout);
  *   None
  *
  * Assumptions:
- *   conn is not NULL.
+ *   conn is not NULL and is not in the active connection list.
  *
  ****************************************************************************/
 
@@ -1141,24 +1203,6 @@ int tcp_unlisten(FAR struct tcp_conn_s *conn);
 int tcp_listen(FAR struct tcp_conn_s *conn);
 
 /****************************************************************************
- * Name: tcp_islistener
- *
- * Description:
- *   Return true is there is a listener for the specified port
- *
- * Assumptions:
- *   Called from network stack logic with the network stack locked
- *
- ****************************************************************************/
-
-#if defined(CONFIG_NET_IPv4) && defined(CONFIG_NET_IPv6)
-bool tcp_islistener(FAR union ip_binding_u *uaddr, uint16_t portno,
-                    uint8_t domain);
-#else
-bool tcp_islistener(FAR union ip_binding_u *uaddr, uint16_t portno);
-#endif
-
-/****************************************************************************
  * Name: tcp_accept_connection
  *
  * Description:
@@ -1171,6 +1215,34 @@ bool tcp_islistener(FAR union ip_binding_u *uaddr, uint16_t portno);
 
 int tcp_accept_connection(FAR struct net_driver_s *dev,
                           FAR struct tcp_conn_s *conn, uint16_t portno);
+
+/****************************************************************************
+ * Name: tcp_fill_header
+ *
+ * Description:
+ *   Fill in the sequence and acknowledgment numbers, the ports, the receive
+ *   window and the urgent pointer of an outgoing TCP header, and start the
+ *   retransmission timer if there is unacknowledged data and the segment
+ *   takes sequence space.
+ *
+ * Input Parameters:
+ *   dev   - The device driver structure to use in the send operation
+ *   conn  - The TCP connection structure holding connection information
+ *   tcp   - The TCP header to fill in
+ *   timer - True if the segment carries data, SYN or FIN.  A segment
+ *           without them (an ACK) does not restart the timer.
+ *
+ * Returned Value:
+ *   None
+ *
+ * Assumptions:
+ *   Called with the network locked.
+ *
+ ****************************************************************************/
+
+void tcp_fill_header(FAR struct net_driver_s *dev,
+                     FAR struct tcp_conn_s *conn,
+                     FAR struct tcp_hdr_s *tcp, bool timer);
 
 /****************************************************************************
  * Name: tcp_send
@@ -1827,10 +1899,11 @@ struct tcp_wrbuffer_s;
  *   Allocate a TCP write buffer by taking a pre-allocated buffer from
  *   the free list.  This function is called from TCP logic when a buffer
  *   of TCP data is about to sent
- *   This function is wrapped version of tcp_wrbuffer_alloc(),
  *   this wait will be terminated when the specified timeout expires.
  *
  * Input Parameters:
+ *   sconn     - The socket connection structure.
+ *   dev       - The network device structure.
  *   timeout   - The relative time to wait until a timeout is declared.
  *
  * Assumptions:
@@ -1838,25 +1911,9 @@ struct tcp_wrbuffer_s;
  *
  ****************************************************************************/
 
-FAR struct tcp_wrbuffer_s *tcp_wrbuffer_timedalloc(unsigned int timeout);
-
-/****************************************************************************
- * Name: tcp_wrbuffer_alloc
- *
- * Description:
- *   Allocate a TCP write buffer by taking a pre-allocated buffer from
- *   the free list.  This function is called from TCP logic when a buffer
- *   of TCP data is about to sent
- *
- * Input Parameters:
- *   None
- *
- * Assumptions:
- *   Called from user logic with the network locked.
- *
- ****************************************************************************/
-
-FAR struct tcp_wrbuffer_s *tcp_wrbuffer_alloc(void);
+FAR struct tcp_wrbuffer_s *
+tcp_wrbuffer_timedalloc(FAR struct socket_conn_s *sconn,
+                        FAR struct net_driver_s *dev, unsigned int timeout);
 
 /****************************************************************************
  * Name: tcp_wrbuffer_tryalloc
@@ -1976,7 +2033,7 @@ void tcp_wrbuffer_dump(FAR const char *msg, FAR struct tcp_wrbuffer_s *wrb,
  *
  ****************************************************************************/
 
-int tcp_pollsetup(FAR struct socket *psock, FAR struct pollfd *fds);
+int tcp_pollsetup(FAR struct socket *psock, FAR struct pollfd_s *fds);
 
 /****************************************************************************
  * Name: tcp_pollteardown
@@ -1994,7 +2051,7 @@ int tcp_pollsetup(FAR struct socket *psock, FAR struct pollfd *fds);
  *
  ****************************************************************************/
 
-int tcp_pollteardown(FAR struct socket *psock, FAR struct pollfd *fds);
+int tcp_pollteardown(FAR struct socket *psock, FAR struct pollfd_s *fds);
 
 /****************************************************************************
  * Name: tcp_readahead_notifier_setup
@@ -2344,8 +2401,9 @@ void tcp_cc_update(FAR struct tcp_conn_s *conn, FAR struct tcp_hdr_s *tcp);
  *   Update congestion control variables
  *
  * Input Parameters:
- *   conn   - The TCP connection of interest
- *   tcp    - The TCP header.
+ *   conn    - The TCP connection of interest
+ *   tcp     - The TCP header.
+ *   datalen - The number of data bytes in the segment
  *
  * Returned Value:
  *   None
@@ -2355,7 +2413,8 @@ void tcp_cc_update(FAR struct tcp_conn_s *conn, FAR struct tcp_hdr_s *tcp);
  *
  ****************************************************************************/
 
-void tcp_cc_recv_ack(FAR struct tcp_conn_s *conn, FAR struct tcp_hdr_s *tcp);
+void tcp_cc_recv_ack(FAR struct tcp_conn_s *conn, FAR struct tcp_hdr_s *tcp,
+                     uint16_t datalen);
 #endif
 
 #ifdef __cplusplus

@@ -1,6 +1,8 @@
 /****************************************************************************
  * boards/arm/rp23xx/common/src/rp23xx_spisd.c
  *
+ * SPDX-License-Identifier: Apache-2.0
+ *
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.  The
@@ -23,6 +25,8 @@
  ****************************************************************************/
 
 #include <nuttx/config.h>
+
+#include <errno.h>
 
 #include <nuttx/debug.h>
 #include <nuttx/mmcsd.h>
@@ -99,9 +103,17 @@ int board_spisd_initialize(int minor, int bus)
   /* Mount filesystem */
 
   ret = nx_mount("/dev/mmcsd0", "/mnt/sd0", "vfat", 0, NULL);
-  if (ret < 0)
+  if (ret == -EINVAL || ret == -ENODEV)
     {
-      _err("ERROR: Failed to mount the SDCARD. %d\n", ret);
+      /* No card, or no filesystem on it.  Not an error: the block device
+       * is registered and the card can be formatted with mkfatfs.
+       */
+
+      finfo("No filesystem on /dev/mmcsd0 (no card, or unformatted)\n");
+    }
+  else if (ret < 0)
+    {
+      ferr("ERROR: Failed to mount the SDCARD. %d\n", ret);
     }
 
   return OK;

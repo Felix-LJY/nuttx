@@ -57,8 +57,7 @@
  *
  * Returned Value:
  *   This is an internal OS interface and should not be used by applications.
- *   It follows the NuttX internal error return policy:  Zero (OK) is
- *   returned on success.  A negated errno value is returned on failure.
+ *   Zero (OK) is always returned.
  *
  ****************************************************************************/
 
@@ -82,7 +81,7 @@ int nxsem_init(FAR sem_t *sem, int pshared, int32_t value)
 
   /* Initialize to support priority inheritance */
 
-  sem->flags = 0;
+  sem->flags = SEM_PRIO_NONE;
 
 #ifdef CONFIG_PRIORITY_INHERITANCE
 #  if CONFIG_SEM_PREALLOCHOLDERS > 0
@@ -120,8 +119,6 @@ int nxsem_init(FAR sem_t *sem, int pshared, int32_t value)
 
 int sem_init(FAR sem_t *sem, int pshared, unsigned int value)
 {
-  int ret;
-
   /* Verify that a semaphore was provided and the count is within the valid
    * range.
    */
@@ -132,12 +129,6 @@ int sem_init(FAR sem_t *sem, int pshared, unsigned int value)
       return ERROR;
     }
 
-  ret = nxsem_init(sem, pshared, value);
-  if (ret < 0)
-    {
-      set_errno(-ret);
-      ret = ERROR;
-    }
-
-  return ret;
+  nxsem_init(sem, pshared, value);
+  return OK;
 }

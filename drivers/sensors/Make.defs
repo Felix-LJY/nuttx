@@ -180,6 +180,10 @@ ifeq ($(CONFIG_SENSORS_MSA301),y)
   CSRCS += msa301.c
 endif
 
+ifeq ($(CONFIG_SENSORS_LPS22HB),y)
+  CSRCS += lps22hb_uorb.c
+endif
+
 ifeq ($(CONFIG_SENSORS_LPS25H),y)
   CSRCS += lps25h.c
 endif
@@ -195,6 +199,10 @@ ifeq ($(CONFIG_SENSORS_BH1749NUC_UORB),y)
 else
   CSRCS += bh1749nuc.c
 endif
+endif
+
+ifeq ($(CONFIG_SENSORS_BH1745NUC),y)
+  CSRCS += bh1745nuc_uorb.c
 endif
 
 ifeq ($(CONFIG_SENSORS_BH1750FVI),y)
@@ -226,12 +234,16 @@ ifeq ($(CONFIG_SENSORS_BME688),y)
   CSRCS += bme688_uorb.c
 endif
 
+ifeq ($(CONFIG_SENSORS_CCS811),y)
+  CSRCS += ccs811_uorb.c
+endif
+
 ifeq ($(CONFIG_SENSORS_ISL29023),y)
   CSRCS += isl29023.c
 endif
 
 ifeq ($(CONFIG_SENSORS_HTS221),y)
-  CSRCS += hts221.c
+  CSRCS += hts221_uorb.c
 endif
 
 ifeq ($(CONFIG_SENSORS_LIS2MDL),y)
@@ -287,7 +299,11 @@ ifeq ($(CONFIG_SENSORS_INA219),y)
 endif
 
 ifeq ($(CONFIG_SENSORS_INA226),y)
+ifeq ($(CONFIG_SENSORS_INA226_UORB),y)
+  CSRCS += ina226_uorb.c
+else
   CSRCS += ina226.c
+endif
 endif
 
 ifeq ($(CONFIG_SENSORS_INA3221),y)
@@ -354,6 +370,10 @@ else
 endif
 endif
 
+ifeq ($(CONFIG_SENSORS_TC74),y)
+  CSRCS += tc74.c
+endif
+
 endif # CONFIG_I2C
 
 # These drivers depend on SPI support
@@ -366,6 +386,10 @@ endif
 
 ifeq ($(CONFIG_SENSORS_ADXL362),y)
   CSRCS += adxl362_uorb.c
+endif
+
+ifeq ($(CONFIG_SENSORS_ADXL367),y)
+  CSRCS += adxl367.c
 endif
 
 ifeq ($(CONFIG_SENSORS_ADXL372),y)
@@ -422,6 +446,10 @@ endif
 
 ifeq ($(CONFIG_SENSORS_AS5048A),y)
   CSRCS += as5048a.c
+endif
+
+ifeq ($(CONFIG_SENSORS_SCL3300),y)
+  CSRCS += scl3300_uorb.c
 endif
 
 endif # CONFIG_SPI
@@ -506,6 +534,10 @@ endif
 
 ifeq ($(CONFIG_SENSORS_CXD5602PWBIMU),y)
   CSRCS += cxd5602pwbimu.c
+endif
+
+ifeq ($(CONFIG_SENSORS_SHTC3),y)
+  CSRCS += shtc3_uorb.c
 endif
 
 # Include sensor driver build support

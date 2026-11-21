@@ -57,6 +57,9 @@ struct sigpool_s
 
 #if defined(CONFIG_ENABLE_ALL_SIGNALS) && CONFIG_SIG_PREALLOC_ACTIONS > 0
 sigactq_t  g_sigactions[CONFIG_SIG_PREALLOC_ACTIONS];
+#endif
+
+#ifdef CONFIG_ENABLE_ALL_SIGNALS
 
 /* The g_sigfreeaction data structure is a list of available signal
  * action structures.
@@ -89,6 +92,8 @@ sq_queue_t  g_sigpendingsignal;
  */
 
 sq_queue_t  g_sigpendingirqsignal;
+
+spinlock_t g_sigspinlock = SP_UNLOCKED;
 
 /****************************************************************************
  * Private Data

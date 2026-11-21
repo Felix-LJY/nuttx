@@ -55,7 +55,38 @@
 #endif /* CONFIG_ARCH_ADDRENV */
 
 #define UP_WFE() __asm__ __volatile__ ("wfe" : : : "memory")
-#define UP_SEV() __asm__ __volatile__ ("sev" : : : "memory")
+
+/* Relax hint for spin waiting: YIELD reduces pipeline contention while
+ * polling the lock.  It does not sleep and needs no wake event.
+ */
+
+#define UP_RELAX() __asm__ __volatile__ ("yield")
+
+/* SEV is not a memory access and is not subject to memory ordering,
+ * so a waiter may observe the event before the lock release store
+ * becomes visible, re-read the stale lock and sleep again with the
+ * event already consumed (missed wakeup).  DSB makes the store visible
+ * before SEV.  A waiter sleeping with an exclusive monitor armed is an
+ * exception: it wakes on the monitor clear from the store itself, so it
+ * needs neither SEV nor DSB.  From ARM Reference Manual DDI 0406C,
+ * "Use of WFE and SEV with Locks".
+ */
+
+#define UP_SEV()                          \
+  do                                      \
+    {                                     \
+      UP_DSB();                           \
+      __asm__ __volatile__ ("sev" : : : "memory"); \
+    }                                     \
+  while (0)
+
+/* The kernel keeps the address of the running thread's TLS info in
+ * TPIDR_EL0, so user code finds it whatever stack it runs on.
+ */
+
+#if !defined(__ASSEMBLY__) && !defined(__KERNEL__)
+#  define up_tls_info() ((struct tls_info_s *)read_sysreg(tpidr_el0))
+#endif
 
 /****************************************************************************
  * Inline functions
@@ -82,6 +113,7 @@
  *   which gives access to 2MB of memory. This is plenty for many tasks.
  */
 
+#ifdef CONFIG_ARCH_USE_MMU
 struct arch_addrenv_s
 {
   /* Physical addresses of the static page tables (levels N-1) here, these
@@ -102,6 +134,22 @@ struct arch_addrenv_s
   uintptr_t ttbr0;
 };
 
+#elif defined(CONFIG_ARCH_USE_MPU)
+struct arch_addrenv_s
+{
+  uintptr_t text;
+  size_t textsize;
+  uintptr_t data;
+  size_t datasize;
+  uintptr_t heap;
+  size_t heapsize;
+#  ifdef CONFIG_ARCH_VMA_MAPPING
+  uintptr_t shm;
+  size_t shmsize;
+#  endif
+};
+#endif
+
 typedef struct arch_addrenv_s arch_addrenv_t;
 
 #endif /* __ASSEMBLY__ */
@@ -116,14 +164,10 @@ typedef struct arch_addrenv_s arch_addrenv_t;
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

@@ -50,13 +50,15 @@ include bluetooth/Make.defs
 include ieee802154/Make.defs
 include devif/Make.defs
 include ipfilter/Make.defs
-include ipforward/Make.defs
+include netforward/Make.defs
 include nat/Make.defs
 include netfilter/Make.defs
+include netpoll/Make.defs
 include route/Make.defs
 include procfs/Make.defs
 include usrsock/Make.defs
 include utils/Make.defs
+include vsock/Make.defs
 endif
 
 CFLAGS += ${INCDIR_PREFIX}$(TOPDIR)$(DELIM)net

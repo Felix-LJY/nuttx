@@ -238,6 +238,7 @@ static int ajoy_sample(const struct ajoy_lowerhalf_s *lower,
       if ((have & 1) == 0 && ptr->am_channel == 0)
         {
           int32_t tmp = ptr->am_data;
+
           sample->as_x = (int16_t)tmp;
           have |= 1;
 
@@ -248,6 +249,7 @@ static int ajoy_sample(const struct ajoy_lowerhalf_s *lower,
       if ((have & 2) == 0 && ptr->am_channel == 1)
         {
           int32_t tmp = ptr->am_data;
+
           sample->as_y = (int16_t)tmp;
           have |= 2;
 
@@ -392,13 +394,13 @@ static void ajoy_disable(void)
 
   /* Disable each joystick interrupt */
 
-  flags = up_irq_save();
+  flags = irq_save();
   for (i = 0; i < AJOY_NGPIOS; i++)
     {
       stm32_gpiosetevent(g_joygpio[i], false, false, false, NULL, NULL);
     }
 
-  up_irq_restore(flags);
+  irq_restore(flags);
 
   /* Nullify the handler and argument */
 

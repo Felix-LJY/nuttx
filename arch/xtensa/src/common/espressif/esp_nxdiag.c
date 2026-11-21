@@ -1,9 +1,11 @@
 /****************************************************************************
  * arch/xtensa/src/common/espressif/esp_nxdiag.c
  *
+ * SPDX-License-Identifier: Apache-2.0
+ *
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
- * this args for additional information regarding copyright ownership.  The
+ * this work for additional information regarding copyright ownership.  The
  * ASF licenses this file to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance with the
  * License.  You may obtain a copy of the License at
@@ -24,6 +26,7 @@
 
 #include <stdio.h>
 #include <nuttx/drivers/drivers.h>
+#include <nuttx/fs/fs.h>
 #include <syslog.h>
 
 #include "bootloader_flash.h"

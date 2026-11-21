@@ -35,12 +35,6 @@ list(
   stm32_start.c
   stm32_capture.c)
 
-if(CONFIG_STM32_TICKLESS_TIMER)
-  list(APPEND SRCS stm32_tickless.c)
-else()
-  list(APPEND SRCS stm32_timerisr.c)
-endif()
-
 if(CONFIG_STM32_PROGMEM)
   list(APPEND SRCS stm32_flash.c)
 endif()
@@ -85,10 +79,6 @@ if(CONFIG_STM32_FMC)
   list(APPEND SRCS stm32_fmc.c)
 endif()
 
-if(CONFIG_STM32_IWDG OR CONFIG_STM32_RTC_LSICLOCK)
-  list(APPEND SRCS stm32_lsi.c)
-endif()
-
 if(CONFIG_STM32_RTC_LSECLOCK)
   list(APPEND SRCS stm32_lse.c)
 endif()
@@ -122,10 +112,6 @@ if(CONFIG_USBHOST)
   endif()
 endif()
 
-if(CONFIG_STM32_TIM)
-  list(APPEND SRCS stm32_tim.c stm32_tim_lowerhalf.c)
-endif()
-
 if(CONFIG_STM32_ADC)
   list(APPEND SRCS stm32_adc.c)
 endif()
@@ -156,10 +142,6 @@ endif()
 
 if(CONFIG_STM32_DMA2D)
   list(APPEND SRCS stm32_dma2d.c)
-endif()
-
-if(CONFIG_SENSORS_QENCODER)
-  list(APPEND SRCS stm32_qencoder.c)
 endif()
 
 if(CONFIG_STM32_CAN_CHARDRIVER)

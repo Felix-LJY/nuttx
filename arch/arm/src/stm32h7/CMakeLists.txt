@@ -50,16 +50,6 @@ if(CONFIG_RPTUN)
   list(APPEND SRCS stm32_rptun.c)
 endif()
 
-if(CONFIG_SCHED_TICKLESS)
-  list(APPEND SRCS stm32_tickless.c)
-else()
-  list(APPEND SRCS stm32_timerisr.c)
-endif()
-
-if(CONFIG_STM32_ONESHOT)
-  list(APPEND SRCS stm32_oneshot.c stm32_oneshot_lowerhalf.c)
-endif()
-
 if(CONFIG_ARM_MPU)
   list(APPEND SRCS stm32_mpuinit.c)
 endif()
@@ -76,7 +66,11 @@ if(CONFIG_STM32_ADC)
   list(APPEND SRCS stm32_adc.c)
 endif()
 
-if(CONFIG_STM32_FDCAN)
+if(CONFIG_STM32_FDCAN_CHARDRIVER)
+  list(APPEND SRCS stm32_fdcan.c)
+endif()
+
+if(CONFIG_STM32_FDCAN_SOCKET)
   list(APPEND SRCS stm32_fdcan_sock.c)
 endif()
 
@@ -90,14 +84,6 @@ endif()
 
 if(CONFIG_STM32_FMC)
   list(APPEND SRCS stm32_fmc.c)
-endif()
-
-if(CONFIG_STM32_RNG)
-  list(APPEND SRCS stm32_rng.c)
-endif()
-
-if(CONFIG_STM32_IWDG OR CONFIG_STM32_RTC_LSICLOCK)
-  list(APPEND SRCS stm32_lsi.c)
 endif()
 
 if(CONFIG_STM32_RTC_LSECLOCK)
@@ -141,14 +127,6 @@ if(CONFIG_SPI_SLAVE)
   list(APPEND SRCS stm32_spi_slave.c)
 endif()
 
-if(CONFIG_STM32_SDMMC)
-  list(APPEND SRCS stm32_sdmmc.c)
-endif()
-
-if(CONFIG_TIMER)
-  list(APPEND SRCS stm32_tim_lowerhalf.c)
-endif()
-
 if(CONFIG_STM32_TIMX_CAP)
   list(APPEND SRCS stm32_capture.c)
 endif()
@@ -176,28 +154,8 @@ if(CONFIG_USBHOST)
   endif()
 endif()
 
-if(CONFIG_STM32_TIM)
-  list(APPEND SRCS stm32_tim.c)
-endif()
-
-if(CONFIG_STM32_LPTIM)
-  list(APPEND SRCS stm32_lptim.c)
-endif()
-
 if(CONFIG_STM32_PWM)
   list(APPEND SRCS stm32_pwm.c)
-endif()
-
-if(CONFIG_STM32_ETHMAC)
-  list(APPEND SRCS stm32_ethernet.c)
-endif()
-
-if(CONFIG_MDIO_BUS)
-  list(APPEND SRCS stm32_mdio.c)
-endif()
-
-if(CONFIG_SENSORS_QENCODER)
-  list(APPEND SRCS stm32_qencoder.c)
 endif()
 
 if(CONFIG_PM)
@@ -205,14 +163,6 @@ if(CONFIG_PM)
   if(NOT CONFIG_ARCH_CUSTOM_PMINIT)
     list(APPEND SRCS stm32_pminitialize.c)
   endif()
-endif()
-
-if(CONFIG_STM32_IWDG)
-  list(APPEND SRCS stm32_iwdg.c)
-endif()
-
-if(CONFIG_STM32_WWDG)
-  list(APPEND SRCS stm32_wwdg.c)
 endif()
 
 if(CONFIG_STM32_CRYP AND CONFIG_STM32_HAVE_IP_CRYPTO_H7)

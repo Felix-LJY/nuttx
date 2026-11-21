@@ -39,13 +39,15 @@
 #include <nuttx/fs/fs.h>
 #include <nuttx/kmalloc.h>
 #include <nuttx/sched.h>
+#include <nuttx/tls.h>
+#include <group/group.h>
 #include <sched/sched.h>
 #include <task/spawn.h>
 #include <nuttx/spawn.h>
 #include <nuttx/binfmt/binfmt.h>
+#include <nuttx/environ.h>
 
 #include "binfmt.h"
-#include "environ/environ.h"
 
 #ifndef CONFIG_BINFMT_DISABLE
 
@@ -78,11 +80,15 @@ static void exec_swap(FAR struct tcb_s *ptcb, FAR struct tcb_s *chtcb)
   int        chndx;
   pid_t      pid;
   irqstate_t flags;
+  FAR struct tls_info_s *info;
+#if defined(CONFIG_ARCH_ADDRENV) && defined(CONFIG_BUILD_KERNEL)
+  FAR struct addrenv_s *oldenv;
+#endif
 #ifdef CONFIG_SCHED_HAVE_PARENT
 #  ifdef CONFIG_SCHED_CHILD_STATUS
-  FAR struct child_status_s *tg_children;
+  FAR struct child_status_s *child;
 #  else
-  uint16_t   tg_nchildren;
+  uint16_t   nchildren;
 #  endif
 #endif
 
@@ -120,17 +126,57 @@ static void exec_swap(FAR struct tcb_s *ptcb, FAR struct tcb_s *chtcb)
 
 #ifdef CONFIG_SCHED_HAVE_PARENT
 #  ifdef CONFIG_SCHED_CHILD_STATUS
-  tg_children = chtcb->group->tg_children;
+  child = chtcb->group->tg_children;
   chtcb->group->tg_children = ptcb->group->tg_children;
-  ptcb->group->tg_children = tg_children;
+  ptcb->group->tg_children = child;
 #  else
-  tg_nchildren = chtcb->group->tg_nchildren;
+  nchildren = chtcb->group->tg_nchildren;
   chtcb->group->tg_nchildren = ptcb->group->tg_nchildren;
-  ptcb->group->tg_nchildren = tg_nchildren;
+  ptcb->group->tg_nchildren = nchildren;
 #  endif
 #endif
 
+  /* The caller exits when the new image starts: it is not a child of the
+   * new image.  Without a parent, its exit sends no SIGCHLD to the new
+   * image and leaves no status that wait() in the new image returns.
+   */
+
+  ptcb->group->tg_ppid = INVALID_PROCESS_ID;
+
+#if defined(CONFIG_SCHED_HAVE_PARENT) && !defined(CONFIG_SCHED_CHILD_STATUS)
+  if (chtcb->group->tg_nchildren > 0)
+    {
+      chtcb->group->tg_nchildren--;
+    }
+#endif
+
   leave_critical_section(flags);
+
+#if defined(CONFIG_SCHED_HAVE_PARENT) && defined(CONFIG_SCHED_CHILD_STATUS)
+  child = group_remove_child(chtcb->group, ptcb->pid);
+  group_free_child(child);
+#endif
+
+  /* getpid() and gettid() read copies of the pids in TLS.  The address
+   * environment of the child is current here, and the TLS of the caller
+   * is in its own.
+   */
+
+  info = (FAR struct tls_info_s *)chtcb->stack_alloc_ptr;
+  info->tl_tid = chtcb->pid;
+  chtcb->group->tg_info->ta_pid = chtcb->group->tg_pid;
+
+#if defined(CONFIG_ARCH_ADDRENV) && defined(CONFIG_BUILD_KERNEL)
+  addrenv_select(ptcb->addrenv_own, &oldenv);
+#endif
+
+  info = (FAR struct tls_info_s *)ptcb->stack_alloc_ptr;
+  info->tl_tid = ptcb->pid;
+  ptcb->group->tg_info->ta_pid = ptcb->group->tg_pid;
+
+#if defined(CONFIG_ARCH_ADDRENV) && defined(CONFIG_BUILD_KERNEL)
+  addrenv_restore(oldenv);
+#endif
 }
 
 /****************************************************************************
@@ -162,8 +208,12 @@ int exec_module(FAR struct binary_s *binp,
   FAR struct arch_addrenv_s *addrenv = &binp->addrenv->addrenv;
   FAR void *vheap;
   char name[PATH_MAX];
+  posix_spawnattr_t kattr;
 #endif
   FAR void *stackaddr = NULL;
+#if defined(CONFIG_BINFMT_LOADABLE) && defined(CONFIG_BUILD_FLAT)
+  FAR struct list_node *node;
+#endif
   pid_t pid;
   int ret;
 
@@ -186,7 +236,7 @@ int exec_module(FAR struct binary_s *binp,
       return -ENOMEM;
     }
 
-  ret = binfmt_copyargv(&argv, argv);
+  ret = binfmt_copyargv(&argv, binp->argv, argv);
   if (ret < 0)
     {
       goto errout_with_tcb;
@@ -218,6 +268,16 @@ int exec_module(FAR struct binary_s *binp,
     {
       strlcpy(name, filename, PATH_MAX);
       filename = name;
+    }
+
+  /* spawn_execattrs() runs in the address environment of the new task:
+   * copy the attributes of the caller.
+   */
+
+  if (attr != NULL)
+    {
+      kattr = *attr;
+      attr  = &kattr;
     }
 
   /* Instantiate the address environment containing the user heap */
@@ -275,8 +335,16 @@ int exec_module(FAR struct binary_s *binp,
   /* The copied argv and envp can now be released */
 
   binfmt_freeactions(actions);
-  binfmt_freeargv(argv);
+  binfmt_freeargv(argv, binp->argv);
   binfmt_freeenv(envp);
+  actions = NULL;
+  argv    = NULL;
+  envp    = NULL;
+
+  /* The task has its arguments: the list of the loader is not needed */
+
+  kmm_free(binp->argv);
+  binp->argv = NULL;
 
 #ifdef CONFIG_PIC
   /* Add the D-Space address as the PIC base address.  By convention, this
@@ -299,6 +367,10 @@ int exec_module(FAR struct binary_s *binp,
       berr("ERROR: addrenv_attach() failed: %d\n", ret);
       goto errout_with_tcbinit;
     }
+
+  /* The task has the address environment now: the caller does not drop it */
+
+  binp->addrenv = NULL;
 #endif
 
 #ifdef CONFIG_SCHED_USER_IDENTITY
@@ -323,7 +395,7 @@ int exec_module(FAR struct binary_s *binp,
       group->tg_flags |= GROUP_FLAG_SECURE_EXEC;
       group->tg_flags &= ~(GROUP_FLAG_FD_BACKTRACE | GROUP_FLAG_DUMPABLE);
 #ifndef CONFIG_DISABLE_ENVIRON
-      env_sanitize_secure(group);
+      env_sanitize_secure(group->tg_info);
 #endif
     }
 #endif
@@ -337,17 +409,6 @@ int exec_module(FAR struct binary_s *binp,
 
   pid = tcb->pid;
 
-#if defined(CONFIG_ARCH_ADDRENV) && defined(CONFIG_BUILD_KERNEL)
-  /* Restore the address environment of the caller */
-
-  ret = addrenv_restore(binp->oldenv);
-  if (ret < 0)
-    {
-      berr("ERROR: addrenv_restore() failed: %d\n", ret);
-      goto errout_with_tcbinit;
-    }
-#endif
-
   /* Set the attributes */
 
   if (attr)
@@ -359,8 +420,34 @@ int exec_module(FAR struct binary_s *binp,
         }
     }
 
+#if defined(CONFIG_ARCH_ADDRENV) && defined(CONFIG_BUILD_KERNEL)
+  /* Restore the address environment of the caller */
+
+  addrenv_restore(binp->oldenv);
+#endif
+
 #ifdef CONFIG_BINFMT_LOADABLE
   tcb->group->tg_bininfo = binp;
+#endif
+
+#if defined(CONFIG_BINFMT_LOADABLE) && defined(CONFIG_BUILD_FLAT)
+  /* The libraries the program needs belong to its task group, where its
+   * own dlopen() finds them.  Only in a flat build: elsewhere the program
+   * has another libc, with its own lock and heap.
+   */
+
+  while ((node = list_remove_head(&binp->libraries)) != NULL)
+    {
+      list_add_tail(&tcb->group->tg_info->ta_modules, node);
+    }
+#endif
+
+#ifdef CONFIG_SCHED_PROCESS_GROUPS
+  /* After an exec(), the parent cannot change the process group of the
+   * process.
+   */
+
+  tcb->group->tg_flags |= GROUP_FLAG_EXECED;
 #endif
 
   /* Then activate the task at the provided priority */
@@ -377,7 +464,12 @@ errout_with_tcbinit:
     }
 #endif
 
+  /* nxtask_uninit() releases the TCB and its address environment.  The
+   * copied lists are already released.
+   */
+
   nxtask_uninit(tcb);
+  tcb = NULL;
 
 errout_with_addrenv:
 #if defined(CONFIG_ARCH_ADDRENV) && defined(CONFIG_BUILD_KERNEL)
@@ -388,7 +480,7 @@ errout_with_actions:
 errout_with_envp:
   binfmt_freeenv(envp);
 errout_with_args:
-  binfmt_freeargv(argv);
+  binfmt_freeargv(argv, binp->argv);
 errout_with_tcb:
   kmm_free(tcb);
   return ret;

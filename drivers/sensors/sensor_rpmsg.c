@@ -75,7 +75,7 @@ static int sensor_rpmsg_##name(FAR struct sensor_lowerhalf_s *lower, \
     } \
   else \
     { \
-      return wait ? -ENOTSUP : 0; \
+      return wait ? -ENOTTY : 0; \
     } \
 } \
 
@@ -93,10 +93,11 @@ struct sensor_rpmsg_dev_s
   struct list_node               stublist;
   struct list_node               proxylist;
   sem_t                          proxysem;
-  uint8_t                        nadvertisers;
-  uint8_t                        nsubscribers;
+  int16_t                        nadvertisers;
+  int16_t                        nsubscribers;
   FAR void                      *upper;
   sensor_push_event_t            push_event;
+  sensor_notify_interval_t       notify_interval;
   FAR const char                *name;
   char                           path[1];
 };
@@ -125,7 +126,7 @@ struct sensor_rpmsg_stub_s
   uint64_t                       cookie;
   struct file                    file;
   bool                           flushing;
-  bool                           nonwakeup;
+  bool                           wakeup;
 };
 
 /* This structure describes the proxy info about remote advertisers. */
@@ -135,6 +136,7 @@ struct sensor_rpmsg_proxy_s
   struct list_node               node;
   FAR struct rpmsg_endpoint     *ept;
   uint64_t                       cookie;
+  bool                           wakeup;
 };
 
 /* Remote message structure */
@@ -192,11 +194,7 @@ struct sensor_rpmsg_ioctl_s
 
   int32_t                        request;
   uint32_t                       arglen;
-  union
-    {
-      uint64_t                   arg;
-      char                       argbuf[0];
-    };
+  char                           arg[];
 };
 
 /****************************************************************************
@@ -230,9 +228,9 @@ static int sensor_rpmsg_calibrate(FAR struct sensor_lowerhalf_s *lower,
 static int sensor_rpmsg_get_info(FAR struct sensor_lowerhalf_s *lower,
                                  FAR struct file *filep,
                                  FAR struct sensor_device_info_s *info);
-static int sensor_rpmsg_set_nonwakeup(FAR struct sensor_lowerhalf_s *lower,
-                                      FAR struct file *filep,
-                                      bool nonwakeup);
+static int sensor_rpmsg_set_wakeup(FAR struct sensor_lowerhalf_s *lower,
+                                   FAR struct file *filep,
+                                   bool wakeup);
 static int sensor_rpmsg_control(FAR struct sensor_lowerhalf_s *lower,
                                 FAR struct file *filep,
                                 int cmd, unsigned long arg);
@@ -280,7 +278,7 @@ static const struct sensor_ops_s g_sensor_rpmsg_ops =
   .set_calibvalue = sensor_rpmsg_set_calibvalue,
   .calibrate      = sensor_rpmsg_calibrate,
   .get_info       = sensor_rpmsg_get_info,
-  .set_nonwakeup  = sensor_rpmsg_set_nonwakeup,
+  .set_wakeup     = sensor_rpmsg_set_wakeup,
   .control        = sensor_rpmsg_control
 };
 
@@ -358,7 +356,63 @@ static void sensor_rpmsg_advsub(FAR struct sensor_rpmsg_dev_s *dev,
   list_for_every_entry(&g_eptlist, sre, struct sensor_rpmsg_ept_s,
                        node)
     {
-      sensor_rpmsg_advsub_one(dev, &sre->ept, command);
+      FAR struct sensor_rpmsg_proxy_s *proxy = NULL;
+      bool find = false;
+      bool adv = false;
+
+      if (command == SENSOR_RPMSG_SUBSCRIBE ||
+          command == SENSOR_RPMSG_UNSUBSCRIBE)
+        {
+          /* If it has been bound before, do not send. */
+
+          list_for_every_entry(&dev->proxylist, proxy,
+                               struct sensor_rpmsg_proxy_s, node)
+            {
+              if (proxy->ept == &sre->ept)
+                {
+                  find = true;
+                  break;
+                }
+            }
+        }
+      else
+        {
+          /* Advertise and unadvertise need to be broadcast. otherwise, data
+           * will be lost if the following two conditions occur at the same
+           * time.
+           *  1.The adv core crashed, the advertiser has a long life cycle.
+           *  2.The remote subscriber has a long life cycle, and the remote
+           *    core side has not been restarted
+           */
+
+          adv = true;
+        }
+
+      /* There are several scenarios that require broadcasting:
+       * 1. If the proxy corresponding to the EPT (Endpoint) did not
+       *    exist previously, this constitutes the first broadcast.
+       * 2. If the proxy previously had a wakeup attribute, it should
+       *    be broadcast every time.
+       * 3. If the proxy does not have the wakeup attribute and the
+       *    target core is in the running state, we should still broadcast
+       *    it.
+       *
+       * In summary, Let's avoid broadcasting non-wakeup sensors when the
+       * target core is in a sleep state to prevent unnecessary wakeups.
+       */
+
+      if (adv || rpmsg_is_running(sre->ept.rdev) || (find && proxy->wakeup))
+        {
+          sensor_rpmsg_advsub_one(dev, &sre->ept, command);
+        }
+      else
+        {
+          sninfo("INFO: advsub:%d %s ignore broadcast to %s, "
+                 "as %d, %d, %d\n",
+                 command, dev->path, rpmsg_get_cpuname(sre->ept.rdev),
+                 find, proxy ? proxy->wakeup : 0,
+                 rpmsg_is_running(sre->ept.rdev));
+        }
     }
 
   up_read(&g_ept_lock);
@@ -374,6 +428,7 @@ static int sensor_rpmsg_ioctl(FAR struct sensor_rpmsg_dev_s *dev,
   FAR struct sensor_rpmsg_ioctl_s *msg;
   FAR struct rpmsg_endpoint *ept;
   uint64_t pcookie;
+  size_t send_len;
   uint32_t space;
   int ret = -ENOTTY;
   bool empty;
@@ -407,10 +462,20 @@ static int sensor_rpmsg_ioctl(FAR struct sensor_rpmsg_dev_s *dev,
       nxsem_init(&cookie.sem, 0, 0);
     }
 
+  send_len = len > 0 ? len : sizeof(uint64_t);
   sensor_rpmsg_lock(dev);
   list_for_every_entry_safe(&dev->proxylist, proxy, ptmp,
                             struct sensor_rpmsg_proxy_s, node)
     {
+      /* Check whether the proxy has been set to the wakeup state
+       * before. If it has, record it.
+       */
+
+      if (cmd == SNIOC_SET_WAKEUP)
+        {
+          proxy->wakeup = arg;
+        }
+
       ept = proxy->ept;
       pcookie = proxy->cookie;
       msg = rpmsg_get_tx_payload_buffer(ept, &space, true);
@@ -429,14 +494,14 @@ static int sensor_rpmsg_ioctl(FAR struct sensor_rpmsg_dev_s *dev,
       msg->arglen  = len;
       if (len > 0)
         {
-          memcpy(msg->argbuf, (FAR void *)(uintptr_t)arg, len);
+          memcpy(msg->arg, (FAR void *)(uintptr_t)arg, len);
         }
       else
         {
-          msg->arg = arg;
+          *(FAR uint64_t *)msg->arg = arg;
         }
 
-      ret = rpmsg_send_nocopy(ept, msg, sizeof(*msg) + len);
+      ret = rpmsg_send_nocopy(ept, msg, sizeof(*msg) + send_len);
       if (ret < 0)
         {
           rpmsg_release_tx_buffer(ept, msg);
@@ -476,32 +541,81 @@ static int sensor_rpmsg_ioctl(FAR struct sensor_rpmsg_dev_s *dev,
   return ret;
 }
 
+static void sensor_rpmsg_free_proxy(FAR struct sensor_rpmsg_dev_s *dev,
+                                    FAR struct sensor_rpmsg_proxy_s *proxy)
+{
+  sminfo(dev->name, "free proxy:%p name:%s", proxy, proxy->ept->name);
+  list_delete(&proxy->node);
+  kmm_free(proxy);
+  if (list_is_empty(&dev->proxylist))
+    {
+      nxsem_reset(&dev->proxysem, 0);
+    }
+}
+
+static void sensor_rpmsg_free_stub(FAR struct sensor_rpmsg_stub_s *stub)
+{
+  list_delete(&stub->node);
+  file_close(&stub->file);
+  kmm_free(stub);
+}
+
+static void sensor_rpmsg_add_proxy(FAR struct sensor_rpmsg_dev_s *dev,
+                                   FAR struct sensor_rpmsg_proxy_s *proxy)
+{
+  sensor_rpmsg_lock(dev);
+  list_add_tail(&dev->proxylist, &proxy->node);
+  nxsem_post(&dev->proxysem);
+  sensor_rpmsg_unlock(dev);
+}
+
 static FAR struct sensor_rpmsg_proxy_s *
 sensor_rpmsg_alloc_proxy(FAR struct sensor_rpmsg_dev_s *dev,
                          FAR struct rpmsg_endpoint *ept,
-                         FAR struct sensor_rpmsg_advsub_s *msg)
+                         FAR struct sensor_rpmsg_advsub_s *msg,
+                         FAR struct sensor_state_s *state,
+                         FAR bool *created)
 {
   FAR struct sensor_rpmsg_proxy_s *proxy;
-  struct sensor_state_s state;
+  FAR struct sensor_rpmsg_proxy_s *ptmp;
   struct file file;
   int ret;
 
   sensor_rpmsg_lock(dev);
-  list_for_every_entry(&dev->proxylist, proxy,
-                       struct sensor_rpmsg_proxy_s, node)
+  list_for_every_entry_safe(&dev->proxylist, proxy, ptmp,
+                            struct sensor_rpmsg_proxy_s, node)
     {
-      if (proxy->ept == ept && proxy->cookie == msg->cookie)
+      if (proxy->ept != ept)
+        {
+          continue;
+        }
+
+      /* Same remote ept. An exact (ept, cookie) match is the same
+       * advertiser instance re-advertising, so reuse it. A different
+       * cookie belongs to a previous advertiser instance that has gone
+       * away (its UNADVERTISE is not acted on by this side); release it so
+       * that at most one proxy per ept is ever kept. This bounds memory
+       * across advertiser re-registration and keeps the single free per
+       * ept in sensor_rpmsg_ept_release() sufficient (no leak on remote
+       * disconnect).
+       */
+
+      if (proxy->cookie == msg->cookie)
         {
           sensor_rpmsg_unlock(dev);
+          *created = false;
           return proxy;
         }
+
+      sminfo(dev->name, "release stale proxy:%p", proxy);
+      sensor_rpmsg_free_proxy(dev, proxy);
     }
 
   sensor_rpmsg_unlock(dev);
 
   /* Create new proxy to represent a remote advertiser */
 
-  proxy = kmm_malloc(sizeof(*proxy));
+  proxy = kmm_zalloc(sizeof(*proxy));
   if (!proxy)
     {
       return NULL;
@@ -517,7 +631,7 @@ sensor_rpmsg_alloc_proxy(FAR struct sensor_rpmsg_dev_s *dev,
     }
 
   file_ioctl(&file, SNIOC_SET_BUFFER_NUMBER, msg->nbuffer);
-  file_ioctl(&file, SNIOC_GET_STATE, &state);
+  file_ioctl(&file, SNIOC_GET_STATE, state);
   file_close(&file);
 
   sensor_rpmsg_lock(dev);
@@ -527,34 +641,23 @@ sensor_rpmsg_alloc_proxy(FAR struct sensor_rpmsg_dev_s *dev,
       dev->lower.persist = true;
     }
 
-  list_add_tail(&dev->proxylist, &proxy->node);
-  nxsem_post(&dev->proxysem);
   sensor_rpmsg_unlock(dev);
-
-  /* sync interval and latency */
-
-  if (state.min_interval != UINT32_MAX)
-    {
-      sensor_rpmsg_ioctl(dev, SNIOC_SET_INTERVAL, state.min_interval,
-                         0, false);
-    }
-
-  if (state.min_latency != UINT32_MAX)
-    {
-      sensor_rpmsg_ioctl(dev, SNIOC_BATCH, state.min_latency, 0, false);
-    }
-
   sminfo(dev->name, "create proxy:%p", proxy);
+  *created = true;
   return proxy;
 }
 
-static
-void sensor_rpmsg_push_event_persist(FAR struct sensor_rpmsg_dev_s *dev,
-                                     FAR struct sensor_rpmsg_stub_s *stub)
+static FAR struct sensor_rpmsg_stub_s *
+sensor_rpmsg_push_event_persist(FAR struct sensor_rpmsg_dev_s *dev,
+                                FAR struct rpmsg_endpoint *ept,
+                                FAR struct sensor_rpmsg_stub_s *stub,
+                                uint64_t cookie)
 {
   FAR struct sensor_rpmsg_cell_s *cell;
+  FAR struct sensor_rpmsg_stub_s *temp;
   FAR struct sensor_rpmsg_data_s *msg;
   FAR struct sensor_rpmsg_ept_s *sre;
+  bool find = false;
   uint32_t space;
   int ret;
 
@@ -564,7 +667,46 @@ void sensor_rpmsg_push_event_persist(FAR struct sensor_rpmsg_dev_s *dev,
     {
       snerr("ERROR: push event persist get buffer failed:%s\n",
             rpmsg_get_cpuname(sre->ept.rdev));
-      return;
+      return NULL;
+    }
+
+  /* Check if the stub still exists.
+   * rpmsg involves recursive calls, which may result in the sub_handler
+   * not completing its execution, the rpmsg recursively switches to
+   * the unsub_handler and releases the stub.
+   */
+
+  list_for_every_entry(&dev->stublist, temp,
+                       struct sensor_rpmsg_stub_s, node)
+    {
+      /* Check if this stub matches the given ept and cookie. */
+
+      if (temp->ept == ept && temp->cookie == cookie)
+        {
+          find = true;
+          break;
+        }
+    }
+
+  /* The current position requires determining whether the stub
+   * node exists. There are three possibilities.
+   * 1.The node exists, and it's still the address originally allocated
+   *   by malloc.
+   * 2.The node exists, but the address has changed due to reallocation.
+   *   the stub address needs to be updated. Return to the new address
+   *   of the stub
+   * 3.The node does not exist anymore，return directly.
+   */
+
+  if (!find)
+    {
+      rpmsg_release_tx_buffer(&sre->ept, msg);
+      return NULL;
+    }
+  else if (stub != temp)
+    {
+      snwarn("WARN: push event persist stub changed:%p -> %p\n", stub, temp);
+      stub = temp;
     }
 
   msg->command = SENSOR_RPMSG_PUBLISH;
@@ -583,6 +725,8 @@ void sensor_rpmsg_push_event_persist(FAR struct sensor_rpmsg_dev_s *dev,
     {
       rpmsg_release_tx_buffer(&sre->ept, msg);
     }
+
+  return stub;
 }
 
 static FAR struct sensor_rpmsg_stub_s *
@@ -608,7 +752,7 @@ sensor_rpmsg_alloc_stub(FAR struct sensor_rpmsg_dev_s *dev,
 
   /* Create new stub to represent a remote subscribers */
 
-  stub = kmm_malloc(sizeof(*stub));
+  stub = kmm_zalloc(sizeof(*stub));
   if (!stub)
     {
       return NULL;
@@ -629,8 +773,8 @@ sensor_rpmsg_alloc_stub(FAR struct sensor_rpmsg_dev_s *dev,
 
   if (dev->lower.persist)
     {
-      sminfo(dev->name, "push event persist:%p", stub);
-      sensor_rpmsg_push_event_persist(dev, stub);
+      stub = sensor_rpmsg_push_event_persist(dev, ept, stub, cookie);
+      sminfo(dev->name, "push event persist status:%p", stub);
     }
 
   sensor_rpmsg_unlock(dev);
@@ -639,30 +783,13 @@ sensor_rpmsg_alloc_stub(FAR struct sensor_rpmsg_dev_s *dev,
   return stub;
 }
 
-static void sensor_rpmsg_free_proxy(FAR struct sensor_rpmsg_dev_s *dev,
-                                    FAR struct sensor_rpmsg_proxy_s *proxy)
-{
-  sminfo(dev->name, "free proxy:%p name:%s", proxy, proxy->ept->name);
-  list_delete(&proxy->node);
-  kmm_free(proxy);
-  if (list_is_empty(&dev->proxylist))
-    {
-      nxsem_reset(&dev->proxysem, 0);
-    }
-}
-
-static void sensor_rpmsg_free_stub(FAR struct sensor_rpmsg_stub_s *stub)
-{
-  list_delete(&stub->node);
-  file_close(&stub->file);
-  kmm_free(stub);
-}
-
 static int sensor_rpmsg_open(FAR struct sensor_lowerhalf_s *lower,
                              FAR struct file *filep)
 {
   FAR struct sensor_rpmsg_dev_s *dev = lower->priv;
   FAR struct sensor_lowerhalf_s *drv = dev->drv;
+  bool adv = false;
+  bool sub = false;
   int ret;
 
   if (drv->ops->open)
@@ -682,21 +809,43 @@ static int sensor_rpmsg_open(FAR struct sensor_lowerhalf_s *lower,
   sensor_rpmsg_lock(dev);
   if ((filep->f_oflags & O_ACCMODE) != O_RDONLY)
     {
-      if (dev->nadvertisers++ == 0)
+      if (filep->f_oflags & SENSOR_PERSIST)
         {
-          sensor_rpmsg_advsub(dev, SENSOR_RPMSG_ADVERTISE);
+          dev->lower.persist = true;
+        }
+
+      if (dev->nadvertisers++ <= 0)
+        {
+          dev->nadvertisers = 1;
+          adv = true;
         }
     }
 
   if ((filep->f_oflags & O_ACCMODE) != O_WRONLY)
     {
-      if (dev->nsubscribers++ == 0)
+      /* Send broadcast subscribed info if dev isn't
+       * physical sensor to avoid waking up remote core.
+       */
+
+      if (dev->nsubscribers++ == 0 &&
+          drv->ops->activate == NULL)
         {
-          sensor_rpmsg_advsub(dev, SENSOR_RPMSG_SUBSCRIBE);
+          sub = true;
         }
     }
 
   sensor_rpmsg_unlock(dev);
+
+  if (adv)
+    {
+      sensor_rpmsg_advsub(dev, SENSOR_RPMSG_ADVERTISE);
+    }
+
+  if (sub)
+    {
+      sensor_rpmsg_advsub(dev, SENSOR_RPMSG_SUBSCRIBE);
+    }
+
   return 0;
 }
 
@@ -705,10 +854,9 @@ static int sensor_rpmsg_close(FAR struct sensor_lowerhalf_s *lower,
 {
   FAR struct sensor_rpmsg_dev_s *dev = lower->priv;
   FAR struct sensor_lowerhalf_s *drv = dev->drv;
-  FAR struct sensor_rpmsg_proxy_s *proxy;
-  FAR struct sensor_rpmsg_proxy_s *ptmp;
   FAR struct sensor_rpmsg_stub_s *stub;
   FAR struct sensor_rpmsg_stub_s *stmp;
+  bool unsub = false;
   int ret = 0;
 
   if (drv->ops->close)
@@ -726,7 +874,6 @@ static int sensor_rpmsg_close(FAR struct sensor_lowerhalf_s *lower,
     {
       if (dev->nadvertisers == 1)
         {
-          sensor_rpmsg_advsub(dev, SENSOR_RPMSG_UNADVERTISE);
           list_for_every_entry_safe(&dev->stublist, stub, stmp,
                                     struct sensor_rpmsg_stub_s, node)
             {
@@ -739,20 +886,26 @@ static int sensor_rpmsg_close(FAR struct sensor_lowerhalf_s *lower,
 
   if ((filep->f_oflags & O_ACCMODE) != O_WRONLY)
     {
-      if (dev->nsubscribers == 1)
+      /* Send broadcast unsubscribed info if dev isn't
+       * physical sensor to avoid waking up remote core.
+       */
+
+      if (dev->nsubscribers == 1 &&
+          drv->ops->activate == NULL)
         {
-          sensor_rpmsg_advsub(dev, SENSOR_RPMSG_UNSUBSCRIBE);
-          list_for_every_entry_safe(&dev->proxylist, proxy, ptmp,
-                                    struct sensor_rpmsg_proxy_s, node)
-            {
-              sensor_rpmsg_free_proxy(dev, proxy);
-            }
+          unsub = true;
         }
 
       dev->nsubscribers--;
     }
 
   sensor_rpmsg_unlock(dev);
+
+  if (unsub)
+    {
+      sensor_rpmsg_advsub(dev, SENSOR_RPMSG_UNSUBSCRIBE);
+    }
+
   return ret;
 }
 
@@ -799,10 +952,10 @@ static int sensor_rpmsg_flush(FAR struct sensor_lowerhalf_s *lower,
       /* If the driver (drv) does not support the flush operation,
        * and the caller is a remote invocation or the current device
        * is an advertiser, then you can still consider the flush
-       * operation as unsupported and therefore return ENOTSUP
+       * operation as unsupported and therefore return ENOTTY
        */
 
-      return -ENOTSUP;
+      return -ENOTTY;
     }
   else
     {
@@ -814,33 +967,33 @@ static int sensor_rpmsg_flush(FAR struct sensor_lowerhalf_s *lower,
   return ret;
 }
 
-static int sensor_rpmsg_set_nonwakeup(FAR struct sensor_lowerhalf_s *lower,
-                                      FAR struct file *filep,
-                                      bool nonwakeup)
+static int sensor_rpmsg_set_wakeup(FAR struct sensor_lowerhalf_s *lower,
+                                   FAR struct file *filep,
+                                   bool wakeup)
 {
   FAR struct sensor_rpmsg_dev_s *dev = lower->priv;
   FAR struct sensor_lowerhalf_s *drv = dev->drv;
   int ret = -ENOTTY;
 
-  if (drv->ops->set_nonwakeup)
+  if (drv->ops->set_wakeup)
     {
-      ret = drv->ops->set_nonwakeup(drv, filep, nonwakeup);
+      ret = drv->ops->set_wakeup(drv, filep, wakeup);
     }
   else if ((filep->f_oflags & SENSOR_REMOTE) ||
            dev->nadvertisers > 0)
     {
-      /* If the driver (drv) does not support the nonwakeup operation,
+      /* If the driver (drv) does not support the wakeup operation,
        * and the caller is a remote invocation or the current device
-       * is an advertiser, then you can still consider the nonwakeup
-       * operation as unsupported and therefore return ENOTSUP
+       * is an advertiser, then you can still consider the wakeup
+       * operation as unsupported and therefore return ENOTTY
        */
 
-      return -ENOTSUP;
+      return -ENOTTY;
     }
   else
     {
-      ret = sensor_rpmsg_ioctl(dev, SNIOC_SET_NONWAKEUP,
-                               nonwakeup, 0, true);
+      ret = sensor_rpmsg_ioctl(dev, SNIOC_SET_WAKEUP,
+                               wakeup, 0, true);
     }
 
   return ret;
@@ -876,18 +1029,21 @@ static int sensor_rpmsg_control(FAR struct sensor_lowerhalf_s *lower,
   FAR struct sensor_rpmsg_dev_s *dev = lower->priv;
   FAR struct sensor_lowerhalf_s *drv = dev->drv;
   FAR struct sensor_ioctl_s *ioctl = (FAR void *)(uintptr_t)arg;
+  int ret = -ENOTTY;
 
   if (drv->ops->control)
     {
-      return drv->ops->control(drv, filep, cmd, arg);
+      ret = drv->ops->control(drv, filep, cmd, arg);
     }
-  else if (!(filep->f_oflags & SENSOR_REMOTE) && _SNIOCVALID(cmd))
+
+  if (ret == -ENOTTY && !(filep->f_oflags & SENSOR_REMOTE) &&
+      _SNIOCVALID(cmd))
     {
       return sensor_rpmsg_ioctl(dev, cmd, arg,
                                 sizeof(*ioctl) + ioctl->len, true);
     }
 
-  return -ENOTTY;
+  return ret;
 }
 
 static void sensor_rpmsg_data_worker(FAR void *arg)
@@ -929,7 +1085,7 @@ static void sensor_rpmsg_push_event_one(FAR struct sensor_rpmsg_dev_s *dev,
    */
 
   sre = container_of(stub->ept, struct sensor_rpmsg_ept_s, ept);
-  if (stub->nonwakeup && !rpmsg_is_running(sre->ept.rdev))
+  if (!stub->wakeup && !rpmsg_is_running(sre->ept.rdev))
     {
       return;
     }
@@ -1083,6 +1239,14 @@ static ssize_t sensor_rpmsg_push_event(FAR void *priv, FAR const void *data,
   return ret;
 }
 
+static void
+sensor_rpmsg_notify_interval(FAR void *priv, uint32_t interval)
+{
+  FAR struct sensor_rpmsg_dev_s *dev = priv;
+
+  dev->notify_interval(dev->upper, interval);
+}
+
 static FAR struct sensor_rpmsg_dev_s *
 sensor_rpmsg_find_dev(FAR const char *path)
 {
@@ -1102,6 +1266,35 @@ sensor_rpmsg_find_dev(FAR const char *path)
   return NULL;
 }
 
+static void sensor_rpmsg_update_config(FAR struct sensor_rpmsg_dev_s *dev,
+                                       FAR struct sensor_state_s *state)
+{
+  if (state->esize == UINT32_MAX)
+    {
+      /* Invalid esize of state */
+
+      return;
+    }
+
+  /* sync interval and latency */
+
+  if (state->min_interval != UINT32_MAX)
+    {
+      sensor_rpmsg_ioctl(dev, SNIOC_SET_INTERVAL, state->min_interval,
+                         0, false);
+    }
+
+  if (state->min_latency != UINT32_MAX)
+    {
+      sensor_rpmsg_ioctl(dev, SNIOC_BATCH, state->min_latency, 0, false);
+    }
+
+  if (state->wakeup)
+    {
+      sensor_rpmsg_ioctl(dev, SNIOC_SET_WAKEUP, state->wakeup, 0, false);
+    }
+}
+
 static int sensor_rpmsg_adv_handler(FAR struct rpmsg_endpoint *ept,
                                     FAR void *data, size_t len,
                                     uint32_t src, FAR void *priv)
@@ -1109,6 +1302,8 @@ static int sensor_rpmsg_adv_handler(FAR struct rpmsg_endpoint *ept,
   FAR struct sensor_rpmsg_advsub_s *msg = data;
   FAR struct sensor_rpmsg_proxy_s *proxy;
   FAR struct sensor_rpmsg_dev_s *dev;
+  struct sensor_state_s state;
+  bool created = false;
   int ret;
 
   dev = sensor_rpmsg_find_dev(msg->path);
@@ -1117,29 +1312,41 @@ static int sensor_rpmsg_adv_handler(FAR struct rpmsg_endpoint *ept,
       return 0;
     }
 
-  proxy = sensor_rpmsg_alloc_proxy(dev, ept, msg);
+  state.esize = UINT32_MAX;
+  proxy = sensor_rpmsg_alloc_proxy(dev, ept, msg, &state, &created);
   if (!proxy)
     {
       snerr("ERROR: adv create proxy failed:%s\n", dev->path);
+      return 0;
     }
-  else
+
+  msg->cookie = (uint64_t)(uintptr_t)dev;
+  msg->command = SENSOR_RPMSG_ADVERTISE_ACK;
+  ret = rpmsg_send(ept, msg, len);
+  if (ret < 0)
     {
-      msg->cookie = (uint64_t)(uintptr_t)dev;
-      msg->command = SENSOR_RPMSG_ADVERTISE_ACK;
-      ret = rpmsg_send(ept, msg, len);
-      if (ret < 0)
+      snerr("ERROR: adv rpmsg send failed:%s, %d, %s\n",
+            dev->path, ret, rpmsg_get_cpuname(ept->rdev));
+      if (created)
         {
-          sensor_rpmsg_lock(dev);
-          sensor_rpmsg_free_proxy(dev, proxy);
-          sensor_rpmsg_unlock(dev);
-          snerr("ERROR: adv rpmsg send failed:%s, %d, %s\n",
-                dev->path, ret, rpmsg_get_cpuname(ept->rdev));
+          kmm_free(proxy);
         }
 
-      sminfo(dev->name, "rpmsg adv proxy success, remote:%s",
-             rpmsg_get_cpuname(ept->rdev));
+      return 0;
     }
 
+  /* The proxy is visible to ioctl only after ADVERTISE_ACK is queued,
+   * so the remote stub always exists before any IOCTL arrives.
+   */
+
+  if (created)
+    {
+      sensor_rpmsg_add_proxy(dev, proxy);
+    }
+
+  sensor_rpmsg_update_config(dev, &state);
+  sminfo(dev->name, "rpmsg adv proxy success, remote:%s",
+         rpmsg_get_cpuname(ept->rdev));
   return 0;
 }
 
@@ -1153,7 +1360,6 @@ static int sensor_rpmsg_advack_handler(FAR struct rpmsg_endpoint *ept,
   dev = sensor_rpmsg_find_dev(msg->path);
   if (dev && !sensor_rpmsg_alloc_stub(dev, ept, msg->cookie))
     {
-      sensor_rpmsg_advsub_one(dev, ept, SENSOR_RPMSG_UNADVERTISE);
       snerr("ERROR: advack failed:%s, %s\n", dev->path,
             rpmsg_get_cpuname(ept->rdev));
     }
@@ -1165,30 +1371,6 @@ static int sensor_rpmsg_unadv_handler(FAR struct rpmsg_endpoint *ept,
                                       FAR void *data, size_t len,
                                       uint32_t src, FAR void *priv)
 {
-  FAR struct sensor_rpmsg_advsub_s *msg = data;
-  FAR struct sensor_rpmsg_proxy_s *proxy;
-  FAR struct sensor_rpmsg_dev_s *dev;
-
-  dev = sensor_rpmsg_find_dev(msg->path);
-  if (!dev)
-    {
-      return 0;
-    }
-
-  sensor_rpmsg_lock(dev);
-  list_for_every_entry(&dev->proxylist, proxy,
-                       struct sensor_rpmsg_proxy_s, node)
-    {
-      if (proxy->ept == ept && proxy->cookie == msg->cookie)
-        {
-          sensor_rpmsg_free_proxy(dev, proxy);
-          sminfo(dev->name, "rpmsg unadv free proxy success, "
-                 "remote:%s", rpmsg_get_cpuname(ept->rdev));
-          break;
-        }
-    }
-
-  sensor_rpmsg_unlock(dev);
   return 0;
 }
 
@@ -1202,7 +1384,16 @@ static int sensor_rpmsg_sub_handler(FAR struct rpmsg_endpoint *ept,
   int ret;
 
   dev = sensor_rpmsg_find_dev(msg->path);
-  if (!dev || (dev->nadvertisers == 0 && !dev->lower.persist))
+
+  /* The received subscription broadcast is not processed under the
+   * following conditions:
+   *   1.There is no node under the current core.(/dev/uorb/xxx)
+   *   2.The current core has not advertised any data. nadvertisers is -1.
+   *   3.When the number of advertisers is 0, it is not persistent attribute.
+   */
+
+  if (!dev || dev->nadvertisers < 0 || (dev->nadvertisers == 0 &&
+      !dev->lower.persist))
     {
       return 0;
     }
@@ -1237,21 +1428,38 @@ static int sensor_rpmsg_suback_handler(FAR struct rpmsg_endpoint *ept,
                                        uint32_t src, FAR void *priv)
 {
   FAR struct sensor_rpmsg_advsub_s *msg = data;
+  FAR struct sensor_rpmsg_proxy_s *proxy = NULL;
   FAR struct sensor_rpmsg_dev_s *dev;
+  struct sensor_state_s state;
+  bool created = false;
 
+  state.esize = UINT32_MAX;
   dev = sensor_rpmsg_find_dev(msg->path);
-  if (dev && (!dev->nsubscribers ||
-      !sensor_rpmsg_alloc_proxy(dev, ept, msg)))
+  if (!dev)
+    {
+      return 0;
+    }
+
+  if (dev->nsubscribers)
+    {
+      proxy = sensor_rpmsg_alloc_proxy(dev, ept, msg, &state, &created);
+    }
+
+  if (!proxy)
     {
       sensor_rpmsg_advsub_one(dev, ept, SENSOR_RPMSG_UNSUBSCRIBE);
       snerr("ERROR: suback failed:%s\n", dev->path);
-    }
-  else
-    {
-      sminfo(dev->name, "rpmsg suback success, remote:%s",
-             rpmsg_get_cpuname(ept->rdev));
+      return 0;
     }
 
+  if (created)
+    {
+      sensor_rpmsg_add_proxy(dev, proxy);
+    }
+
+  sensor_rpmsg_update_config(dev, &state);
+  sminfo(dev->name, "rpmsg suback success, remote:%s",
+         rpmsg_get_cpuname(ept->rdev));
   return 0;
 }
 
@@ -1331,7 +1539,7 @@ static int sensor_rpmsg_publish_handler(FAR struct rpmsg_endpoint *ept,
       list_for_every_entry_safe(&dev->stublist, stub, stmp,
                                 struct sensor_rpmsg_stub_s, node)
         {
-          file_read(&stub->file, NULL, cell->len);
+          file_ioctl(&stub->file, SNIOC_DISCARD, cell->len);
         }
 
       sensor_rpmsg_unlock(dev);
@@ -1356,8 +1564,8 @@ static int sensor_rpmsg_ioctl_handler(FAR struct rpmsg_endpoint *ept,
   unsigned long arg;
   int ret;
 
-  arg = msg->arglen > 0 ? (unsigned long)(uintptr_t)msg->argbuf :
-                          msg->arg;
+  arg = msg->arglen > 0 ? (unsigned long)(uintptr_t)msg->arg :
+                          *(FAR uint64_t *)msg->arg;
   dev = (FAR struct sensor_rpmsg_dev_s *)(uintptr_t)msg->proxy;
   sensor_rpmsg_lock(dev);
   list_for_every_entry_safe(&dev->stublist, stub, stmp,
@@ -1372,9 +1580,9 @@ static int sensor_rpmsg_ioctl_handler(FAR struct rpmsg_endpoint *ept,
               stub->flushing = true;
             }
 
-          if (msg->request == SNIOC_SET_NONWAKEUP)
+          if (msg->request == SNIOC_SET_WAKEUP)
             {
-              stub->nonwakeup = arg;
+              stub->wakeup = arg;
             }
 
           if (msg->cookie)
@@ -1388,10 +1596,14 @@ static int sensor_rpmsg_ioctl_handler(FAR struct rpmsg_endpoint *ept,
                 }
             }
 
-          break;
+          sensor_rpmsg_unlock(dev);
+          return 0;
         }
     }
 
+  snerr("ERROR: ioctl stub not found:%s, cmd:%" PRId32 ", cookie:%" PRIu64
+        ", %s\n", dev->path, msg->request, msg->cookie,
+        rpmsg_get_cpuname(ept->rdev));
   sensor_rpmsg_unlock(dev);
   return 0;
 }
@@ -1408,7 +1620,7 @@ static int sensor_rpmsg_ioctlack_handler(FAR struct rpmsg_endpoint *ept,
   cookie->result = msg->result;
   if (msg->result >= 0 && msg->arglen > 0)
     {
-      memcpy(cookie->data, msg->argbuf, msg->arglen);
+      memcpy(cookie->data, msg->arg, msg->arglen);
     }
 
   rpmsg_post(ept, &cookie->sem);
@@ -1420,14 +1632,35 @@ static int sensor_rpmsg_ept_cb(FAR struct rpmsg_endpoint *ept,
                                FAR void *priv)
 {
   FAR struct sensor_rpmsg_advsub_s *msg = data;
+  uint32_t command;
 
-  if (msg->command < sizeof(g_sensor_rpmsg_handler) /
-                     sizeof(g_sensor_rpmsg_handler[0]))
+  if (len < sizeof(msg->command))
     {
-      return g_sensor_rpmsg_handler[msg->command](ept, data, len, src, priv);
+      return -EINVAL;
     }
 
-  return -EINVAL;
+  command = msg->command;
+  if (command > SENSOR_RPMSG_IOCTL_ACK)
+    {
+      return -EINVAL;
+    }
+
+  /* For publish handler, use the original rx buffer directly to avoid
+   * extra copy. For all other handlers, copy data to a temporary stack
+   * buffer and release the rx buffer early.
+   */
+
+  if (command != SENSOR_RPMSG_PUBLISH)
+    {
+      FAR void *tmp = alloca(len);
+
+      memcpy(tmp, data, len);
+      rpmsg_release_rx_buffer(ept, data);
+      g_sensor_rpmsg_handler[command](ept, tmp, len, src, priv);
+      return RPMSG_SUCCESS_BUFFER_RELEASED;
+    }
+
+  return g_sensor_rpmsg_handler[command](ept, data, len, src, priv);
 }
 
 static void sensor_rpmsg_bound_worker(FAR void *arg)
@@ -1522,6 +1755,16 @@ static void sensor_rpmsg_ept_release(FAR struct rpmsg_endpoint *ept)
 
   up_write(&g_ept_lock);
 
+  work_cancel_sync(HPWORK, &sre->bound_work);
+  work_cancel_sync(HPWORK, &sre->work);
+  nxrmutex_lock(&sre->lock);
+  if (sre->buffer)
+    {
+      rpmsg_release_tx_buffer(&sre->ept, sre->buffer);
+      sre->buffer = NULL;
+    }
+
+  nxrmutex_unlock(&sre->lock);
   nxrmutex_destroy(&sre->lock);
   kmm_free(sre);
 }
@@ -1599,15 +1842,17 @@ sensor_rpmsg_register(FAR struct sensor_lowerhalf_s *lower,
   list_initialize(&dev->proxylist);
   strlcpy(dev->path, path, size + 1);
 
-  dev->name           = basename(dev->path);
-  dev->nadvertisers   = !!lower->ops->activate;
-  dev->push_event     = lower->push_event;
-  dev->upper          = lower->priv;
-  lower->push_event   = sensor_rpmsg_push_event;
-  lower->priv         = dev;
+  dev->name              = basename(dev->path);
+  dev->nadvertisers      = lower->ops->activate ? 1 : -1;
+  dev->push_event        = lower->push_event;
+  dev->notify_interval   = lower->notify_interval;
+  dev->upper             = lower->priv;
+  lower->push_event      = sensor_rpmsg_push_event;
+  lower->notify_interval = sensor_rpmsg_notify_interval;
+  lower->priv            = dev;
   memcpy(&dev->lower, lower, sizeof(*lower));
-  dev->lower.ops      = &g_sensor_rpmsg_ops;
-  dev->drv            = lower;
+  dev->lower.ops         = &g_sensor_rpmsg_ops;
+  dev->drv               = lower;
 
   /* If openamp is ready, send advertisement to remote proc */
 
@@ -1639,15 +1884,21 @@ sensor_rpmsg_register(FAR struct sensor_lowerhalf_s *lower,
  * Input Parameters:
  *   lower - The instance of lower half sensor driver.
  *
+ * Returned Value:
+ *   The takeover rpmsg lowerhalf returned on success, NULL on failure.
  ****************************************************************************/
 
-void sensor_rpmsg_unregister(FAR struct sensor_lowerhalf_s *lower)
+FAR struct sensor_lowerhalf_s *
+sensor_rpmsg_unregister(FAR struct sensor_lowerhalf_s *lower)
 {
   FAR struct sensor_rpmsg_dev_s *dev = lower->priv;
 
-  if (lower->ops != &g_sensor_rpmsg_ops)
+  /* A physical sensor is its own advertiser, see sensor_rpmsg_register */
+
+  if (dev->nsubscribers != 0 ||
+      dev->nadvertisers > (dev->drv->ops->activate ? 1 : 0))
     {
-      return;
+      return NULL;
     }
 
   down_write(&g_dev_lock);
@@ -1655,7 +1906,9 @@ void sensor_rpmsg_unregister(FAR struct sensor_lowerhalf_s *lower)
   up_write(&g_dev_lock);
 
   nxsem_destroy(&dev->proxysem);
+  lower->priv = dev->upper;
   kmm_free(dev);
+  return lower;
 }
 
 /****************************************************************************

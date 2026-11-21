@@ -68,6 +68,7 @@
 #include <nuttx/fs/fs.h>
 #include <nuttx/fs/nfs.h>
 #include <nuttx/net/netconfig.h>
+#include <nuttx/lib/lib.h>
 
 #include <net/if.h>
 #include <netinet/in.h>
@@ -75,6 +76,7 @@
 
 #include "fs_heap.h"
 
+#include "inode/inode.h"
 #include "nfs.h"
 #include "rpc.h"
 #include "nfs_proto.h"
@@ -144,6 +146,7 @@ static ssize_t nfs_read(FAR struct file *filep, FAR char *buffer,
 static ssize_t nfs_write(FAR struct file *filep, FAR const char *buffer,
                    size_t buflen);
 static off_t   nfs_seek(FAR struct file *filep, off_t offset, int whence);
+static int     nfs_ioctl(FAR struct file *filep, int cmd, unsigned long arg);
 static int     nfs_sync(FAR struct file *filep);
 static int     nfs_dup(FAR const struct file *oldp, FAR struct file *newp);
 static int     nfs_fsinfo(FAR struct nfsmount *nmp);
@@ -181,6 +184,16 @@ static int     nfs_stat(FAR struct inode *mountpt, FAR const char *relpath,
                    FAR struct stat *buf);
 static int     nfs_chstat(FAR struct inode *mountpt, FAR const char *relpath,
                    FAR const struct stat *buf, int flags);
+#ifdef CONFIG_FS_LINKS
+static int     nfs_symlink(FAR struct inode *mountpt,
+                   FAR const char *target, FAR const char *relpath);
+static ssize_t nfs_readlink(FAR struct inode *mountpt,
+                   FAR const char *relpath, FAR char *buf, size_t bufsize);
+static int     nfs_link(FAR struct inode *mountpt,
+                   FAR const char *relpath1, FAR const char *relpath2);
+static int     nfs_lstat(FAR struct inode *mountpt,
+                   FAR const char *relpath, FAR struct stat *buf);
+#endif
 
 /****************************************************************************
  * Public Data
@@ -199,7 +212,7 @@ const struct mountpt_operations g_nfs_operations =
   nfs_read,                     /* read */
   nfs_write,                    /* write */
   nfs_seek,                     /* seek */
-  NULL,                         /* ioctl */
+  nfs_ioctl,                    /* ioctl */
   NULL,                         /* mmap */
   nfs_truncate,                 /* truncate */
   NULL,                         /* poll */
@@ -225,7 +238,16 @@ const struct mountpt_operations g_nfs_operations =
   nfs_rmdir,                    /* rmdir */
   nfs_rename,                   /* rename */
   nfs_stat,                     /* stat */
-  nfs_chstat                    /* chstat */
+  nfs_chstat,                   /* chstat */
+  NULL,                         /* syncfs */
+  NULL,                         /* ioctldir */
+  NULL,                         /* permission */
+#ifdef CONFIG_FS_LINKS
+  nfs_link,                     /* link */
+  nfs_symlink,                  /* symlink */
+  nfs_readlink,                 /* readlink */
+  nfs_lstat                     /* lstat */
+#endif
 };
 
 /****************************************************************************
@@ -561,7 +583,7 @@ static int nfs_fileopen(FAR struct nfsmount *nmp, FAR struct nfsnode *np,
 
   /* Find the NFS node associate with the path */
 
-  ret = nfs_findnode(nmp, relpath, &fhandle, &fattr, NULL);
+  ret = nfs_findnode(nmp, relpath, &fhandle, &fattr, NULL, false);
   if (ret != OK)
     {
       ferr("ERROR: nfs_findnode returned: %d\n", ret);
@@ -624,7 +646,7 @@ static int nfs_fileopen(FAR struct nfsmount *nmp, FAR struct nfsnode *np,
    * access is ignored.
    */
 
-  if ((oflags & (O_TRUNC | O_WRONLY)) == (O_TRUNC | O_WRONLY))
+  if ((oflags & O_TRUNC) != 0 && (oflags & O_ACCMODE) != O_RDONLY)
     {
       struct stat buf;
 
@@ -656,6 +678,7 @@ static int nfs_open(FAR struct file *filep, FAR const char *relpath,
 {
   FAR struct nfsmount *nmp;
   FAR struct nfsnode *np;
+  size_t len;
   int ret;
 
   /* Get the mountpoint inode reference from the file structure and the
@@ -667,7 +690,8 @@ static int nfs_open(FAR struct file *filep, FAR const char *relpath,
 
   /* Pre-allocate the file private data to describe the opened file. */
 
-  np = fs_heap_zalloc(sizeof(struct nfsnode));
+  len = strlen(relpath);
+  np = fs_heap_zalloc(sizeof(struct nfsnode) + len);
   if (!np)
     {
       ferr("ERROR: Failed to allocate private data\n");
@@ -732,6 +756,8 @@ static int nfs_open(FAR struct file *filep, FAR const char *relpath,
   /* Attach the private data to the struct file instance */
 
   filep->f_priv = np;
+
+  memcpy(np->n_relpath, relpath, len + 1);
 
   /* In write/append mode, we need to set the file pointer to the end of
    * the file.
@@ -1302,6 +1328,36 @@ static int nfs_sync(FAR struct file *filep)
 }
 
 /****************************************************************************
+ * Name: nfs_ioctl
+ *
+ * Description:
+ *   Handle I/O control commands for NFS files.
+ *
+ ****************************************************************************/
+
+static int nfs_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
+{
+  FAR struct nfsnode *np;
+  int ret = -ENOTTY;
+
+  DEBUGASSERT(filep->f_priv != NULL && filep->f_inode != NULL);
+  np = filep->f_priv;
+
+  if (cmd == FIOC_FILEPATH)
+    {
+      FAR char *path = (FAR char *)(uintptr_t)arg;
+
+      ret = inode_getpath(filep->f_inode, path, PATH_MAX);
+      if (ret >= 0)
+        {
+          strlcat(path, np->n_relpath, PATH_MAX);
+        }
+    }
+
+  return ret;
+}
+
+/****************************************************************************
  * Name: nfs_dup
  *
  * Description:
@@ -1524,7 +1580,7 @@ static int nfs_opendir(FAR struct inode *mountpt, FAR const char *relpath,
 
   /* Find the NFS node associate with the path */
 
-  ret = nfs_findnode(nmp, relpath, &fhandle, &obj_attributes, NULL);
+  ret = nfs_findnode(nmp, relpath, &fhandle, &obj_attributes, NULL, false);
   if (ret != OK)
     {
       ferr("ERROR: nfs_findnode failed: %d\n", ret);
@@ -1728,7 +1784,7 @@ next_entry:
        * file?
        */
 
-       else
+      else
         {
           finfo("No data but not end of directory???\n");
           goto read_dir;
@@ -1802,37 +1858,37 @@ next_entry:
   tmp = fxdr_unsigned(uint32_t, obj_attributes.fa_type);
   switch (tmp)
     {
-    default:
-    case NFNON:        /* Unknown type */
-      break;
+      default:
+      case NFNON:        /* Unknown type */
+        break;
 
-    case NFSOCK:       /* Socket */
-      entry->d_type = DTYPE_SOCK;
-      break;
+      case NFSOCK:       /* Socket */
+        entry->d_type = DTYPE_SOCK;
+        break;
 
-    case NFLNK:        /* Symbolic link */
-      entry->d_type = DTYPE_LINK;
-      break;
+      case NFLNK:        /* Symbolic link */
+        entry->d_type = DTYPE_LINK;
+        break;
 
-    case NFREG:        /* Regular file */
-      entry->d_type = DTYPE_FILE;
-      break;
+      case NFREG:        /* Regular file */
+        entry->d_type = DTYPE_FILE;
+        break;
 
-    case NFDIR:        /* Directory */
-      entry->d_type = DTYPE_DIRECTORY;
-      break;
+      case NFDIR:        /* Directory */
+        entry->d_type = DTYPE_DIRECTORY;
+        break;
 
-    case NFBLK:        /* Block special device file */
-      entry->d_type = DTYPE_BLK;
-      break;
+      case NFBLK:        /* Block special device file */
+        entry->d_type = DTYPE_BLK;
+        break;
 
-    case NFFIFO:       /* Named FIFO */
-      entry->d_type = DTYPE_FIFO;
-      break;
+      case NFFIFO:       /* Named FIFO */
+        entry->d_type = DTYPE_FIFO;
+        break;
 
-    case NFCHR:        /* Character special device file */
-      entry->d_type = DTYPE_CHR;
-      break;
+      case NFCHR:        /* Character special device file */
+        entry->d_type = DTYPE_CHR;
+        break;
     }
 
   finfo("type: %d->%d\n", (int)tmp, entry->d_type);
@@ -2866,37 +2922,37 @@ static mode_t nfs_stat_mode(unsigned int mode, unsigned int type)
 
   switch (type)
     {
-    default:
-    case NFNON:   /* Unknown type */
-      break;
+      default:
+      case NFNON:   /* Unknown type */
+        break;
 
-    case NFREG:   /* Regular file */
-      mode |= S_IFREG;
-      break;
+      case NFREG:   /* Regular file */
+        mode |= S_IFREG;
+        break;
 
-    case NFDIR:   /* Directory */
-      mode |= S_IFDIR;
-      break;
+      case NFDIR:   /* Directory */
+        mode |= S_IFDIR;
+        break;
 
-    case NFBLK:   /* Block special device file */
-      mode |= S_IFBLK;
-      break;
+      case NFBLK:   /* Block special device file */
+        mode |= S_IFBLK;
+        break;
 
-    case NFCHR:   /* Character special device file */
-      mode |= S_IFCHR;
-      break;
+      case NFCHR:   /* Character special device file */
+        mode |= S_IFCHR;
+        break;
 
-    case NFLNK:   /* Symbolic link */
-      mode |= S_IFLNK;
-      break;
+      case NFLNK:   /* Symbolic link */
+        mode |= S_IFLNK;
+        break;
 
-    case NFSOCK:  /* Socket */
-      mode |= S_IFSOCK;
-      break;
+      case NFSOCK:  /* Socket */
+        mode |= S_IFSOCK;
+        break;
 
-    case NFFIFO:  /* Named pipe */
-      mode |= S_IFIFO;
-      break;
+      case NFFIFO:  /* Named pipe */
+        mode |= S_IFIFO;
+        break;
     }
 
   return mode;
@@ -2941,7 +2997,7 @@ static int nfs_stat(FAR struct inode *mountpt, FAR const char *relpath,
 
   /* Get the file handle attributes of the requested node */
 
-  ret = nfs_findnode(nmp, relpath, &fhandle, &attributes, NULL);
+  ret = nfs_findnode(nmp, relpath, &fhandle, &attributes, NULL, false);
   if (ret != OK)
     {
       ferr("ERROR: nfs_findnode failed: %d\n", ret);
@@ -2986,6 +3042,7 @@ static int nfs_chstat(FAR struct inode *mountpt, FAR const char *relpath,
 {
   FAR struct nfsmount *nmp;
   struct file_handle fhandle;
+  struct nfs_fattr attributes;
   struct nfsnode np;
   int ret;
 
@@ -3006,7 +3063,7 @@ static int nfs_chstat(FAR struct inode *mountpt, FAR const char *relpath,
 
   /* Get the file handle of the requested node */
 
-  ret = nfs_findnode(nmp, relpath, &fhandle, NULL, NULL);
+  ret = nfs_findnode(nmp, relpath, &fhandle, &attributes, NULL, false);
   if (ret != OK)
     {
       ferr("ERROR: nfs_findnode failed: %d\n", ret);
@@ -3026,3 +3083,363 @@ errout_with_lock:
   nxmutex_unlock(&nmp->nm_lock);
   return ret;
 }
+
+#ifdef CONFIG_FS_LINKS
+/****************************************************************************
+ * Name: nfs_symlink
+ *
+ * Description:
+ *   Create a symbolic link at 'relpath' pointing to 'target'
+ *
+ * Returned Value:
+ *   0 on success; a negated errno value on failure.
+ *
+ ****************************************************************************/
+
+static int nfs_symlink(FAR struct inode *mountpt,
+                       FAR const char *target, FAR const char *relpath)
+{
+  FAR struct nfsmount *nmp;
+  struct file_handle   fhandle;
+  FAR char            *filename;
+  struct nfs_fattr     fattr;
+  FAR uint32_t        *ptr;
+  int                  namelen;
+  int                  reqlen;
+  int                  ret;
+
+  /* Sanity checks */
+
+  DEBUGASSERT(mountpt && mountpt->i_private && target && relpath);
+
+  /* Get the mountpoint private data from the inode structure */
+
+  nmp = mountpt->i_private;
+
+  /* Allocate buffer for filename */
+
+  filename = lib_get_tempbuffer(NAME_MAX + 1);
+  if (filename == NULL)
+    {
+      ferr("ERROR: Failed to allocate buffer for filename\n");
+      return -ENOMEM;
+    }
+
+  ret = nxmutex_lock(&nmp->nm_lock);
+  if (ret < 0)
+    {
+      goto errout_with_filename;
+    }
+
+  /* Find the parent directory of the symlink */
+
+  ret = nfs_finddir(nmp, relpath, &fhandle, &fattr, filename);
+  if (ret != OK)
+    {
+      ferr("ERROR: nfs_finddir failed: %d\n", ret);
+      goto errout_with_lock;
+    }
+
+  /* Create the SYMLINK RPC call arguments */
+
+  ptr    = (FAR uint32_t *)&nmp->nm_msgbuffer.symlink.symlink;
+  reqlen = 0;
+
+  /* Copy the variable length, directory file handle */
+
+  *ptr++  = txdr_unsigned(fhandle.length);
+  reqlen += sizeof(uint32_t);
+
+  memcpy(ptr, &fhandle.handle, fhandle.length);
+  reqlen += uint32_alignup(fhandle.length);
+  ptr    += uint32_increment(fhandle.length);
+
+  /* Copy the variable-length symlink name */
+
+  namelen = strlen(filename);
+  *ptr++  = txdr_unsigned(namelen);
+  reqlen += sizeof(uint32_t);
+
+  memcpy(ptr, filename, namelen);
+  ptr    += uint32_increment(namelen);
+  reqlen += uint32_alignup(namelen);
+
+  /* Set symlink attributes - mode 0777 */
+
+  *ptr++  = nfs_true;
+  *ptr++  = txdr_unsigned(0777);
+  reqlen += 2 * sizeof(uint32_t);
+
+  /* Other attributes: don't set */
+
+  *ptr++  = nfs_false;
+  *ptr++  = nfs_false;
+  *ptr++  = nfs_false;
+  *ptr++  = HTONL(NFSV3SATTRTIME_DONTCHANGE);
+  *ptr++  = HTONL(NFSV3SATTRTIME_DONTCHANGE);
+  reqlen += 5 * sizeof(uint32_t);
+
+  /* Copy the target path */
+
+  namelen = strlen(target);
+  *ptr++  = txdr_unsigned(namelen);
+  reqlen += sizeof(uint32_t);
+
+  memcpy(ptr, target, namelen);
+  reqlen += uint32_alignup(namelen);
+
+  /* Perform the SYMLINK RPC */
+
+  nfs_statistics(NFSPROC_SYMLINK);
+  ret = nfs_request(nmp, NFSPROC_SYMLINK,
+                    &nmp->nm_msgbuffer.symlink, reqlen,
+                    nmp->nm_iobuffer, nmp->nm_buflen);
+
+errout_with_lock:
+  nxmutex_unlock(&nmp->nm_lock);
+
+errout_with_filename:
+  lib_put_tempbuffer(filename);
+  return ret;
+}
+
+/****************************************************************************
+ * Name: nfs_readlink
+ *
+ * Description:
+ *   Read the target of a symbolic link
+ *
+ * Returned Value:
+ *   The number of bytes placed in the buffer on success; a negated errno
+ *   value on failure.
+ *
+ ****************************************************************************/
+
+static ssize_t nfs_readlink(FAR struct inode *mountpt,
+                            FAR const char *relpath,
+                            FAR char *buf, size_t bufsize)
+{
+  FAR struct nfsmount *nmp;
+  struct file_handle fhandle;
+  struct nfs_fattr attributes;
+  int ret;
+
+  /* Sanity checks */
+
+  DEBUGASSERT(mountpt && mountpt->i_private);
+
+  /* Get the mountpoint private data from the inode structure */
+
+  nmp = mountpt->i_private;
+  DEBUGASSERT(nmp && buf);
+
+  ret = nxmutex_lock(&nmp->nm_lock);
+  if (ret < 0)
+    {
+      return ret;
+    }
+
+  /* Find the symlink (don't follow it) */
+
+  ret = nfs_findnode(nmp, relpath, &fhandle, &attributes, NULL, true);
+  if (ret != OK)
+    {
+      ferr("ERROR: nfs_findnode failed: %d\n", ret);
+      goto errout_with_lock;
+    }
+
+  /* Read the symlink target using the internal helper */
+
+  ret = nfs_readlink_internal(nmp, &fhandle, buf, bufsize);
+
+errout_with_lock:
+  nxmutex_unlock(&nmp->nm_lock);
+  return ret;
+}
+
+/****************************************************************************
+ * Name: nfs_link
+ *
+ * Description:
+ *   Create a hard link at 'relpath2' pointing to 'relpath1'
+ *
+ * Returned Value:
+ *   0 on success; a negated errno value on failure.
+ *
+ ****************************************************************************/
+
+static int nfs_link(FAR struct inode *mountpt,
+                    FAR const char *relpath1, FAR const char *relpath2)
+{
+  FAR struct nfsmount *nmp;
+  struct file_handle target_fhandle;
+  struct file_handle link_fhandle;
+  struct nfs_fattr fattr;
+  FAR char *filename;
+  FAR uint32_t *ptr;
+  int namelen;
+  int reqlen;
+  int ret;
+
+  /* Sanity checks */
+
+  DEBUGASSERT(mountpt && mountpt->i_private);
+
+  /* Get the mountpoint private data from the inode structure */
+
+  nmp = mountpt->i_private;
+  DEBUGASSERT(nmp);
+
+  /* Allocate buffer for filename */
+
+  filename = lib_get_tempbuffer(NAME_MAX + 1);
+  if (filename == NULL)
+    {
+      ferr("ERROR: Failed to allocate buffer for filename\n");
+      return -ENOMEM;
+    }
+
+  ret = nxmutex_lock(&nmp->nm_lock);
+  if (ret < 0)
+    {
+      goto errout_with_filename;
+    }
+
+  /* Find the target file */
+
+  ret = nfs_findnode(nmp, relpath1, &target_fhandle, &fattr, NULL, false);
+  if (ret != OK)
+    {
+      ferr("ERROR: nfs_findnode (relpath1) failed: %d\n", ret);
+      goto errout_with_lock;
+    }
+
+  /* Find the parent directory of the link */
+
+  ret = nfs_finddir(nmp, relpath2, &link_fhandle, &fattr, filename);
+  if (ret != OK)
+    {
+      ferr("ERROR: nfs_finddir (relpath2) failed: %d\n", ret);
+      goto errout_with_lock;
+    }
+
+  /* Create the LINK RPC call arguments */
+
+  ptr    = (FAR uint32_t *)&nmp->nm_msgbuffer.link.link;
+  reqlen = 0;
+
+  /* Copy the target file handle */
+
+  *ptr++  = txdr_unsigned(target_fhandle.length);
+  reqlen += sizeof(uint32_t);
+
+  memcpy(ptr, &target_fhandle.handle, target_fhandle.length);
+  reqlen += uint32_alignup(target_fhandle.length);
+  ptr    += uint32_increment(target_fhandle.length);
+
+  /* Copy the link directory file handle */
+
+  *ptr++  = txdr_unsigned(link_fhandle.length);
+  reqlen += sizeof(uint32_t);
+
+  memcpy(ptr, &link_fhandle.handle, link_fhandle.length);
+  reqlen += uint32_alignup(link_fhandle.length);
+  ptr    += uint32_increment(link_fhandle.length);
+
+  /* Copy the link name */
+
+  namelen = strlen(filename);
+  *ptr++  = txdr_unsigned(namelen);
+  reqlen += sizeof(uint32_t);
+
+  memcpy(ptr, filename, namelen);
+  reqlen += uint32_alignup(namelen);
+
+  /* Perform the LINK RPC */
+
+  nfs_statistics(NFSPROC_LINK);
+  ret = nfs_request(nmp, NFSPROC_LINK,
+                    &nmp->nm_msgbuffer.link, reqlen,
+                    nmp->nm_iobuffer, nmp->nm_buflen);
+
+errout_with_lock:
+  nxmutex_unlock(&nmp->nm_lock);
+
+errout_with_filename:
+  lib_put_tempbuffer(filename);
+  return ret;
+}
+
+/****************************************************************************
+ * Name: nfs_lstat
+ *
+ * Description:
+ *   Get file status without following symbolic links
+ *
+ * Returned Value:
+ *   0 on success; a negated errno value on failure.
+ *
+ ****************************************************************************/
+
+static int nfs_lstat(FAR struct inode *mountpt, FAR const char *relpath,
+                     FAR struct stat *buf)
+{
+  FAR struct nfsmount *nmp;
+  struct file_handle fhandle;
+  struct nfs_fattr attributes;
+  struct timespec ts;
+  int ret;
+
+  finfo("relpath=%s\n", relpath);
+
+  /* Sanity checks */
+
+  DEBUGASSERT(mountpt && mountpt->i_private);
+
+  /* Get the mountpoint private data from the inode structure */
+
+  nmp = mountpt->i_private;
+  DEBUGASSERT(nmp && buf);
+
+  memset(buf, 0, sizeof(*buf));
+
+  ret = nxmutex_lock(&nmp->nm_lock);
+  if (ret < 0)
+    {
+      return ret;
+    }
+
+  /* Get the file handle attributes of the requested node (don't follow) */
+
+  ret = nfs_findnode(nmp, relpath, &fhandle, &attributes, NULL, true);
+  if (ret != OK)
+    {
+      ferr("ERROR: nfs_findnode failed: %d\n", ret);
+      goto errout_with_lock;
+    }
+
+  /* Note: We don't call GETATTR here because findnode already returned
+   * the attributes, and for symlinks we want the attributes of the link
+   * itself, not the target.
+   */
+
+  buf->st_mode  = nfs_stat_mode(fxdr_unsigned(uint16_t, attributes.fa_mode),
+                                fxdr_unsigned(uint8_t, attributes.fa_type));
+  buf->st_size  = fxdr_hyper(&attributes.fa_size);
+
+  /* Extract time values as type time_t in units of seconds */
+
+  fxdr_nfsv3time(&attributes.fa_mtime, &ts);
+  buf->st_mtime = ts.tv_sec;
+
+  fxdr_nfsv3time(&attributes.fa_atime, &ts);
+  buf->st_atime = ts.tv_sec;
+
+  fxdr_nfsv3time(&attributes.fa_ctime, &ts);
+  buf->st_ctime = ts.tv_sec;
+
+errout_with_lock:
+  nxmutex_unlock(&nmp->nm_lock);
+  return ret;
+}
+#endif /* CONFIG_FS_LINKS */

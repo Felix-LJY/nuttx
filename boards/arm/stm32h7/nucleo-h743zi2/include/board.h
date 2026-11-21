@@ -121,20 +121,26 @@
 #define STM32_PLL1Q_FREQUENCY    (STM32_VCO1_FREQUENCY / 4)
 #define STM32_PLL1R_FREQUENCY    (STM32_VCO1_FREQUENCY / 8)
 
-/* PLL2 */
+/* PLL2
+ *
+ *   PLL2_VCO = (8,000,000 / 2) * 200 = 800 MHz
+ *
+ *   PLL2Q = PLL2_VCO/10 = 800 MHz / 10  = 80 MHz (FDCAN kernel clock)
+ */
 
 #define STM32_PLLCFG_PLL2CFG (RCC_PLLCFGR_PLL2VCOSEL_WIDE | \
                               RCC_PLLCFGR_PLL2RGE_4_8_MHZ | \
-                              RCC_PLLCFGR_DIVP2EN)
+                              RCC_PLLCFGR_DIVP2EN | \
+                              RCC_PLLCFGR_DIVQ2EN)
 #define STM32_PLLCFG_PLL2M       RCC_PLLCKSELR_DIVM2(2)
 #define STM32_PLLCFG_PLL2N       RCC_PLL2DIVR_N2(200)
 #define STM32_PLLCFG_PLL2P       RCC_PLL2DIVR_P2(40)
-#define STM32_PLLCFG_PLL2Q       0
+#define STM32_PLLCFG_PLL2Q       RCC_PLL2DIVR_Q2(10)
 #define STM32_PLLCFG_PLL2R       0
 
 #define STM32_VCO2_FREQUENCY     ((STM32_HSE_FREQUENCY / 2) * 200)
 #define STM32_PLL2P_FREQUENCY    (STM32_VCO2_FREQUENCY / 2)
-#define STM32_PLL2Q_FREQUENCY
+#define STM32_PLL2Q_FREQUENCY    (STM32_VCO2_FREQUENCY / 10)
 #define STM32_PLL2R_FREQUENCY
 
 /* PLL3 */
@@ -211,6 +217,16 @@
 #define STM32_TIM16_CLKIN  (2*STM32_PCLK2_FREQUENCY)
 #define STM32_TIM17_CLKIN  (2*STM32_PCLK2_FREQUENCY)
 
+/* LPTIM kernel clocks (RCC_D2CCIP2R LPTIM1SEL and RCC_D3CCIPR LPTIM2SEL /
+ * LPTIM345SEL reset values): LPTIM1 on PCLK1, LPTIM2-5 on PCLK4
+ */
+
+#define STM32_LPTIM1_CLKIN STM32_PCLK1_FREQUENCY
+#define STM32_LPTIM2_CLKIN STM32_PCLK4_FREQUENCY
+#define STM32_LPTIM3_CLKIN STM32_PCLK4_FREQUENCY
+#define STM32_LPTIM4_CLKIN STM32_PCLK4_FREQUENCY
+#define STM32_LPTIM5_CLKIN STM32_PCLK4_FREQUENCY
+
 /* Kernel Clock Configuration
  *
  * Note: look at Table 54 in ST Manual
@@ -244,9 +260,12 @@
 
 #define STM32_RCC_D3CCIPR_ADCSRC     RCC_D3CCIPR_ADCSEL_PLL2
 
-/* FDCAN 1 2 clock source - HSE (TODO: Not the best choice for this board?) */
+/* FDCAN 1 2 clock source - PLL2Q (80 MHz).  The 8 MHz HSE cannot reach the
+ * default CAN FD data phase bitrate of 4 Mbit/s.
+ */
 
-#define STM32_RCC_D2CCIP1R_FDCANSEL  RCC_D2CCIP1R_FDCANSEL_HSE   /* FDCAN 1 2 clock source */
+#define STM32_RCC_D2CCIP1R_FDCANSEL  RCC_D2CCIP1R_FDCANSEL_PLL2  /* FDCAN 1 2 clock source */
+#define STM32_FDCANCLK               STM32_PLL2Q_FREQUENCY
 
 /* FLASH wait states
  *
@@ -453,20 +472,15 @@
 
 #ifndef __ASSEMBLY__
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
  * Public Function Prototypes
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

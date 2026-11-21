@@ -86,7 +86,7 @@ ifneq ($(CONFIG_PROFILE_ALL)$(CONFIG_SIM_PROFILE),)
   ARCHOPTIMIZATION += -pg
 endif
 
-ifeq ($(CONFIG_SIM_ASAN),y)
+ifneq ($(CONFIG_SIM_ASAN)$(CONFIG_MM_KASAN_SIM),)
   ARCHOPTIMIZATION += -fsanitize=address -fsanitize-address-use-after-scope
   ARCHOPTIMIZATION += -fsanitize=pointer-compare -fsanitize=pointer-subtract
 else ifeq ($(CONFIG_MM_KASAN_INSTRUMENT_ALL),y)
@@ -303,6 +303,11 @@ endif
 
 LDELFFLAGS = -r -e main --gc-sections
 LDELFFLAGS += -T $(call CONVERT_PATH,$(TOPDIR)/libs/libc/elf/gnu-elf.ld)
+
+# The --wrap options of CONFIG_TLS_EMUTLS (tools/Config.mk)
+
+LDMODULEFLAGS += $(EMUTLS_LDFLAGS)
+LDELFFLAGS += $(EMUTLS_LDFLAGS)
 
 ifeq ($(CONFIG_HOST_MACOS),y)
   LDFLAGS += -Wl,-dead_strip

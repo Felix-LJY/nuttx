@@ -37,6 +37,7 @@
  ****************************************************************************/
 
 #include <nuttx/config.h>
+#include <stdbool.h>
 #include <nuttx/fs/ioctl.h>
 #include <nuttx/circbuf.h>
 #include <nuttx/semaphore.h>
@@ -151,12 +152,13 @@
 
 /* These are definitions for touch gesture */
 
-#define TOUCH_DOUBLE_CLICK   (0x00)
-#define TOUCH_SLIDE_UP       (0x01)
-#define TOUCH_SLIDE_DOWN     (0x02)
-#define TOUCH_SLIDE_LEFT     (0x03)
-#define TOUCH_SLIDE_RIGHT    (0x04)
-#define TOUCH_PALM           (0x05)
+#define TOUCH_SINGLE_CLICK   (0x00)
+#define TOUCH_DOUBLE_CLICK   (0x01)
+#define TOUCH_SLIDE_UP       (0x02)
+#define TOUCH_SLIDE_DOWN     (0x03)
+#define TOUCH_SLIDE_LEFT     (0x04)
+#define TOUCH_SLIDE_RIGHT    (0x05)
+#define TOUCH_PALM           (0x06)
 
 /* Help function */
 
@@ -383,14 +385,10 @@ void touch_unregister(FAR struct touch_lowerhalf_s *lower,
                       FAR const char *path);
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

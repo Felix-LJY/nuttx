@@ -20,11 +20,11 @@
 #
 ############################################################################
 
-ifneq ($(filter y,$(CONFIG_LIBC_ATOMIC_IRQ)$(CONFIG_LIBC_ATOMIC_HWSPINLOCK)),)
-  CSRCS += arch_atomic.c
-endif
+CSRCS += arch_atomic.c
 
-CSRCS += arch_atomic64.c
+ifeq ($(CONFIG_LIBC_ATOMIC_IRQ)$(CONFIG_LIBC_ATOMIC_HWSPINLOCK),)
+  CSRCS += arch_atomic_spinlock.c
+endif
 
 ifeq ($(CONFIG_MM_KASAN),y)
   CSRCS += arch_libc.c
@@ -63,6 +63,13 @@ endif
 ifeq ($(CONFIG_ARCH_TRICORE),y)
 include $(TOPDIR)/libs/libc/machine/tricore/Make.defs
 endif
+
+# The weak up_umulh64() fallback must come after the per-architecture
+# sources: libc.a members are scanned in order and a weak definition
+# satisfies the reference before the strong one is reached.
+
+CSRCS += up_umulh64.c
+
 DEPPATH += --dep-path machine
 VPATH += :machine
 

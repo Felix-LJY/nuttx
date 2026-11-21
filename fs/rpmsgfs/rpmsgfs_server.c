@@ -146,9 +146,9 @@ static bool rpmsgfs_ns_match(FAR struct rpmsg_device *rdev,
 static void rpmsgfs_ns_bind(FAR struct rpmsg_device *rdev,
                             FAR void *priv_, FAR const char *name,
                             uint32_t dest);
-static int  rpmsgfs_ept_cb(FAR struct rpmsg_endpoint *ept,
-                           FAR void *data, size_t len, uint32_t src,
-                           FAR void *priv);
+static int  rpmsgfs_server_ept_cb(FAR struct rpmsg_endpoint *ept,
+                                  FAR void *data, size_t len, uint32_t src,
+                                  FAR void *priv);
 
 /****************************************************************************
  * Private Data
@@ -390,6 +390,19 @@ static int rpmsgfs_open_handler(FAR struct rpmsg_endpoint *ept,
     }
 
   ret = file_open(filep, msg->pathname, msg->flags, msg->mode);
+  if (ret >= 0 && (msg->flags & O_ACCMODE) == O_RDONLY)
+    {
+      struct stat buf;
+
+      /* A directory: the client opens it with the directory messages */
+
+      if (file_fstat(filep, &buf) >= 0 && S_ISDIR(buf.st_mode))
+        {
+          file_close(filep);
+          ret = -EISDIR;
+        }
+    }
+
   if (ret < 0)
     {
       filep->f_inode = NULL;
@@ -430,6 +443,10 @@ static int rpmsgfs_read_handler(FAR struct rpmsg_endpoint *ept,
   uint32_t space;
 
   filep = rpmsgfs_get_file(priv, msg->fd);
+  if (filep != NULL && msg->offset >= 0)
+    {
+      file_seek(filep, msg->offset, SEEK_SET);
+    }
 
   while (read < msg->count)
     {
@@ -483,6 +500,11 @@ static int rpmsgfs_write_handler(FAR struct rpmsg_endpoint *ept,
     {
       size_t written = 0;
 
+      if (msg->offset >= 0)
+        {
+          file_seek(filep, msg->offset, SEEK_SET);
+        }
+
       while (written < msg->count)
         {
           ret = file_write(filep, msg->buf + written, msg->count - written);
@@ -515,7 +537,10 @@ static int rpmsgfs_lseek_handler(FAR struct rpmsg_endpoint *ept,
   filep = rpmsgfs_get_file(priv, msg->fd);
   if (filep != NULL)
     {
-      ret = file_seek(filep, msg->offset, msg->whence);
+      /* header.result is 32 bits, so return the position in offset */
+
+      msg->offset = file_seek(filep, msg->offset, msg->whence);
+      ret = msg->offset < 0 ? msg->offset : 0;
     }
 
   msg->header.result = ret;
@@ -655,7 +680,7 @@ static int rpmsgfs_readdir_handler(FAR struct rpmsg_endpoint *ept,
   FAR struct dirent *entry;
   int ret = -ENOENT;
   FAR void *dir;
-  size_t size;
+  ssize_t size;
 
   dir = rpmsgfs_get_dir(priv, msg->fd);
   if (dir)
@@ -665,15 +690,25 @@ static int rpmsgfs_readdir_handler(FAR struct rpmsg_endpoint *ept,
         {
           size = MIN(rpmsg_get_tx_buffer_size(ept),
                      rpmsg_get_rx_buffer_size(ept));
-          size = MIN(size - len, strlen(entry->d_name) + 1);
-          msg->type = entry->d_type;
-          strlcpy(msg->name, entry->d_name, size);
-          msg->ino = entry->d_ino;
-          len += size;
-          ret = 0;
+          if (size < 0)
+            {
+              ret = size;
+              goto out;
+            }
+
+          if (size >= len)
+            {
+              size = MIN(size - len, strlen(entry->d_name) + 1);
+              msg->type = entry->d_type;
+              strlcpy(msg->name, entry->d_name, size);
+              msg->ino = entry->d_ino;
+              len += size;
+              ret = 0;
+            }
         }
     }
 
+out:
   msg->header.result = ret;
   return rpmsg_send(ept, msg, len);
 }
@@ -839,12 +874,14 @@ static int rpmsgfs_chstat_handler(FAR struct rpmsg_endpoint *ept,
                                   uint32_t src, FAR void *priv)
 {
   FAR struct rpmsgfs_chstat_s *msg = data;
+  bool nofollow = (msg->flags & CH_STAT_NOFOLLOW) != 0;
   struct timespec times[2];
   int ret = 0;
 
   if (msg->flags & CH_STAT_MODE)
     {
-      ret = chmod(msg->pathname, msg->buf.mode);
+      ret = nofollow ? lchmod(msg->pathname, msg->buf.mode) :
+                       chmod(msg->pathname, msg->buf.mode);
       if (ret < 0)
         {
           ret = -get_errno();
@@ -854,7 +891,8 @@ static int rpmsgfs_chstat_handler(FAR struct rpmsg_endpoint *ept,
 
   if (msg->flags & (CH_STAT_UID | CH_STAT_GID))
     {
-      ret = chown(msg->pathname, msg->buf.uid, msg->buf.gid);
+      ret = nofollow ? lchown(msg->pathname, msg->buf.uid, msg->buf.gid) :
+                       chown(msg->pathname, msg->buf.uid, msg->buf.gid);
       if (ret < 0)
         {
           ret = -get_errno();
@@ -886,7 +924,8 @@ static int rpmsgfs_chstat_handler(FAR struct rpmsg_endpoint *ept,
           times[1].tv_nsec = UTIME_OMIT;
         }
 
-      ret = utimens(msg->pathname, times);
+      ret = nofollow ? lutimens(msg->pathname, times) :
+                       utimens(msg->pathname, times);
       if (ret < 0)
         {
           ret = -get_errno();
@@ -920,11 +959,29 @@ static int rpmsgfs_readlink_handler(FAR struct rpmsg_endpoint *ept,
 {
   FAR struct rpmsgfs_readlink_s *msg = data;
   ssize_t ret;
-  uint32_t space;
+  ssize_t space;
 
   space = rpmsg_get_tx_buffer_size(ept);
+  if (space < 0)
+    {
+      ret = space;
+      goto out;
+    }
+
+  if (space <= sizeof(*msg))
+    {
+      ret = -EINVAL;
+      goto out;
+    }
+
   ret = readlink(msg->pathname, msg->pathname, space - sizeof(*msg));
-  msg->header.result = ret < 0 ? -get_errno() : ret;
+  if (ret < 0)
+    {
+      ret = -get_errno();
+    }
+
+out:
+  msg->header.result = ret;
   return rpmsg_send(ept, msg, sizeof(*msg) + (ret > 0 ? ret : 0));
 }
 
@@ -1021,7 +1078,7 @@ static void rpmsgfs_ns_bind(FAR struct rpmsg_device *rdev,
 
   ret = rpmsg_create_ept(&priv->ept, rdev, name,
                          RPMSG_ADDR_ANY, dest,
-                         rpmsgfs_ept_cb, rpmsg_destroy_ept);
+                         rpmsgfs_server_ept_cb, rpmsg_destroy_ept);
   if (ret)
     {
       nxmutex_destroy(&priv->lock);
@@ -1029,9 +1086,9 @@ static void rpmsgfs_ns_bind(FAR struct rpmsg_device *rdev,
     }
 }
 
-static int rpmsgfs_ept_cb(FAR struct rpmsg_endpoint *ept,
-                          FAR void *data, size_t len, uint32_t src,
-                          FAR void *priv)
+static int rpmsgfs_server_ept_cb(FAR struct rpmsg_endpoint *ept,
+                                 FAR void *data, size_t len, uint32_t src,
+                                 FAR void *priv)
 {
   struct rpmsgfs_header_s *header = data;
   uint32_t command = header->command;

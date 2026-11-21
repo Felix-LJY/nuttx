@@ -60,7 +60,8 @@
  * Pre-processor Definitions
  ****************************************************************************/
 
-#define RAMLOG_MAGIC_NUMBER 0x12345678
+#define RAMLOG_MAGIC_INIT  0x12340000
+#define RAMLOG_MAGIC_READY (0x56780000 | sizeof(struct ramlog_header_s))
 
 /****************************************************************************
  * Private Types
@@ -91,11 +92,11 @@ struct ramlog_user_s
 #endif
 
   /* The following the poll structures of threads waiting for driver events.
-   * The 'struct pollfd' reference for each open is also  retained in the
+   * The 'struct pollfd_s' reference for each open is also  retained in the
    * f_priv field of the 'struct file'.
    */
 
-  FAR struct pollfd *rl_fds;
+  FAR struct pollfd_s *rl_fds;
 };
 
 struct ramlog_dev_s
@@ -134,7 +135,7 @@ static ssize_t ramlog_file_write(FAR struct file *filep,
 static int     ramlog_file_ioctl(FAR struct file *filep, int cmd,
                                  unsigned long arg);
 static int     ramlog_file_poll(FAR struct file *filep,
-                                FAR struct pollfd *fds, bool setup);
+                                FAR struct pollfd_s *fds, bool setup);
 
 /****************************************************************************
  * Private Data
@@ -250,6 +251,7 @@ static uint32_t ramlog_bufferused(FAR struct ramlog_dev_s *priv,
                                   FAR struct ramlog_user_s *upriv)
 {
   uint32_t used = priv->rl_header->rl_head - upriv->rl_tail;
+
   return used > priv->rl_bufsize ? priv->rl_bufsize : used;
 }
 
@@ -380,7 +382,7 @@ static ssize_t ramlog_addbuf(FAR struct ramlog_dev_s *priv,
     }
   else
     {
-      flags = up_irq_save();
+      flags = irq_save();
     }
 
   if (ramlog_ratelimit(priv))
@@ -391,17 +393,17 @@ static ssize_t ramlog_addbuf(FAR struct ramlog_dev_s *priv,
         }
       else
         {
-          up_irq_restore(flags);
+          irq_restore(flags);
         }
 
       return len;
     }
 
 #ifdef CONFIG_RAMLOG_SYSLOG
-  if (header->rl_magic != RAMLOG_MAGIC_NUMBER && priv == &g_sysdev)
+  if (header->rl_magic != RAMLOG_MAGIC_READY && priv == &g_sysdev)
     {
       memset(header, 0, sizeof(g_sysbuffer));
-      header->rl_magic = RAMLOG_MAGIC_NUMBER;
+      header->rl_magic = RAMLOG_MAGIC_READY;
     }
 #endif
 
@@ -456,7 +458,7 @@ static ssize_t ramlog_addbuf(FAR struct ramlog_dev_s *priv,
     }
   else
     {
-      up_irq_restore(flags);
+      irq_restore(flags);
     }
 
   return len;
@@ -479,12 +481,6 @@ static ssize_t ramlog_file_read(FAR struct file *filep, FAR char *buffer,
   uint32_t tail;
   uint32_t pos;
 
-  /* If the circular buffer is empty, then wait for something to be written
-   * to it.  This function may NOT be called from an interrupt handler.
-   */
-
-  DEBUGASSERT(!up_interrupt_context());
-
   /* Get exclusive access to the rl_tail index */
 
   flags = enter_critical_section();
@@ -498,6 +494,15 @@ static ssize_t ramlog_file_read(FAR struct file *filep, FAR char *buffer,
       if (header->rl_head == upriv->rl_tail)
         {
           /* The circular buffer is empty. */
+
+          /* If the function be called from an interrupt handler,
+           * then just break out of the loop.
+           */
+
+          if (up_interrupt_context())
+            {
+              break;
+            }
 
 #ifdef CONFIG_RAMLOG_NONBLOCKING
           /* Return what we have (with zero mean the end-of-file) */
@@ -626,6 +631,16 @@ static int ramlog_file_ioctl(FAR struct file *filep, int cmd,
       case PIPEIOC_POLLINTHRD:
         upriv->rl_threashold = (uint32_t)arg;
         break;
+      case PIPEIOC_GETSIZE:
+        if (arg == 0)
+          {
+            ret = -EINVAL;
+          }
+        else
+          {
+            *(FAR unsigned int *)arg = priv->rl_bufsize;
+          }
+        break;
       case BIOC_FLUSH:
         ramlog_bufferflush(priv);
         break;
@@ -675,7 +690,7 @@ static int ramlog_file_ioctl(FAR struct file *filep, int cmd,
  * Name: ramlog_file_poll
  ****************************************************************************/
 
-static int ramlog_file_poll(FAR struct file *filep, FAR struct pollfd *fds,
+static int ramlog_file_poll(FAR struct file *filep, FAR struct pollfd_s *fds,
                             bool setup)
 {
   FAR struct inode *inode = filep->f_inode;
@@ -717,7 +732,7 @@ static int ramlog_file_poll(FAR struct file *filep, FAR struct pollfd *fds,
     {
       /* This is a request to tear down the poll. */
 
-      FAR struct pollfd **slot = (FAR struct pollfd **)fds->priv;
+      FAR struct pollfd_s **slot = (FAR struct pollfd_s **)fds->priv;
 
       /* Remove all memory of the poll setup */
 

@@ -1,6 +1,8 @@
 /****************************************************************************
  * boards/risc-v/rp23xx-rv/common/include/rp23xx_uniqueid.h
  *
+ * SPDX-License-Identifier: Apache-2.0
+ *
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.  The
@@ -28,8 +30,6 @@
 #ifdef __cplusplus
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -56,7 +56,6 @@ extern "C"
 
 void rp23xx_uniqueid_initialize(void);
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

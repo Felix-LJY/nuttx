@@ -1520,6 +1520,7 @@ int fat_dirshrink(struct fat_mountpt_s *fs, FAR uint8_t *direntry,
 {
   off_t clustersize;
   off_t remaining;
+  off_t savesector;
   uint32_t writetime;
   int32_t lastcluster;
   int32_t cluster;
@@ -1545,6 +1546,7 @@ int fat_dirshrink(struct fat_mountpt_s *fs, FAR uint8_t *direntry,
   /* This sector needs to be written back to disk eventually */
 
   fs->fs_dirty = true;
+  savesector   = fs->fs_currentsector;
 
   /* Now find the cluster change to be removed.  Start with the cluster
    * after the current one (which we know contains data).
@@ -1565,11 +1567,11 @@ int fat_dirshrink(struct fat_mountpt_s *fs, FAR uint8_t *direntry,
 
       if (remaining <= clustersize)
         {
-          /* No.. then nullify next cluster -- removing it from the
-           * chain.
+          /* Keep the retained cluster allocated and terminate its chain.
+           * A zero FAT entry would mark this live cluster as free.
            */
 
-          ret = fat_putcluster(fs, lastcluster, 0);
+          ret = fat_putcluster(fs, lastcluster, FAT_EOF);
           if (ret < 0)
             {
               return ret;
@@ -1602,7 +1604,11 @@ int fat_dirshrink(struct fat_mountpt_s *fs, FAR uint8_t *direntry,
       remaining  -= clustersize;
     }
 
-  return OK;
+  /* FAT lookups reuse fs_buffer. Restore the directory sector for callers
+   * that still hold a pointer into it, just as fat_dirtruncate() does.
+   */
+
+  return fat_fscacheread(fs, savesector);
 }
 
 /****************************************************************************
@@ -1769,6 +1775,16 @@ int fat_dirextend(FAR struct fat_mountpt_s *fs, FAR struct fat_file_s *ff,
       pos       += zerosize;
       remaining -= zerosize;
       sectndx    = pos & SEC_NDXMASK(fs);
+    }
+
+  /* Write the last sector back.  The other handles of the file read it
+   * from the volume, and must see the zeros.
+   */
+
+  ret = fat_ffcacheflush(fs, ff);
+  if (ret < 0)
+    {
+      return ret;
     }
 
   /* The truncation has completed without error.  Update the file size */
@@ -2087,9 +2103,11 @@ int fat_computefreeclusters(struct fat_mountpt_s *fs)
       fatsector    = fs->fs_fatbase;
       offset       = fs->fs_hwsectorsize;
 
-      /* Examine each cluster in the fat */
+      /* Examine each cluster in the fat.  Entries 0 and 1 are reserved,
+       * the data clusters are 2 to fs_nclusters + 1.
+       */
 
-      for (cluster = fs->fs_nclusters; cluster > 0; cluster--)
+      for (cluster = 0; cluster < fs->fs_nclusters + 2; cluster++)
         {
           /* If we are starting a new sector, then read the new sector in
            * fs_buffer
@@ -2117,7 +2135,7 @@ int fat_computefreeclusters(struct fat_mountpt_s *fs)
 
           if (fs->fs_type == FSTYPE_FAT16)
             {
-              if (FAT_GETFAT16(fs->fs_buffer, offset) == 0)
+              if (cluster >= 2 && FAT_GETFAT16(fs->fs_buffer, offset) == 0)
                 {
                   nfreeclusters++;
                 }
@@ -2126,7 +2144,7 @@ int fat_computefreeclusters(struct fat_mountpt_s *fs)
             }
           else
             {
-              if (FAT_GETFAT32(fs->fs_buffer, offset) == 0)
+              if (cluster >= 2 && FAT_GETFAT32(fs->fs_buffer, offset) == 0)
                 {
                   nfreeclusters++;
                 }

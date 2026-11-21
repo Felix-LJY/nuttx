@@ -27,19 +27,16 @@
  * Included Files
  ****************************************************************************/
 
+#include <stdbool.h>
 #include <nuttx/fs/ioctl.h>
 
 /****************************************************************************
  * Pre-Processor Declarations
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -333,7 +330,6 @@ struct fusb303_config_s
 int fusb303_register(FAR const char *devpath, FAR struct i2c_master_s *i2c,
                      uint8_t addr, FAR struct fusb303_config_s *config);
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

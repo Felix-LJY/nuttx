@@ -1,3 +1,24 @@
+############################################################################
+# net/Kconfig
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.  The
+# ASF licenses this file to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance with the
+# License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
+############################################################################
 #
 # For a description of the syntax of this configuration file,
 # see the file kconfig-language.txt in the NuttX tools repository.
@@ -20,10 +41,6 @@ config ARCH_PHY_POLLED
 	default n
 
 config ARCH_HAVE_NETDEV_STATISTICS
-	bool
-	default n
-
-config ARCH_HAVE_NETDEV_TIMESTAMP
 	bool
 	default n
 
@@ -70,6 +87,16 @@ config NET_DEFAULT_MAX_PORT
 	default 32000
 	---help---
 		Default Network max port
+
+config NET_NETPOLL
+	bool "Support Netpoll interface"
+	depends on NET_IPv4 && NET_ETHERNET
+	default n
+	---help---
+		Support Netpoll interface based on NETDEV lower-half interface.
+		Netpoll allows sending and receiving packets bypassing the network
+		stack, which makes it possible to use its interface from the interrupt
+		context
 
 menu "Driver buffer configuration"
 
@@ -139,7 +166,6 @@ config NET_LL_GUARDSIZE
 	int "Data Link Layer(L2) Guard size of Network buffer(IOB)"
 	default 50 if RNDIS
 	default 18 if NET_VLAN
-	default 16 if NET_CAN && NET_TIMESTAMP
 	default 14 if NET_ETHERNET
 	default 0
 	---help---
@@ -317,6 +343,54 @@ config NET_VLAN_COUNT
 
 endif # NET_VLAN
 
+menuconfig NET_BRIDGE
+	bool "Ethernet bridge support"
+	default n
+	depends on NET_ETHERNET
+	select NETDEV_IFINDEX
+	---help---
+		Enable a transparent, learning Ethernet bridge (IEEE 802.1D without
+		spanning tree).  A bridge is a virtual network device (e.g. br0)
+		created with the SIOCBRADDBR ioctl.  Ethernet (or IEEE 802.11)
+		devices are added to it as ports with SIOCBRADDIF.  Frames received
+		on a port are forwarded to the other ports based on a filtering
+		database of learned MAC addresses, and frames for the local host are
+		passed to the network stack through the bridge device, which holds
+		the IP configuration.
+
+		Only network drivers that use the upper-half interface
+		(netdev_lowerhalf_s) can be bridge ports.
+
+		There is no spanning tree protocol: the network must not contain
+		loops through the bridge.
+
+		Port devices must accept frames for foreign destination MAC
+		addresses (promiscuous mode, see NET_PROMISCUOUS) to forward unicast
+		traffic.
+
+if NET_BRIDGE
+
+config NET_BRIDGE_MAX_PORTS
+	int "Maximum number of ports per bridge"
+	default 4
+	range 2 32
+
+config NET_BRIDGE_FDB_SIZE
+	int "Filtering database size"
+	default 32
+	---help---
+		Number of MAC addresses that each bridge can learn.  When the table
+		is full, the oldest entry is replaced.
+
+config NET_BRIDGE_AGEING_TIME
+	int "Filtering database ageing time (seconds)"
+	default 300
+	---help---
+		A learned MAC address is forgotten after this many seconds without
+		receiving a frame from it.
+
+endif # NET_BRIDGE
+
 config NETDEV_LATEINIT
 	bool "Late driver initialization"
 	default n
@@ -377,7 +451,7 @@ menuconfig NET_6LOWPAN
 		for IEEE 802.15.4 or other packet radios.
 
 source "net/sixlowpan/Kconfig"
-source "net/ipforward/Kconfig"
+source "net/netforward/Kconfig"
 source "net/nat/Kconfig"
 source "net/ipfilter/Kconfig"
 source "net/netfilter/Kconfig"
@@ -404,6 +478,7 @@ source "net/arp/Kconfig"
 source "net/procfs/Kconfig"
 source "net/usrsock/Kconfig"
 source "net/utils/Kconfig"
+source "net/vsock/Kconfig"
 
 config NET_STATISTICS
 	bool "Collect network statistics"

@@ -24,72 +24,40 @@ set(SRCS)
 
 # Common ARM and Cortex-M33 files
 
-if(CONFIG_STM32_PROGMEM)
+if(CONFIG_STM32_PROGMEM OR CONFIG_STM32_EDATA)
   list(APPEND SRCS stm32_flash.c)
+endif()
+
+if(CONFIG_STM32_EDATA)
+  list(APPEND SRCS stm32_edata.c)
 endif()
 
 # Required STM32H5 files
 
-list(
-  APPEND
-  SRCS
-  stm32_gpio.c
-  stm32_irq.c
-  stm32_lowputc.c
-  stm32_rcc.c
-  stm32_start.c
-  stm32_pwr.c
-  stm32_timerisr.c
-  stm32_lse.c
-  stm32_lsi.c
-  stm32_exti_gpio.c)
-
-if(CONFIG_STM32_USART)
-  list(APPEND SRCS stm32_serial.c)
-endif()
-
-if(NOT CONFIG_ARCH_IDLE_CUSTOM)
-  list(APPEND SRCS stm32_idle.c)
-endif()
-
-if(CONFIG_TIMER)
-  list(APPEND SRCS stm32_tim_lowerhalf.c)
-endif()
-
-if(CONFIG_STM32_I2C)
-  list(APPEND SRCS stm32_i2c.c)
-endif()
+list(APPEND SRCS stm32_rcc.c stm32_pwr.c stm32_lse.c stm32_sdmmc.c)
 
 if(CONFIG_ADC)
   list(APPEND SRCS stm32_adc.c)
+endif()
+
+if(CONFIG_STM32_DAC)
+  list(APPEND SRCS stm32_dac.c)
 endif()
 
 if(CONFIG_STM32_FDCAN_CHARDRIVER)
   list(APPEND SRCS stm32_fdcan.c)
 endif()
 
-if(CONFIG_STM32_RNG)
-  list(APPEND SRCS stm32_rng.c)
-endif()
-
 if(CONFIG_STM32_ICACHE)
   list(APPEND SRCS stm32_icache.c)
 endif()
 
-if(CONFIG_STM32_SPI)
-  list(APPEND SRCS stm32_spi.c)
+if(CONFIG_STM32H5_EFUSE)
+  list(APPEND SRCS stm32_efuse.c)
 endif()
 
 if(CONFIG_STM32_QSPI1)
   list(APPEND SRCS stm32_qspi.c)
-endif()
-
-if(CONFIG_STM32_TIM)
-  list(APPEND SRCS stm32_tim.c)
-endif()
-
-if(CONFIG_STM32_LPTIM)
-  list(APPEND SRCS stm32_lptim.c)
 endif()
 
 if(CONFIG_STM32_HAVE_HSI48)
@@ -104,18 +72,6 @@ if(CONFIG_STM32_USBFS_HOST)
   list(APPEND SRCS stm32_usbdrdhost.c)
 endif()
 
-if(CONFIG_STM32_ETHMAC)
-  list(APPEND SRCS stm32_ethernet.c)
-endif()
-
-if(CONFIG_MDIO_BUS)
-  list(APPEND SRCS stm32_mdio.c)
-endif()
-
-if(CONFIG_STM32_DMA)
-  list(APPEND SRCS stm32_dma.c)
-endif()
-
 if(CONFIG_STM32_DTS)
   list(APPEND SRCS stm32_dts.c)
 endif()
@@ -124,12 +80,11 @@ if(CONFIG_STM32_PWM)
   list(APPEND SRCS stm32_pwm.c)
 endif()
 
-if(CONFIG_STM32_IWDG)
-  list(APPEND SRCS stm32_iwdg.c)
-endif()
-
-if(CONFIG_ARM_MPU)
-  list(APPEND SRCS stm32_mpuinit.c)
+if(CONFIG_STM32_TIMX_CAP)
+  list(APPEND SRCS stm32_capture.c)
+  if(CONFIG_CAPTURE)
+    list(APPEND SRCS stm32_capture_lowerhalf.c)
+  endif()
 endif()
 
 # Required chip type specific files

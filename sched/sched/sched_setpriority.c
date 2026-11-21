@@ -36,6 +36,7 @@
 
 #include "irq/irq.h"
 #include "sched/sched.h"
+#include "semaphore/semaphore.h"
 
 /****************************************************************************
  * Private Functions
@@ -80,12 +81,12 @@ static inline void nxsched_running_setpriority(FAR struct tcb_s *tcb,
    * CASE 1. The new priority of the running task becomes less than or
    * equal to the next highest priority ready to run task.
    * CASE 2. In SMP, the affinity of tcb has changed and no longer includes
-   * the current cpu.
+   * the current cpu, also when no other task is ready to run.
    */
 
 #ifdef CONFIG_SMP
-  if (nxttcb && (sched_priority <= nxttcb->sched_priority ||
-      (tcb->affinity & (1 << tcb->cpu)) == 0))
+  if ((tcb->affinity & (1 << tcb->cpu)) == 0 ||
+      (nxttcb && sched_priority <= nxttcb->sched_priority))
 #else
   if (nxttcb && sched_priority <= nxttcb->sched_priority)
 #endif
@@ -127,6 +128,7 @@ static inline void nxsched_running_setpriority(FAR struct tcb_s *tcb,
           do
             {
               bool check = nxsched_remove_readytorun(nxttcb);
+
               DEBUGASSERT(check == false);
               UNUSED(check);
 
@@ -226,6 +228,18 @@ static inline void nxsched_blocked_setpriority(FAR struct tcb_s *tcb,
   tasklist = TLIST_BLOCKED(tcb);
   if (TLIST_ISPRIORITIZED(task_state))
     {
+      FAR struct addrenv_s *oldenv = NULL;
+      bool selected = false;
+
+      /* The wait list of a semaphore can be in the address environment of
+       * the waiter only.
+       */
+
+      if (task_state == TSTATE_WAIT_SEM)
+        {
+          selected = nxsem_waiter_select(tcb, &oldenv);
+        }
+
       /* Remove the TCB from the prioritized task list */
 
       dq_rem((FAR dq_entry_t *)tcb, tasklist);
@@ -237,6 +251,11 @@ static inline void nxsched_blocked_setpriority(FAR struct tcb_s *tcb,
       /* Put it back into the prioritized list at the correct position. */
 
       nxsched_add_prioritized(tcb, tasklist);
+
+      if (selected)
+        {
+          nxsem_waiter_restore(this_task(), oldenv);
+        }
     }
 
   /* CASE 3b. The task resides in a non-prioritized list. */
@@ -330,7 +349,7 @@ int nxsched_set_priority(FAR struct tcb_s *tcb, int sched_priority)
         }
 
       leave_critical_section(flags);
-   }
+    }
 
   return ret;
 }

@@ -305,8 +305,8 @@ the following paragraphs.
   -  ``EOPNOTSUPP``. Some bit in the flags argument is inappropriate for
      the socket type.
   -  ``EPIPE``. The local end has been shut down on a connection oriented
-     socket. In this case the process will also receive a SIGPIPE unless
-     MSG_NOSIGNAL is set.
+     socket, or the peer closed the connection. In this case the process
+     will also receive a SIGPIPE unless MSG_NOSIGNAL is set.
 
 .. c:function:: ssize_t recv(int sockfd, void *buf, size_t len, int flags);
 
@@ -555,3 +555,97 @@ applications to add, remove, and query DNS nameservers.
 
     -  ``EINVAL``. Unsupported address family.
 
+
+DNS Query Functions (``resolv.h``)
+----------------------------------
+
+These functions send DNS queries for any record type and return the raw
+answer message. ``arpa/nameser.h`` gives the constants and the macros that
+parse the answer. ``res_mkquery()`` is always available with
+``CONFIG_LIBC_NETDB``. ``res_init()``, ``res_send()``, ``res_query()`` and
+``res_search()`` need ``CONFIG_NETDB_DNSCLIENT``; the last three use the same
+name servers, timeouts and retries as the DNS client. ``dn_comp()``,
+``dn_expand()`` and ``dn_skipname()`` are always available with
+``CONFIG_LIBC_NETDB``. ``<resolv.h>`` also has the resolver state of BIND:
+``struct __res_state``, ``res_state``, ``_res`` and the ``RES_*`` options.
+``_res`` needs ``CONFIG_NETDB_DNSCLIENT``. Each task group has its own state.
+The DNS client does not use the resolver state.
+
+  - :c:func:`res_init`
+  - :c:func:`res_mkquery`
+  - :c:func:`res_send`
+  - :c:func:`res_query`
+  - :c:func:`res_search`
+  - :c:func:`dn_skipname`
+
+.. c:function:: int res_init(void);
+
+  Initialize the resolver. It sets ``RES_INIT`` and the defaults of BIND in
+  ``_res``. The DNS client gets the name servers at each query: from
+  ``CONFIG_NETDB_RESOLVCONF_PATH`` with ``CONFIG_NETDB_RESOLVCONF``,
+  otherwise from the list that ``dns_add_nameserver()`` changes. Thus a
+  change of the name servers is used at the next query.
+
+  :return: 0, or -1 with ``errno`` ``ENOMEM`` if the resolver state cannot
+    be allocated.
+
+.. c:function:: int res_mkquery(int op, const char *dname, int rclass, int type, const unsigned char *data, int datalen, const unsigned char *newrr, unsigned char *buf, int buflen);
+
+  Build a message with one question for ``dname`` in ``buf``, with the
+  opcode ``op`` (normally ``QUERY``), a random ID and recursion desired.
+  ``data``, ``datalen`` and ``newrr`` are not used.
+
+  :return: The size of the message on success; -1 on error.
+
+.. c:function:: int res_send(const unsigned char *msg, int msglen, unsigned char *answer, int anslen);
+
+  Send the query message ``msg`` to the name servers over UDP, and copy the
+  first valid answer into ``answer``. A server that answers ``SERVFAIL`` or
+  ``REFUSED`` is skipped. There is no TCP fallback: a truncated answer is
+  returned with the ``TC`` bit set.
+
+  :return: The size of the answer on success; -1 on error.
+
+.. c:function:: int res_query(const char *dname, int rclass, int type, unsigned char *answer, int anslen);
+
+  Query the name servers for the records of class ``rclass`` and type
+  ``type`` for ``dname``, and copy the answer message into ``answer``.
+
+  :return: The size of the answer on success; -1 on error with ``h_errno``
+    set to ``HOST_NOT_FOUND``, ``NO_DATA``, ``NO_RECOVERY`` or ``TRY_AGAIN``.
+
+.. c:function:: int res_search(const char *dname, int rclass, int type, unsigned char *answer, int anslen);
+
+  The same as :c:func:`res_query`. NuttX has no search list.
+
+.. c:function:: int dn_skipname(const unsigned char *src, const unsigned char *end);
+
+  Find the size of the compressed domain name at ``src`` in a DNS message
+  that ends at ``end``, without expanding it. The name ends at the root
+  label or at a compression pointer.
+
+  :return: The size of the name in bytes on success; -1 if the name is not
+    valid or does not end before ``end``.
+
+Resolver Error Messages (``netdb.h``)
+-------------------------------------
+
+``gethostbyname()``, ``gethostbyaddr()`` and :c:func:`res_query` give their
+errors in ``h_errno``. These functions give the message for an ``h_errno``
+value. They are available with ``CONFIG_LIBC_NETDB``.
+
+  - :c:func:`hstrerror`
+  - :c:func:`herror`
+
+.. c:function:: const char *hstrerror(int errnum);
+
+  Give the message for ``errnum``: ``HOST_NOT_FOUND``, ``NO_DATA``,
+  ``NO_RECOVERY`` or ``TRY_AGAIN``. Other values give "Unknown resolver
+  error".
+
+  :return: A constant string, never ``NULL``.
+
+.. c:function:: void herror(const char *s);
+
+  Write the message for the current ``h_errno`` to ``stderr``. When ``s`` is
+  not ``NULL`` and not empty, the line starts with ``s`` and ``": "``.

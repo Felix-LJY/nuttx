@@ -36,12 +36,49 @@
 #include <nuttx/queue.h>
 #include <nuttx/sched.h>
 #include <nuttx/trace.h>
+#include <nuttx/environ.h>
 
 #include "sched/sched.h"
-#include "environ/environ.h"
 #include "group/group.h"
 #include "task/task.h"
 #include "tls/tls.h"
+
+/****************************************************************************
+ * Private Functions
+ ****************************************************************************/
+
+/****************************************************************************
+ * Name: nxtask_drop_child
+ *
+ * Description:
+ *   Remove the child entry that nxtask_setup_scheduler() added to the
+ *   group of the caller, for a new task that never ran.
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_SCHED_HAVE_PARENT
+static void nxtask_drop_child(FAR struct tcb_s *tcb)
+{
+  FAR struct task_group_s *pgrp = this_task()->group;
+#  ifndef CONFIG_SCHED_CHILD_STATUS
+  irqstate_t flags;
+#  endif
+
+#  ifdef CONFIG_SCHED_CHILD_STATUS
+  group_free_child(group_remove_child(pgrp, tcb->pid));
+#  else
+  flags = spin_lock_irqsave(&pgrp->tg_lock);
+  if (pgrp->tg_nchildren > 0)
+    {
+      pgrp->tg_nchildren--;
+    }
+
+  spin_unlock_irqrestore(&pgrp->tg_lock, flags);
+#  endif
+}
+#else
+#  define nxtask_drop_child(tcb)
+#endif
 
 /****************************************************************************
  * Public Functions
@@ -79,9 +116,9 @@
  * Returned Value:
  *   OK on success; negative error value on failure appropriately.  (See
  *   nxtask_setup_scheduler() for possible failure conditions).  On failure,
- *   the caller is responsible for freeing the stack memory and for calling
- *   nxsched_release_tcb() to free the TCB (which could be in most any
- *   state).
+ *   nxtask_init() undoes what it did (the PID, the inactive task list,
+ *   the kernel stack, the group) and the caller frees the TCB with
+ *   kmm_free(), and a pre-allocated stack.
  *
  ****************************************************************************/
 
@@ -100,6 +137,16 @@ int nxtask_init(FAR struct tcb_s *tcb, const char *name, int priority,
   /* Only tasks and kernel threads can be initialized in this way */
 
   DEBUGASSERT(tcb && ttype != TCB_FLAG_TTYPE_PTHREAD);
+#endif
+
+#ifdef CONFIG_TLS_ALIGNED
+  /* The TLS alignment limits the size of the stack */
+
+  if (stack_size > TLS_MAXSTACK)
+    {
+      sched_trace_end();
+      return -EINVAL;
+    }
 #endif
 
 #ifdef CONFIG_ARCH_ADDRENV
@@ -128,7 +175,7 @@ int nxtask_init(FAR struct tcb_s *tcb, const char *name, int priority,
 
   /* Duplicate the parent tasks environment */
 
-  ret = env_dup(tcb->group, envp);
+  ret = env_dup(tcb->group->tg_info, envp);
   if (ret < 0)
     {
       goto errout_with_group;
@@ -209,6 +256,27 @@ int nxtask_init(FAR struct tcb_s *tcb, const char *name, int priority,
   return ret;
 
 errout_with_group:
+  if (tcb->pid != 0)
+    {
+      irqstate_t flags;
+
+      /* nxtask_setup_scheduler() gave the TCB a PID and put it on the
+       * inactive task list.  The caller frees the TCB: take it off both.
+       */
+
+      flags = enter_critical_section();
+      dq_rem((FAR dq_entry_t *)tcb, list_inactivetasks());
+      leave_critical_section(flags);
+
+      nxtask_drop_child(tcb);
+      nxsched_releasepid(tcb->pid);
+      tcb->pid = 0;
+    }
+
+#if defined(CONFIG_ARCH_ADDRENV) && defined(CONFIG_ARCH_KERNEL_STACK)
+  up_addrenv_kstackfree(tcb);
+#endif
+
   if (!stack && tcb->stack_alloc_ptr)
     {
 #ifdef CONFIG_BUILD_KERNEL
@@ -258,11 +326,9 @@ errout_with_group:
 
 void nxtask_uninit(FAR struct tcb_s *tcb)
 {
-  /* The TCB was added to the inactive task list by
-   * nxtask_setup_scheduler().
-   */
+  /* The task never ran: the caller has no child to wait for */
 
-  dq_rem((FAR dq_entry_t *)tcb, list_inactivetasks());
+  nxtask_drop_child(tcb);
 
   /* Release all resources associated with the TCB... Including the TCB
    * itself.

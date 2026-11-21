@@ -39,6 +39,7 @@
 #include <nuttx/wqueue.h>
 #include <nuttx/mutex.h>
 #include <nuttx/semaphore.h>
+#include <nuttx/mm/iob.h>
 
 #include <nuttx/wireless/ieee802154/ieee802154_mac.h>
 #include <nuttx/wireless/ieee802154/ieee802154_radio.h>
@@ -120,9 +121,12 @@ struct ieee802154_privmac_s
   /******************* Fields related to MAC operations *********************/
 
   enum mac802154_operation_e     curr_op;   /* The current overall operation */
-  enum ieee802154_cmdid_e        curr_cmd;  /* Type of the current cmd */
-  FAR struct ieee802154_txdesc_s *cmd_desc; /* TX descriptor for current cmd */
+
+  /* Destination of the current command */
+
+  struct ieee802154_addr_s       cmd_destaddr;
   uint8_t                        nrxusers;
+  bool                           oprx;      /* Receiver on for current op */
   struct work_s                  macop_work;
 
   /******************* Fields related to SCAN operation *********************/
@@ -320,6 +324,9 @@ void mac802154_createdatareq(FAR struct ieee802154_privmac_s *priv,
 
 void mac802154_updatebeacon(FAR struct ieee802154_privmac_s *priv);
 
+int  mac802154_mhrlen(enum ieee802154_addrmode_e dmode,
+                      enum ieee802154_addrmode_e smode, bool panidcomp);
+
 void mac802154_notify(FAR struct ieee802154_privmac_s *priv,
                       FAR struct ieee802154_primitive_s *primitive);
 
@@ -515,10 +522,35 @@ void mac802154_notify(FAR struct ieee802154_privmac_s *priv,
 
 /* General helpers **********************************************************/
 
+/* A tx descriptor owns its frame and its confirm primitive.  A user that
+ * hands the confirm to the next layer takes it out of the descriptor first.
+ */
+
+static inline FAR struct ieee802154_primitive_s *
+mac802154_txdesc_takeconf(FAR struct ieee802154_txdesc_s *txdesc)
+{
+  FAR struct ieee802154_primitive_s *primitive =
+    (FAR struct ieee802154_primitive_s *)txdesc->conf;
+
+  txdesc->conf = NULL;
+  return primitive;
+}
+
 static inline void
 mac802154_txdesc_free(FAR struct ieee802154_privmac_s *priv,
                       FAR struct ieee802154_txdesc_s *txdesc)
 {
+  if (txdesc->frame != NULL)
+    {
+      iob_free(txdesc->frame);
+      txdesc->frame = NULL;
+    }
+
+  if (txdesc->conf != NULL)
+    {
+      ieee802154_primitive_free(mac802154_txdesc_takeconf(txdesc));
+    }
+
   sq_addlast((FAR sq_entry_t *)txdesc, &priv->txdesc_queue);
   nxsem_post(&priv->txdesc_sem);
 }
@@ -641,6 +673,28 @@ mac802154_rxdisable(FAR struct ieee802154_privmac_s *priv)
     {
       wlinfo("Receiver disabled\n");
       priv->radio->rxenable(priv->radio, false);
+    }
+}
+
+/* Receiver enabled for the data frame of the current operation */
+
+static inline void
+mac802154_oprxenable(FAR struct ieee802154_privmac_s *priv)
+{
+  if (!priv->oprx)
+    {
+      priv->oprx = true;
+      mac802154_rxenable(priv);
+    }
+}
+
+static inline void
+mac802154_oprxdisable(FAR struct ieee802154_privmac_s *priv)
+{
+  if (priv->oprx)
+    {
+      priv->oprx = false;
+      mac802154_rxdisable(priv);
     }
 }
 

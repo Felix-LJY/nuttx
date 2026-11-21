@@ -30,6 +30,7 @@
 #include <nuttx/config.h>
 
 #include <stdint.h>
+#include <stdbool.h>
 #include <nuttx/i2c/i2c_master.h>
 
 #ifdef CONFIG_TIMERS_CS2100CP
@@ -163,11 +164,8 @@ struct cs2100_config_s
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -228,7 +226,6 @@ int cs2100_disable(FAR const struct cs2100_config_s *config);
 int cs2100_dump(FAR const struct cs2100_config_s *config);
 #endif
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

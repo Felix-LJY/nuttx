@@ -310,7 +310,7 @@ static uint32_t sendfile_eventhandler(FAR struct net_driver_s *dev,
 
       /* Report not connected */
 
-      pstate->snd_sent = -ENOTCONN;
+      pstate->snd_sent = TCP_NOTCONN_ERROR(conn);
       goto end_wait;
     }
 
@@ -425,12 +425,14 @@ ssize_t tcp_sendfile(FAR struct socket *psock, FAR struct file *infile,
   conn = psock->s_conn;
   DEBUGASSERT(conn != NULL);
 
-  /* If this is an un-connected socket, then return ENOTCONN */
+  /* If this is an un-connected socket, then return ENOTCONN (EPIPE after
+   * the connection was closed).
+   */
 
   if (psock->s_type != SOCK_STREAM || !_SS_ISCONNECTED(conn->sconn.s_flags))
     {
       nerr("ERROR: Not connected\n");
-      return -ENOTCONN;
+      return tcp_reset_report(conn, TCP_NOTCONN_ERROR(conn));
     }
 
   /* Make sure that we have the IP address mapping */
@@ -459,7 +461,7 @@ ssize_t tcp_sendfile(FAR struct socket *psock, FAR struct file *infile,
   if (ret < 0)
     {
       nerr("ERROR: Not reachable\n");
-      return -ENETUNREACH;
+      return ret;
     }
 #endif /* CONFIG_NET_ARP_SEND || CONFIG_NET_ICMPv6_NEIGHBOR */
 
@@ -549,39 +551,40 @@ errout_locked:
 #endif
   conn_dev_unlock(&conn->sconn, conn->dev);
 
-  /* Return the current file position */
+  /* A timeout or a signal can end the wait after some bytes went out.
+   * Then return the count of these bytes.  Return the error only when no
+   * byte went out.
+   */
+
+  if (ret < 0 && state.snd_sent <= 0)
+    {
+      state.snd_sent = ret;
+    }
 
   if (offset)
     {
-      /* Use lseek to get the current file position */
+      /* Move *offset over the bytes sent and restore the file position */
 
-      off_t curpos = file_seek(infile, 0, SEEK_CUR);
-      if (curpos < 0)
+      if (state.snd_sent > 0)
         {
-          return curpos;
+          *offset += state.snd_sent;
         }
-
-      /* Return the current file position */
-
-      *offset = curpos;
-
-      /* Use lseek again to restore the original file position */
 
       startpos = file_seek(infile, startpos, SEEK_SET);
-      if (startpos < 0)
-        {
-          return startpos;
-        }
+    }
+  else if (state.snd_sent > 0)
+    {
+      /* Put the file position after the bytes sent */
+
+      startpos = file_seek(infile, startpos + state.snd_sent, SEEK_SET);
     }
 
-  if (ret < 0)
+  if (startpos < 0)
     {
-      return ret;
+      return startpos;
     }
-  else
-    {
-      return state.snd_sent;
-    }
+
+  return tcp_reset_report(conn, state.snd_sent);
 }
 
 #endif /* CONFIG_NET_SENDFILE && CONFIG_NET_TCP && NET_TCP_HAVE_STACK */

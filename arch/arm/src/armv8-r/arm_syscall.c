@@ -29,6 +29,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <assert.h>
+#include <errno.h>
 #include <nuttx/debug.h>
 #include <syscall.h>
 
@@ -128,7 +129,7 @@ static void dispatch_syscall(void)
     " str r5, [sp, #4]\n"                           /* Move parameter 5 (if any) into position */
     " str r6, [sp, #8]\n"                           /* Move parameter 6 (if any) into position */
     " str lr, [sp, #12]\n"                          /* Save lr in the stack frame */
-    " ldr ip, =g_stublookup\n"                      /* R12=The base of the stub lookup table */
+    " ldr ip, =%c0\n"                               /* R12=The base of the stub lookup table */
     " ldr ip, [ip, r0, lsl #2]\n"                   /* R12=The address of the stub for this SYSCALL */
     " blx ip\n"                                     /* Call the stub (modifies lr) */
     " ldr lr, [sp, #12]\n"                          /* Restore lr */
@@ -136,6 +137,8 @@ static void dispatch_syscall(void)
     " mov r2, r0\n"                                 /* R2=Save return value in R2 */
     " mov r0, #" STRINGIFY(SYS_syscall_return) "\n" /* R0=SYS_syscall_return */
     " svc #" STRINGIFY(SYS_syscall) "\n"            /* Return from the SYSCALL */
+    :
+    : "i"(g_stublookup)
   );
 }
 #endif
@@ -490,15 +493,12 @@ uint32_t *arm_syscall(uint32_t *regs)
           struct tcb_s *rtcb = this_task();
           int index = rtcb->xcp.nsyscalls;
 
-          /* Verify that the SYS call number is within range */
-
-          DEBUGASSERT(cmd >= CONFIG_SYS_RESERVED && cmd < SYS_maxsyscall);
-
-          /* Make sure that there is a no saved SYSCALL return address.  We
-           * cannot yet handle nested system calls.
-           */
-
-          DEBUGASSERT(index < CONFIG_SYS_NNEST);
+          if (cmd < CONFIG_SYS_RESERVED || cmd >= SYS_maxsyscall ||
+              index >= CONFIG_SYS_NNEST)
+            {
+              regs[REG_R0] = -ENOSYS;
+              break;
+            }
 
           /* Setup to return to dispatch_syscall in privileged mode. */
 

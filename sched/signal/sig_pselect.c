@@ -80,29 +80,18 @@ int pselect(int nfds, FAR fd_set *readfds, FAR fd_set *writefds,
 
   flags = enter_critical_section();
 
-  /* Save a copy of the old sigprocmask and install
-   * the new (temporary) sigprocmask
+  /* Save a copy of the old sigprocmask and install the new (temporary)
+   * sigprocmask.  Check if there is a pending signal corresponding to one
+   * of the signals that will be unblocked by the new sigprocmask.
    */
 
-  saved_sigprocmask = rtcb->sigprocmask;
-  if (sigmask)
-    {
-      rtcb->sigprocmask = *sigmask;
-    }
-
-  sigemptyset(&rtcb->sigwaitmask);
-
-  /* Check if there is a pending signal corresponding to one of the
-   * signals that will be unblocked by the new sigprocmask.
-   */
-
-  if (nxsig_unmask_pendingsignal())
+  if (nxsig_waitmask_set(sigmask, &saved_sigprocmask))
     {
       /* Dispatching one or more of the signals is sufficient to cause
        * us to not wait. Restore the original sigprocmask.
        */
 
-      rtcb->sigprocmask = saved_sigprocmask;
+      nxsig_restoremask(rtcb, &saved_sigprocmask);
       leave_critical_section(flags);
       set_errno(EINTR);
     }
@@ -116,7 +105,7 @@ int pselect(int nfds, FAR fd_set *readfds, FAR fd_set *writefds,
       if (timeout)
         {
           timeval_buf.tv_sec  = timeout->tv_sec;
-          timeval_buf.tv_usec = NSEC2USEC(timeout->tv_nsec);
+          timeval_buf.tv_usec = (long)(timeout->tv_nsec / NSEC_PER_USEC);
           timeval = &timeval_buf;
         }
 
@@ -124,7 +113,7 @@ int pselect(int nfds, FAR fd_set *readfds, FAR fd_set *writefds,
 
       /* We are running again, restore the original sigprocmask */
 
-      rtcb->sigprocmask = saved_sigprocmask;
+      nxsig_restoremask(rtcb, &saved_sigprocmask);
       leave_critical_section(flags);
 
       /* Now, handle the (rare?) case where (a) a blocked signal was received

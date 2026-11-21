@@ -66,6 +66,22 @@
 
 #define DEADLOCK_MAX 8
 
+/* The dump_lockholder() buffer must hold the deeper of the two backtrace
+ * sources: the spinlock backtrace (CONFIG_LIBC_BACKTRACE_DEPTH) and this
+ * tree's fixed mutex backtrace (CONFIG_LIBC_MUTEX_BACKTRACE, an
+ * independent depth knob).
+ */
+
+#ifdef CONFIG_LIBC_BACKTRACE_DEPTH
+#  if CONFIG_LIBC_BACKTRACE_DEPTH > CONFIG_LIBC_MUTEX_BACKTRACE
+#    define DEADLOCK_BACKTRACE_DEPTH CONFIG_LIBC_BACKTRACE_DEPTH
+#  else
+#    define DEADLOCK_BACKTRACE_DEPTH CONFIG_LIBC_MUTEX_BACKTRACE
+#  endif
+#else
+#  define DEADLOCK_BACKTRACE_DEPTH CONFIG_LIBC_MUTEX_BACKTRACE
+#endif
+
 #ifndef CONFIG_BOARD_RESET_ON_ASSERT
 #  define CONFIG_BOARD_RESET_ON_ASSERT 0
 #endif
@@ -210,6 +226,7 @@ static void dump_stackinfo(FAR const char *tag, uintptr_t sp,
   if (sp != 0)
     {
       uintptr_t top = base + size;
+
       _alert("    sp: %p\n", (FAR void *)sp);
 
       /* Get more information */
@@ -252,6 +269,7 @@ static void dump_stacks(FAR struct tcb_s *rtcb, uintptr_t sp)
   int cpu = rtcb->cpu;
 #else
   int cpu = this_cpu();
+
   UNUSED(cpu);
 #endif
 #if CONFIG_ARCH_INTERRUPTSTACK > 0
@@ -473,10 +491,11 @@ static void dump_backtrace(FAR struct tcb_s *tcb, FAR void *arg)
  * Name: dump_filelist
  ****************************************************************************/
 
-#ifdef CONFIG_SCHED_DUMP_ON_EXIT
+#ifdef CONFIG_SCHED_DUMP_FDLIST
 static void dump_fdlist(FAR struct tcb_s *tcb, FAR void *arg)
 {
   FAR struct fdlist *list = &tcb->group->tg_fdlist;
+
   fdlist_dump(list);
 }
 #endif
@@ -565,7 +584,7 @@ static void dump_tasks(void)
   nxsched_foreach(dump_backtrace, NULL);
 #endif
 
-#ifdef CONFIG_SCHED_DUMP_ON_EXIT
+#ifdef CONFIG_SCHED_DUMP_FDLIST
   nxsched_foreach(dump_fdlist, NULL);
 #endif
 }
@@ -574,45 +593,62 @@ static void dump_tasks(void)
  * Name: dump_lockholder
  ****************************************************************************/
 
-#if CONFIG_LIBC_MUTEX_BACKTRACE > 0
+#ifdef CONFIG_ARCH_DEADLOCKDUMP
 static void dump_lockholder(pid_t tid)
 {
-  char buf[BACKTRACE_BUFFER_SIZE(CONFIG_LIBC_MUTEX_BACKTRACE)];
-  FAR mutex_t *mutex;
+  char buf[BACKTRACE_BUFFER_SIZE(DEADLOCK_BACKTRACE_DEPTH)];
+  FAR struct tcb_s *tcb;
+  FAR void **stack = NULL;
+  int depth = 0;
+  pid_t holder = INVALID_PROCESS_ID;
 
-  mutex = (FAR mutex_t *)nxsched_get_tcb(tid)->waitobj;
+  /* nxsched_get_tcb() holds no reference on the TCB once it returns, so
+   * use it as an inherently racy snapshot and read what we need from it
+   * immediately.
+   */
 
-  backtrace_format(buf, sizeof(buf), mutex->backtrace,
-                   CONFIG_LIBC_MUTEX_BACKTRACE);
+  tcb = nxsched_get_tcb(tid);
+  DEBUGASSERT(tcb != NULL);
 
-  _alert("Mutex holder(%d) backtrace:%s\n", nxmutex_get_holder(mutex), buf);
+  if (tcb->task_state == TSTATE_WAIT_SEM)
+    {
+      FAR mutex_t *mutex = tcb->waitobj;
+
+      holder = nxmutex_get_holder(mutex);
+#  if CONFIG_LIBC_MUTEX_BACKTRACE > 0
+      stack = mutex->backtrace;
+      depth = CONFIG_LIBC_MUTEX_BACKTRACE;
+#  endif
+    }
+#  ifdef CONFIG_SPINLOCK_DEBUG
+  else
+    {
+      FAR spinlock_debug_t *info = tcb->wait_spinlock;
+
+      holder = spinlock_get_holder(info);
+    }
+#  endif
+
+  backtrace_format(buf, sizeof(buf), stack, depth);
+
+  _alert("Deadlock(%d) holder(%d) backtrace: %s\n", tid, holder, buf);
 }
-#else
-#  define dump_lockholder(tid)
-#endif
 
 /****************************************************************************
  * Name: dump_deadlock
  ****************************************************************************/
 
-#ifdef CONFIG_ARCH_DEADLOCKDUMP
 static void dump_deadlock(void)
 {
   pid_t deadlock[DEADLOCK_MAX];
   size_t i = nxsched_collect_deadlock(deadlock, DEADLOCK_MAX);
 
-  if (i > 0)
+  while (i-- > 0)
     {
-      _alert("Deadlock detected\n");
-      while (i-- > 0)
-        {
+      dump_lockholder(deadlock[i]);
 #  ifdef CONFIG_SCHED_BACKTRACE
-          sched_dumpstack(deadlock[i]);
-          dump_lockholder(deadlock[i]);
-#  else
-          _alert("deadlock pid: %d\n", deadlock[i]);
+      sched_dumpstack(deadlock[i]);
 #  endif
-        }
     }
 }
 #endif
@@ -789,7 +825,9 @@ static void dump_fatal_info(FAR struct tcb_s *rtcb,
 
 #ifdef CONFIG_BOARD_CRASHDUMP_CUSTOM
   board_crashdump(up_getsp(), rtcb, filename, linenum, msg, regs);
-#elif !defined(CONFIG_BOARD_CRASHDUMP_NONE)
+#endif
+
+#ifndef CONFIG_BOARD_CRASHDUMP_NONE
 
   /* Dump core information */
 

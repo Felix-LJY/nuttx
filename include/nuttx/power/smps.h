@@ -44,8 +44,10 @@
  ****************************************************************************/
 
 #include <nuttx/config.h>
+#include <stdbool.h>
 #include <nuttx/compiler.h>
 
+#include <nuttx/mutex.h>
 #include <nuttx/power/power_ioctl.h>
 #include <nuttx/semaphore.h>
 
@@ -271,11 +273,8 @@ struct smps_dev_s
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -285,7 +284,6 @@ extern "C"
 int smps_register(FAR const char *path, FAR struct smps_dev_s *dev,
                   FAR void *lower);
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

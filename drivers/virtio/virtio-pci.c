@@ -32,6 +32,7 @@
 #include <sys/param.h>
 
 #include <nuttx/clock.h>
+#include <nuttx/kmalloc.h>
 #include <nuttx/virtio/virtio-pci.h>
 
 #include "virtio-pci.h"
@@ -78,8 +79,23 @@ static struct pci_driver_s g_virtio_pci_drv =
 
 static const struct virtio_memory_ops g_virtio_pci_mmops =
 {
-  virtio_pci_alloc_buf, /* Alloc */
-  virtio_pci_free_buf,  /* Free */
+  .alloc        = virtio_pci_alloc_buf,
+  .free         = virtio_pci_free_buf,
+
+  /* The host (QEMU) can access arbitrary guest memory, so buffers are used
+   * as is (zero copy), except user buffers of a per-process address
+   * environment, which are not physically contiguous.
+   */
+
+#ifdef CONFIG_ARCH_ADDRENV
+  .free_largest = virtio_addrenv_free_largest,
+  .map          = virtio_addrenv_map,
+  .unmap        = virtio_addrenv_unmap,
+#else
+  .free_largest = NULL,
+  .map          = NULL,
+  .unmap        = NULL,
+#endif
 };
 
 /****************************************************************************
@@ -173,6 +189,7 @@ static int virtio_pci_probe(FAR struct pci_device_s *dev)
 {
   FAR struct virtio_pci_device_s *vpdev;
   FAR struct virtio_device *vdev;
+  uint8_t status;
   int ret;
 
   /* We only own devices >= 0x1000 and <= 0x107f: leave the rest. */
@@ -253,6 +270,16 @@ static int virtio_pci_probe(FAR struct pci_device_s *dev)
 #else
   vrtinfo("Polling mode\n");
 #endif
+
+  /* Only reset a device that is not already in its power-on state, see
+   * virtio_mmio_init_device().
+   */
+
+  if (virtio_get_status(vdev, &status) != 0 ||
+      status != VIRTIO_CONFIG_STATUS_RESET)
+    {
+      virtio_set_status(vdev, VIRTIO_CONFIG_STATUS_RESET);
+    }
 
   virtio_set_status(vdev, VIRTIO_CONFIG_STATUS_ACK);
 

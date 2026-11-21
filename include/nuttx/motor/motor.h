@@ -42,6 +42,7 @@
  ****************************************************************************/
 
 #include <nuttx/config.h>
+#include <stdbool.h>
 #include <nuttx/compiler.h>
 
 #include <nuttx/motor/motor_ioctl.h>
@@ -163,7 +164,7 @@ struct motor_limits_s
   float acceleration;                /* Maximum motor acceleration */
 #endif
 #ifdef CONFIG_MOTOR_UPPER_HAVE_DECELERATION
-  float deceleration;                /* Maximum motor decelaration */
+  float deceleration;                /* Maximum motor deceleration */
 #endif
 #ifdef CONFIG_MOTOR_UPPER_HAVE_INPUT_VOLTAGE
   float v_in;                        /* Maximum input voltage */
@@ -300,11 +301,8 @@ struct motor_lowerhalf_s
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -332,7 +330,6 @@ extern "C"
 int motor_register(FAR const char *path,
                    FAR struct motor_lowerhalf_s *lower);
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

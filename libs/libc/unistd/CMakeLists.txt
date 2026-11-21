@@ -22,10 +22,13 @@
 
 set(SRCS
     lib_access.c
+    lib_copy_file_range.c
     lib_daemon.c
     lib_swab.c
     lib_pathconf.c
     lib_sysconf.c
+    lib_getdtablesize.c
+    lib_getpagesize.c
     lib_getcwd.c
     lib_getentropy.c
     lib_getopt_common.c
@@ -39,6 +42,7 @@ set(SRCS
     lib_getoptoptp.c
     lib_times.c
     lib_alarm.c
+    lib_fdatasync.c
     lib_fstatvfs.c
     lib_statvfs.c
     lib_sleep.c
@@ -46,14 +50,13 @@ set(SRCS
     lib_getrusage.c
     lib_utime.c
     lib_utimes.c
-    lib_setrlimit.c
-    lib_getrlimit.c
     lib_setpriority.c
     lib_getpriority.c
     lib_futimes.c
     lib_lutimes.c
     lib_gethostname.c
     lib_sethostname.c
+    lib_domainname.c
     lib_fchownat.c
     lib_linkat.c
     lib_readlinkat.c
@@ -61,10 +64,7 @@ set(SRCS
     lib_unlinkat.c
     lib_usleep.c
     lib_getpgrp.c
-    lib_getpgid.c
-    lib_getsid.c
-    lib_setpgid.c
-    lib_setsid.c
+    lib_setpgrp.c
     lib_lockf.c
     lib_flock.c
     lib_getpass.c
@@ -73,8 +73,19 @@ set(SRCS
     lib_confstr.c
     lib_ulimit.c)
 
+# With process groups, the kernel has getpgid(), getsid(), setpgid() and
+# setsid().
+
+if(NOT CONFIG_SCHED_PROCESS_GROUPS)
+  list(APPEND SRCS lib_getpgid.c lib_getsid.c lib_setpgid.c lib_setsid.c)
+endif()
+
 if(CONFIG_SCHED_WAITPID)
-  list(APPEND SRCS lib_wait4.c)
+  list(APPEND SRCS lib_wait.c)
+endif()
+
+if(CONFIG_FILE_STREAM)
+  list(APPEND SRCS lib_getusershell.c)
 endif()
 
 if(NOT CONFIG_SCHED_USER_IDENTITY)
@@ -107,7 +118,7 @@ if(NOT CONFIG_DISABLE_ENVIRON)
 endif()
 
 if(CONFIG_LIBC_EXECFUNCS)
-  list(APPEND SRCS lib_execl.c lib_execle.c lib_execv.c)
+  list(APPEND SRCS lib_execl.c lib_execle.c lib_execv.c lib_execvp.c)
 endif()
 
 if(NOT CONFIG_DISABLE_MOUNTPOINTS)
@@ -124,6 +135,14 @@ endif()
 
 if(CONFIG_PIPES)
   list(APPEND SRCS lib_pipe.c)
+endif()
+
+# dpopen() needs pipes, posix_spawn() and waitpid()
+
+if(CONFIG_PIPES
+   AND CONFIG_LIBC_EXECFUNCS
+   AND CONFIG_SCHED_WAITPID)
+  list(APPEND SRCS lib_dpopen.c)
 endif()
 
 target_sources(c PRIVATE ${SRCS})

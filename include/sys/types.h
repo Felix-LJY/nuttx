@@ -31,6 +31,17 @@
 #include <nuttx/compiler.h>
 
 #ifndef __ASSEMBLY__
+#  include <arch/types.h>
+
+/* Wide character type, defined before <stdint.h> is included: a program's
+ * own <stdint.h> may include <inttypes.h>, which uses wchar_t while this
+ * file is still being read.  wchar_t is a built-in type in C++.
+ */
+
+#  if !defined(__cplusplus)
+typedef _wchar_t     wchar_t;
+#  endif
+
 #  include <stdint.h>
 #endif
 
@@ -157,10 +168,11 @@ typedef uint16_t     nlink_t;
 typedef int          pid_t;
 
 /* id_t is a general identifier that can be used to contain at least a pid_t,
- * uid_t, or gid_t.
+ * uid_t, or gid_t.  It has the type of uid_t and gid_t, as in glibc and
+ * musl.
  */
 
-typedef int          id_t;
+typedef unsigned int id_t;
 
 /* Unix requires a key of type key_t defined in file sys/types.h for
  * requesting resources such as shared memory segments, message queues and
@@ -172,16 +184,6 @@ typedef int32_t      key_t;
 /* Signed integral type of the result of subtracting two pointers */
 
 typedef intptr_t     ptrdiff_t;
-
-#if !defined(__cplusplus)
-/* Wide character types.  wchar_t is a built-in type in C++ and
- * its declaration here may cause compilation errors on some compilers.
- *
- * REVISIT: wchar_t belongs in stddef.h
- */
-
-typedef _wchar_t     wchar_t;
-#endif
 
 /* wint_t
  *   An integral type capable of storing any valid value of wchar_t, or WEOF.
@@ -259,6 +261,17 @@ typedef FAR void    *timer_t;        /* Represents one POSIX timer */
 typedef uint32_t     useconds_t;
 typedef int32_t      suseconds_t;
 
+/* struct timeval represents time as seconds plus microseconds.  POSIX
+ * defines it in <sys/time.h> and <sys/select.h>; programs also expect it
+ * after <sys/types.h>.
+ */
+
+struct timeval
+{
+  time_t tv_sec;         /* Seconds */
+  long tv_usec;          /* Microseconds */
+};
+
 /* This is the smallest integer type that will hold a bitset of all CPUs */
 
 #if (CONFIG_SMP_NCPUS <= 32)
@@ -274,13 +287,18 @@ typedef unsigned short u_short;
 typedef unsigned int   u_int;
 typedef unsigned long  u_long;
 
-/* SYSV types provided only to support porting to NuttX.  */
+/* SYSV types provided only to support porting to NuttX.  unchar and
+ * s_char are not in other C libraries: not with NUTTX_NO_EXTENSIONS (see
+ * nuttx/compiler.h), so that a program can use the names.
+ */
 
+#ifndef NUTTX_NO_EXTENSIONS
 typedef unsigned char  unchar;
+typedef signed char    s_char;
+#endif
 typedef unsigned short ushort;
 typedef unsigned int   uint;
 typedef unsigned long  ulong;
-typedef signed char    s_char;
 typedef FAR char      *caddr_t;
 
 /* These were defined by ISO C without the first `_'.  */
@@ -304,17 +322,21 @@ struct fsid_s
 
 typedef CODE int (*main_t)(int argc, FAR char *argv[]);
 
-/* POSIX-like OS return values: */
+/* POSIX-like OS return values (not with NUTTX_NO_EXTENSIONS, see
+ * nuttx/compiler.h):
+ */
 
-#ifdef OK
-#  undef OK
-#endif
+#ifndef NUTTX_NO_EXTENSIONS
+#  ifdef OK
+#    undef OK
+#  endif
 
 enum
 {
   ERROR = -1,
   OK = 0
 };
+#endif
 
 #ifndef __PTHREAD_ATTR_T_DEFINED
 struct pthread_attr_s;
@@ -359,29 +381,6 @@ typedef pid_t pthread_t;
 struct pthread_once_s;
 typedef struct pthread_once_s pthread_once_t;
 #  define __PTHREAD_ONCE_T_DEFINED 1
-#endif
-
-/****************************************************************************
- * Public Function Prototypes
- ****************************************************************************/
-
-#ifdef __cplusplus
-#define EXTERN extern "C"
-extern "C"
-{
-#else
-#define EXTERN extern
-#endif
-
-/* This entry point must be supplied by the application */
-
-#ifdef CONFIG_INIT_ENTRYPOINT
-int CONFIG_INIT_ENTRYPOINT(int argc, FAR char *argv[]);
-#endif
-
-#undef EXTERN
-#if defined(__cplusplus)
-}
 #endif
 
 #endif /* __ASSEMBLY__ */

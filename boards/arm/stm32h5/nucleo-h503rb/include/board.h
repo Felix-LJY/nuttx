@@ -131,10 +131,10 @@
 #define STM32_RCC_CFGR2_PPRE1     RCC_CFGR2_PPRE1_HCLK1d2      /* PCLK1 = HCLK / 2 */
 #define STM32_PCLK1_FREQUENCY    (STM32_HCLK_FREQUENCY / 2)
 
-#define STM32_TIM2_CLKIN    (STM32_PCLK1_FREQUENCY)
-#define STM32_TIM3_CLKIN    (STM32_PCLK1_FREQUENCY)
-#define STM32_TIM6_CLKIN    (STM32_PCLK1_FREQUENCY)
-#define STM32_TIM7_CLKIN    (STM32_PCLK1_FREQUENCY)
+#define STM32_TIM2_CLKIN    (2 * STM32_PCLK1_FREQUENCY)
+#define STM32_TIM3_CLKIN    (2 * STM32_PCLK1_FREQUENCY)
+#define STM32_TIM6_CLKIN    (2 * STM32_PCLK1_FREQUENCY)
+#define STM32_TIM7_CLKIN    (2 * STM32_PCLK1_FREQUENCY)
 #define STM32_LPTIM2_CLKIN  (STM32_PCLK1_FREQUENCY)
 
 /* Configure the APB2 prescaler */
@@ -150,6 +150,15 @@
 #define STM32_PCLK3_FREQUENCY    (STM32_HCLK_FREQUENCY / 1)
 
 #define STM32_LPTIM1_CLKIN  (STM32_PCLK3_FREQUENCY)
+
+/* I2C kernel clocks: the reset default PCLK1 (I2C1, I2C2) and PCLK3
+ * (I2C3, I2C4).  Select another with STM32_RCC_CCIPR4_I2CnSEL.
+ */
+
+#define STM32_I2C1_FREQUENCY  STM32_PCLK1_FREQUENCY
+#define STM32_I2C2_FREQUENCY  STM32_PCLK1_FREQUENCY
+#define STM32_I2C3_FREQUENCY  STM32_PCLK3_FREQUENCY
+#define STM32_I2C4_FREQUENCY  STM32_PCLK3_FREQUENCY
 
 /* LED definitions **********************************************************/
 
@@ -222,13 +231,9 @@
 
 #ifndef __ASSEMBLY__
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -248,7 +253,6 @@ extern "C"
 
 void stm32_board_initialize(void);
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

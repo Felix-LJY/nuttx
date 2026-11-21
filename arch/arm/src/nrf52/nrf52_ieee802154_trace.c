@@ -26,6 +26,7 @@
 
 #include <nuttx/config.h>
 
+#include <inttypes.h>
 #include <string.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -49,14 +50,12 @@ static const char *g_radio_trace_str[] =
   "RADIO IRQ: WAIT ACK",
   "RADIO IRQ: RX ACK DONE",
   "RADIO IRQ: TX CCA BUSY",
+  "RADIO IRQ: BEACON TX",
 
-  "TIM IRQ: TIM ACK TX",
   "TIM IRQ; TIM TX DELAY",
   "TIM IRQ: TIM WAIT ACK",
   "TIM IRQ: TIM CSMA DELAY",
   "RTC IRQ: RTC SD",
-  "RTC IRQ: RTC CAP",
-  "RTC IRQ: RTC TIMESLOT",
   "RTC IRQ: RTC BI",
 
   "WORK: RX",
@@ -72,9 +71,12 @@ static const char *g_radio_trace_str[] =
   "CSMASETUP",
   "CSMATRIGGER",
   "NOCSMATRIGGER",
+  "BEACONTX",
   "NOACK",
   "DROPFRAME",
   "TXTRYAGAIN",
+  "SFSYNC",
+  "CSMAPAUSE",
 };
 
 /* Trace data */
@@ -143,8 +145,8 @@ void nrf52_radioi8_trace_dump(void)
 
   for (i = 0; i < g_radio_trace_cntr; i += 1)
     {
-      printf("[%lu]: %s %lu\n\n",
-             g_radio_trace[i].time,
+      printf("[%" PRIu64 "]: %s %" PRIu32 "\n\n",
+             (uint64_t)g_radio_trace[i].time,
              g_radio_trace[i].str,
              g_radio_trace[i].arg);
     }

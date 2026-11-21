@@ -36,6 +36,7 @@
 #include <nuttx/sched.h>
 #include <nuttx/ascii.h>
 #include <nuttx/gdbstub.h>
+#include <nuttx/lib/lib.h>
 #include <nuttx/memoryregion.h>
 #include <nuttx/streams.h>
 
@@ -61,12 +62,21 @@
 #define IS_SPECIAL_CHARACTERS(c) \
         ((c) == '#' || (c) == '$' || (c) == '}' || (c) == '*')
 
+/* Architecture can overwrite the default XCPTCONTEXT alignment */
+
+#ifndef XCPTCONTEXT_ALIGN
+#  define XCPTCONTEXT_ALIGN 16
+#endif
+
+#define PID0_REPLACE INT32_MAX
+
 /****************************************************************************
  * Private Types
  ****************************************************************************/
 
 struct gdb_state_s
 {
+  uint8_t running_regs[XCPTCONTEXT_SIZE]; /* Registers of running thread */
 #ifdef CONFIG_LIB_GDBSTUB_DEBUG
   struct lib_syslograwstream_s stream;
 #endif
@@ -78,11 +88,10 @@ struct gdb_state_s
                                            */
   int last_stopreason;                    /* Last stop reason */
   FAR void *last_stopaddr;                /* Last stop address */
-  pid_t pid;                              /* Gdb current thread */
+  pid_t pid;                              /* Current NuttX thread pid */
   FAR char *pkt_next;                     /* Pointer to next byte in packet */
   char pkt_buf[BUFSIZE];                  /* Packet buffer */
   size_t pkt_len;                         /* Packet send and receive length */
-  uint8_t running_regs[XCPTCONTEXT_SIZE]; /* Registers of running thread */
   size_t size;                            /* Size of registers */
   uintptr_t registers[0];                 /* Registers of other threads */
 };
@@ -391,23 +400,24 @@ static int gdb_send_packet(FAR struct gdb_state_s *state)
     }
 
 #ifdef CONFIG_LIB_GDBSTUB_DEBUG
-    {
-      size_t p;
-      GDB_DEBUG(state, "-> ");
-      for (p = 0; p < len; p++)
-        {
-          if (isprint(buf[p]))
-            {
-              GDB_DEBUG(state, "%c", buf[p]);
-            }
-          else
-            {
-              GDB_DEBUG(state, "\\x%02x", buf[p] & 0xff);
-            }
-        }
+  {
+    size_t p;
 
-      GDB_DEBUG(state, "\n");
-    }
+    GDB_DEBUG(state, "-> ");
+    for (p = 0; p < len; p++)
+      {
+        if (isprint(buf[p]))
+          {
+            GDB_DEBUG(state, "%c", buf[p]);
+          }
+        else
+          {
+            GDB_DEBUG(state, "\\x%02x", buf[p] & 0xff);
+          }
+      }
+
+    GDB_DEBUG(state, "\n");
+  }
 #endif
 
   while (i < len)
@@ -581,23 +591,24 @@ static int gdb_recv_packet(FAR struct gdb_state_s *state)
     }
 
 #ifdef CONFIG_LIB_GDBSTUB_DEBUG
-    {
-      size_t p;
-      GDB_DEBUG(state, "<- ");
-      for (p = 0; p < state->pkt_len; p++)
-        {
-          if (isprint(state->pkt_buf[p]))
-            {
-              GDB_DEBUG(state, "%c", state->pkt_buf[p]);
-            }
-          else
-            {
-              GDB_DEBUG(state, "\\x%02x", state->pkt_buf[p] & 0xff);
-            }
-        }
+  {
+    size_t p;
 
-      GDB_DEBUG(state, "\n");
-    }
+    GDB_DEBUG(state, "<- ");
+    for (p = 0; p < state->pkt_len; p++)
+      {
+        if (isprint(state->pkt_buf[p]))
+          {
+            GDB_DEBUG(state, "%c", state->pkt_buf[p]);
+          }
+        else
+          {
+            GDB_DEBUG(state, "\\x%02x", state->pkt_buf[p] & 0xff);
+          }
+      }
+
+    GDB_DEBUG(state, "\n");
+  }
 #endif
 
   ret = gdb_hex2bin(&expected, 1, buf, 2);
@@ -675,22 +686,51 @@ static int gdb_recv_ack(FAR struct gdb_state_s *state)
 static ssize_t gdb_bin2hex(FAR void *buf, size_t buf_len,
                            FAR const void *data, size_t data_len)
 {
-  FAR const char *in = data;
+  size_t skip = (uintptr_t)data % 4;
+  size_t ret = data_len * 2;
   FAR char *out = buf;
-  size_t pos;
+  size_t total;
+  uint32_t in;
 
   if (buf_len < data_len * 2)
     {
       return -EOVERFLOW; /* Buffer too small */
     }
 
-  for (pos = 0; pos < data_len; pos++)
+  if (skip != 0)
     {
-      itoa(in[pos] >> 4 & 0xf, out++, 16);
-      itoa(in[pos] & 0xf, out++, 16);
+      data = (FAR const void *)((uintptr_t)data & ~3);
+      data_len += skip;
     }
 
-  return data_len * 2;
+  total = data_len;
+
+  for (size_t i = 0; i < (data_len + 3) / 4; i++)
+    {
+      in = *((FAR uint32_t *)data + i);
+
+      for (size_t j = 0; j < 4; j++)
+        {
+          if (skip == 0)
+            {
+              itoa(in >> 4 & 0xf, out++, 16);
+              itoa(in & 0xf, out++, 16);
+            }
+          else
+            {
+              skip--;
+            }
+
+          in >>= 8;
+
+          if (--total == 0)
+            {
+              break;
+            }
+        }
+    }
+
+  return ret;
 }
 
 /****************************************************************************
@@ -741,6 +781,39 @@ static ssize_t gdb_hex2bin(FAR void *buf, size_t buf_len,
     }
 
   return data_len / 2;
+}
+
+/****************************************************************************
+ * Name: gdb_memcpy
+ *
+ * Description:
+ *   Copy data from src to dest.
+ *
+ * Input Parameters:
+ *   dest - The destination buffer.
+ *   src  - The source buffer.
+ *   len  - The length of the data to copy.
+ *
+ * Returned Value:
+ *   The destination buffer.
+ *
+ ****************************************************************************/
+
+static FAR void *gdb_memcpy(FAR void *dest, FAR const void *src, size_t len)
+{
+#ifdef CONFIG_MM_KASAN
+  FAR char *d = dest;
+  FAR const char *s = src;
+
+  while (len--)
+    {
+      *d++ = *s++;
+    }
+
+  return dest;
+#else
+  return memcpy(dest, src, len);
+#endif
 }
 
 /****************************************************************************
@@ -842,7 +915,7 @@ static ssize_t gdb_get_memory(FAR struct gdb_state_s *state,
       else
         {
           ret = MIN(len, buf_len);
-          memcpy(buf, (FAR const void *)addr, ret);
+          gdb_memcpy(buf, (FAR const void *)addr, ret);
         }
     }
 
@@ -885,7 +958,7 @@ static ssize_t gdb_put_memory(FAR struct gdb_state_s *state,
       else
         {
           ret = MIN(len, buf_len);
-          memcpy((FAR void *)addr, buf, ret);
+          gdb_memcpy((FAR void *)addr, buf, ret);
         }
     }
 
@@ -991,7 +1064,7 @@ static int gdb_send_error_packet(FAR struct gdb_state_s *state,
  ****************************************************************************/
 
 /****************************************************************************
- * Name: gdb_get_registers
+ * Name: gdb_update_regcache
  *
  * Description:
  *   Get the registers of the specified task.
@@ -1000,7 +1073,7 @@ static int gdb_send_error_packet(FAR struct gdb_state_s *state,
  *   state   - The pointer to the GDB state structure.
  ****************************************************************************/
 
-static void gdb_get_registers(FAR struct gdb_state_s *state)
+static void gdb_update_regcache(FAR struct gdb_state_s *state)
 {
   FAR struct tcb_s *tcb = nxsched_get_tcb(state->pid);
   FAR uint8_t *reg;
@@ -1009,7 +1082,7 @@ static void gdb_get_registers(FAR struct gdb_state_s *state)
   reg = (FAR uint8_t *)tcb->xcp.regs;
   if (state->pid == _SCHED_GETTID())
     {
-      if (up_interrupt_context())
+      if (up_interrupt_context() && running_regs())
         {
           reg = (FAR uint8_t *)running_regs();
         }
@@ -1055,7 +1128,6 @@ static int gdb_read_registers(FAR struct gdb_state_s *state)
 {
   int ret;
 
-  gdb_get_registers(state);
   ret = gdb_bin2hex(state->pkt_buf, sizeof(state->pkt_buf),
                     state->registers, state->size);
   if (ret < 0)
@@ -1091,7 +1163,7 @@ static int gdb_write_registers(FAR struct gdb_state_s *state)
 {
   int ret;
 
-  ret = gdb_hex2bin(state->registers, sizeof(state->registers),
+  ret = gdb_hex2bin(state->registers, state->size,
                     state->pkt_buf + 1, state->pkt_len - 1);
   if (ret < 0)
     {
@@ -1103,10 +1175,10 @@ static int gdb_write_registers(FAR struct gdb_state_s *state)
 }
 
 /****************************************************************************
- * Name: gdb_write_register
+ * Name: gdb_read_register
  *
  * Description:
- *   Write a Register Command Format: P n.
+ *   Read a Register Command Format: p n.
  *
  * Input Parameters:
  *   state   - The pointer to the GDB state structure.
@@ -1131,7 +1203,6 @@ static int gdb_read_register(FAR struct gdb_state_s *state)
       return ret;
     }
 
-  gdb_get_registers(state);
   if (addr >= state->size)
     {
       return 0;
@@ -1146,6 +1217,61 @@ static int gdb_read_register(FAR struct gdb_state_s *state)
 
   state->pkt_len = ret;
   gdb_send_packet(state);
+  return 0;
+}
+
+/****************************************************************************
+ * Name: gdb_write_register
+ *
+ * Description:
+ *   Write a Register Command Format: P n.
+ *   Note that this won't work for all architectures because the GDB remote
+ *   register number is not always the same as the NuttX register number.
+ *
+ * Input Parameters:
+ *   state   - The pointer to the GDB state structure.
+ *
+ * Returned Value:
+ *   Zero on success.
+ *   Negative value on error.
+ *
+ * Note: Command Format: Pn.
+ *       Response Format: OK or negative value for error number.
+ ****************************************************************************/
+
+static int gdb_write_register(FAR struct gdb_state_s *state)
+{
+  uintptr_t addr;
+  int ret;
+
+  state->pkt_next++;
+
+  ret = gdb_expect_integer(state, &addr);
+  if (ret < 0)
+    {
+      return ret;
+    }
+
+  ret = gdb_expect_separator(state, '=');
+  if (ret < 0)
+    {
+      return ret;
+    }
+
+  if (addr > state->size / sizeof(uintptr_t) - 1)
+    {
+      return -EINVAL;
+    }
+
+  ret = gdb_hex2bin(&state->registers[addr], sizeof(uintptr_t),
+                    state->pkt_next, gdb_remaining_len(state));
+
+  if (ret < 0)
+    {
+      return ret;
+    }
+
+  gdb_send_ok_packet(state);
   return 0;
 }
 
@@ -1336,12 +1462,10 @@ static int gdb_write_bin_memory(FAR struct gdb_state_s *state)
 
 static void gdb_get_thread(FAR struct tcb_s *tcb, FAR void *arg)
 {
+  int pid = tcb->pid == 0 ? PID0_REPLACE : tcb->pid;
   FAR struct gdb_state_s *state = arg;
-  int pid = tcb->pid;
 
-  /* Gdb pid start from 1, so add it */
-
-  state->pkt_len += sprintf(&state->pkt_buf[state->pkt_len], "%x,", pid + 1);
+  state->pkt_len += sprintf(&state->pkt_buf[state->pkt_len], "%x,", pid);
 }
 
 /****************************************************************************
@@ -1416,7 +1540,12 @@ static int gdb_query(FAR struct gdb_state_s *state)
           return ret;
         }
 
-      tcb = nxsched_get_tcb(pid - 1);
+      if (pid == PID0_REPLACE)
+        {
+          pid = 0;
+        }
+
+      tcb = nxsched_get_tcb(pid);
       if (tcb == NULL)
         {
           return -EINVAL;
@@ -1498,13 +1627,18 @@ static int gdb_is_thread_active(FAR struct gdb_state_s *state)
       return ret;
     }
 
-  tcb = nxsched_get_tcb(pid - 1);
+  if (pid == PID0_REPLACE)
+    {
+      pid = 0;
+    }
+
+  tcb = nxsched_get_tcb(pid);
   if (tcb == NULL)
     {
       return -EINVAL;
     }
 
-  state->pid = pid - 1;
+  state->pid = pid;
   gdb_send_ok_packet(state);
   return ret;
 }
@@ -1515,6 +1649,8 @@ static int gdb_is_thread_active(FAR struct gdb_state_s *state)
  * Description:
  *  The thread context packet is used by GDB to request information from
  *  the stub.
+ *  Set thread for subsequent operations (m, M, g, G, etc)
+ *  Thread ID of -1 means all all thread, 0 means any thread.
  *
  * Input Parameters:
  *   state   - The pointer to the GDB state structure.
@@ -1524,7 +1660,7 @@ static int gdb_is_thread_active(FAR struct gdb_state_s *state)
  *   Negative value on error.
  *
  * Note : Command Format: Hg<id>
- *                       Hc-<id>
+ *                       Hc<id>
  *        Response Format: OK
  ****************************************************************************/
 
@@ -1533,19 +1669,14 @@ static int gdb_thread_context(FAR struct gdb_state_s *state)
   FAR struct tcb_s *tcb;
   uintptr_t pid;
   int ret;
+  char c = state->pkt_buf[1];
 
-  if (state->pkt_buf[1] == 'g')
-    {
-      state->pkt_next += 2;
-    }
-  else if  (state->pkt_buf[1] == 'c')
-    {
-      state->pkt_next += 3;
-    }
-  else
+  if (c != 'g' && c != 'c')
     {
       return -EINVAL;
     }
+
+  state->pkt_next += 2;   /* Skip Hg/Hc */
 
   ret = gdb_expect_integer(state, &pid);
   if (ret < 0)
@@ -1553,16 +1684,26 @@ static int gdb_thread_context(FAR struct gdb_state_s *state)
       return ret;
     }
 
-  if (pid != 0)
+  if (pid == 0 || pid == -1)
     {
-      tcb = nxsched_get_tcb(pid - 1);
-      if (tcb == NULL)
-        {
-          return -EINVAL;
-        }
+      /* ‘-1’ to indicate all threads, or ‘0’ to pick any thread. */
 
-      state->pid = pid - 1;
+      pid = state->pid;   /* Keep unchanged */
     }
+  else if (pid == PID0_REPLACE)
+    {
+      pid = 0;
+    }
+
+  tcb = nxsched_get_tcb(pid);
+  if (tcb == NULL)
+    {
+      return -EINVAL;
+    }
+
+  state->pid = pid;
+
+  gdb_update_regcache(state);
 
   gdb_send_ok_packet(state);
   return 0;
@@ -1592,26 +1733,32 @@ static int gdb_send_stop(FAR struct gdb_state_s *state, int stopreason,
                          FAR void *stopaddr)
 {
   int ret;
+  int pid;
 
-  state->pid = _SCHED_GETTID();
+  state->pid = pid = _SCHED_GETTID();
+  if (pid == 0)
+    {
+      pid = PID0_REPLACE;
+    }
+
 retry:
   switch (stopreason)
     {
       case GDB_STOPREASON_WATCHPOINT_RO:
         ret = sprintf(state->pkt_buf, "T05thread:%x;rwatch:%" PRIxPTR ";",
-                      state->pid + 1, (uintptr_t)stopaddr);
+                      pid, (uintptr_t)stopaddr);
         break;
       case GDB_STOPREASON_WATCHPOINT_WO:
         ret = sprintf(state->pkt_buf, "T05thread:%x;awatch:%" PRIxPTR ";",
-                      state->pid + 1, (uintptr_t)stopaddr);
+                      pid, (uintptr_t)stopaddr);
         break;
       case GDB_STOPREASON_WATCHPOINT_RW:
         ret = sprintf(state->pkt_buf, "T05thread:%x;watch:%" PRIxPTR ";",
-                      state->pid + 1, (uintptr_t)stopaddr);
+                      pid, (uintptr_t)stopaddr);
         break;
       case GDB_STOPREASON_BREAKPOINT:
         ret = sprintf(state->pkt_buf, "T05thread:%x;hwbreak:;",
-                      state->pid + 1);
+                      pid);
         break;
       case GDB_STOPREASON_STEPPOINT:
         if (state->last_stopreason == GDB_STOPREASON_WATCHPOINT_RW ||
@@ -1624,7 +1771,7 @@ retry:
 
       case GDB_STOPREASON_CTRLC:
       default:
-        ret = sprintf(state->pkt_buf, "T05thread:%x;", state->pid + 1);
+        ret = sprintf(state->pkt_buf, "T05thread:%x;", pid);
     }
 
   if (ret < 0)
@@ -1651,6 +1798,7 @@ retry:
 static int gdb_smp_debugpoint_add(FAR void *arg)
 {
   FAR struct gdb_debugpoint_s *point = arg;
+
   return up_debugpoint_add(point->type, point->addr, point->size,
                            point->callback, point->arg);
 }
@@ -1666,6 +1814,7 @@ static int gdb_smp_debugpoint_add(FAR void *arg)
 static int gdb_smp_debugpoint_remove(FAR void *arg)
 {
   FAR struct gdb_debugpoint_s *point = arg;
+
   return up_debugpoint_remove(point->type, point->addr, point->size);
 }
 #endif
@@ -1888,6 +2037,7 @@ int gdb_debugpoint_add(int type, FAR void *addr, size_t size,
 {
 #ifdef CONFIG_SMP
   struct gdb_debugpoint_s point;
+
   point.type = type;
   point.addr = addr;
   point.size = size;
@@ -1909,6 +2059,7 @@ int gdb_debugpoint_remove(int type, FAR void *addr, size_t size)
 {
 #ifdef CONFIG_SMP
   struct gdb_debugpoint_s point;
+
   point.type = type;
   point.addr = addr;
   point.size = size;
@@ -1946,13 +2097,15 @@ FAR struct gdb_state_s *gdb_state_init(gdb_send_func_t send,
                                        FAR void *priv)
 {
   size_t size = g_tcbinfo.regs_num * sizeof(uintptr_t);
-  FAR struct gdb_state_s *state = lib_zalloc(sizeof(*state) + size);
+  FAR struct gdb_state_s *state = lib_memalign(XCPTCONTEXT_ALIGN,
+                                               sizeof(*state) + size);
 
   if (state == NULL)
     {
       return NULL;
     }
 
+  memset(state, 0, sizeof(*state) + size);
   state->size = size;
   state->send = send;
   state->recv = recv;
@@ -2043,6 +2196,8 @@ int gdb_process(FAR struct gdb_state_s *state, int stopreason,
 
   if (stopreason != GDB_STOPREASON_NONE)
     {
+      state->pid = _SCHED_GETTID();
+      gdb_update_regcache(state);
       gdb_send_stop(state, stopreason, stopaddr);
     }
 
@@ -2063,6 +2218,9 @@ int gdb_process(FAR struct gdb_state_s *state, int stopreason,
             break;
           case 'p': /* Read one register */
             ret = gdb_read_register(state);
+            break;
+          case 'P': /* Write one register */
+            ret = gdb_write_register(state);
             break;
           case 'm': /* Read memory */
             ret = gdb_read_memory(state);
@@ -2117,7 +2275,7 @@ int gdb_process(FAR struct gdb_state_s *state, int stopreason,
 #endif
           default:
             ret = -EPROTONOSUPPORT;
-      }
+        }
 
       if (ret == -EPROTONOSUPPORT)
         {

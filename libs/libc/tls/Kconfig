@@ -1,9 +1,53 @@
+############################################################################
+# libs/libc/tls/Kconfig
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.  The
+# ASF licenses this file to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance with the
+# License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
+############################################################################
 #
 # For a description of the syntax of this configuration file,
 # see the file kconfig-language.txt in the NuttX tools repository.
 #
 
 menu "Thread Local Storage (TLS)"
+
+config TLS_EMUTLS
+	bool "Per-thread copies of emulated TLS variables"
+	default !DEFAULT_SMALL
+	depends on BUILTIN_TOOLCHAIN
+	depends on (ARCH_TOOLCHAIN_GNU && !ARCH_TOOLCHAIN_ARMCLANG && !ARCH_TOOLCHAIN_GHS && !ARCH_SIM) || (ARCH_SIM && SIM_TOOLCHAIN_GCC && !HOST_MACOS && !WINDOWS_NATIVE)
+	---help---
+		GCC and clang call __emutls_get_address() for __thread variables
+		when the target has no native TLS, or with -femulated-tls.  libc
+		then gives one copy of each variable per thread, and the link
+		sends the calls to it with --wrap.  libgcc's copy is for one
+		thread only; compiler-rt (BUILTIN_COMPILER_RT) has its own copy
+		per thread.  The sim has it only with GCC and the GNU linker
+		(Linux, MinGW): the macOS linker and the MSVC linker have no
+		--wrap.
+
+		With LTO every program links this code (about 800 bytes on
+		Cortex-M).  On memory-constrained targets (DEFAULT_SMALL=y),
+		it is disabled by default to save flash and avoid pulling
+		emulation routines into minimal images.  A board that has no
+		space for it can disable it: then
+		all threads share one copy of each __thread variable, as with
+		libgcc.
 
 config TLS_ALIGNED
 	bool "Require stack alignment"
@@ -40,7 +84,8 @@ config TLS_LOG2_MAXSTACK
 		except that (1) a very large value can cause you to run out of
 		alignable memory (and fail memory allocations), and (2) smaller
 		values will limit the maximum size of the stack (hence the naming
-		of this configuration value).
+		of this configuration value).  A request for a larger stack fails
+		with EINVAL.
 
 config TLS_NELEM
 	int "Number of TLS elements"
@@ -54,6 +99,11 @@ config TLS_NELEM
 
 		NOTE that the special value of CONFIG_TLS_NELEM disables these
 		TLS interfaces.
+
+		This is also PTHREAD_KEYS_MAX, the number of pthread_key_create()
+		keys.  POSIX requires at least 128 (_POSIX_THREAD_KEYS_MAX).  Each
+		element costs one pointer in every thread and one destructor
+		pointer in every task group.
 
 config TLS_TASK_NELEM
 	int "Number of Task Local Storage elements"
@@ -76,5 +126,8 @@ config TLS_NCLEANUP
 		POSIX pthread cancellation.  The number of cleanup stack levels
 		is the maximum number of pthread_cleanup_push() calls that can
 		be made without a corresponding pthread_cleanup_pop() call.
+		With 0, pthread_cleanup_push() and pthread_cleanup_pop() do not
+		exist and a program that calls them does not link.  Each level
+		costs two pointers in every thread.
 
 endmenu # Thread Local Storage (TLS)

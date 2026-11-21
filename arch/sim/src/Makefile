@@ -127,9 +127,7 @@ ifeq ($(CONFIG_SIM_X11FB),y)
 endif
 endif
 
-ifeq ($(CONFIG_FS_LARGEFILE),y)
-  HOSTCFLAGS += -D_FILE_OFFSET_BITS=64
-endif
+HOSTCFLAGS += -D_FILE_OFFSET_BITS=64 -D_TIME_BITS=64
 
 HOSTSRCS  = sim_hostirq.c sim_hostmemory.c sim_hostmisc.c sim_hosttime.c sim_hostuart.c
 HOSTSRCS += sim_hostfs.c sim_errno.c
@@ -319,10 +317,6 @@ ifeq ($(CONFIG_SIM_CANDEV_SOCK),y)
   CSRCS += sim_cansock.c
 endif
 
-ifeq ($(CONFIG_RPMSG_VIRTIO_LITE),y)
-  CSRCS += sim_rpmsg_virtio.c
-endif
-
 ifeq ($(CONFIG_RPMSG_PORT_UART),y)
   CSRCS += sim_rpmsg_port_uart.c
 endif
@@ -355,6 +349,12 @@ endif
 ifeq ($(CONFIG_SIM_VIDEO_DECODER),y)
   CSRCS += sim_decoder.c
   CSRCS += sim_openh264dec.c
+endif
+
+ifeq ($(CONFIG_SIM_JPEG_DECODER),y)
+  CSRCS += sim_jpeg_decoder.c
+  CSRCS += sim_jpegdec.c
+  STDLIBS += -ljpeg
 endif
 
 ifeq ($(CONFIG_SIM_VIDEO_ENCODER),y)

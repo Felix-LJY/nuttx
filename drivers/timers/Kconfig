@@ -1,3 +1,24 @@
+############################################################################
+# drivers/timers/Kconfig
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.  The
+# ASF licenses this file to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance with the
+# License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
+############################################################################
 #
 # For a description of the syntax of this configuration file,
 # see the file kconfig-language.txt in the NuttX tools repository.
@@ -36,6 +57,12 @@ config PULSECOUNT
 
 if PWM
 
+config PWM_FREQUENCY_FIXED
+	bool "PWM Frequency Fixed Point Support"
+	default n
+	---help---
+		Using ub32_t to define frequency to support accuracy less than 1HZ.
+
 config PWM_OVERWRITE
 	bool "PWM Overwrite Support"
 	default n
@@ -68,6 +95,17 @@ config PWM_NCHANNELS
 		Specifies the number of output channels per timer.  Each timer
 		may support fewer output channels than this value.
 
+config PWM_SIFIVE
+	bool "SiFive PWM lower-half driver"
+	default n
+	---help---
+		Enables the SiFive PWM lower-half driver (four compare channels,
+		PWMCFG/PWMCMPx registers).  The controller is described by the
+		"sifive,pwm0" device tree binding.  The counter runs in its
+		natural 16-bit wrap mode, so the requested frequency is
+		approximated by the SCALE prescaler and all four compare
+		registers act as duty outputs.
+
 endif # PWM
 
 config CAPTURE
@@ -91,9 +129,42 @@ config CAPTURE_NOTIFY
 config FAKE_CAPTURE
 	bool "Fake Capture Driver"
 	default n
-	depends on CAPTURE_NSIGNALS > 0
+	depends on CAPTURE_NOTIFY
 	---help---
-		Enables a fake capture driver for testing purposes.
+		Enables a fake capture driver for testing purposes.  It
+		simulates a 10 Hz square wave with a 50% duty cycle on
+		/dev/fake_capture0 and /dev/fake_capture1.  Its edges are time
+		stamped by a simulated free running counter (getcount and
+		getcapture), derived from perf_gettime(), which is used as the
+		"true" time.  perf_gettime() must have a good resolution for
+		the time stamps to be meaningful (it is in nanoseconds on the
+		simulator).
+
+if FAKE_CAPTURE
+
+config FAKE_CAPTURE_COUNTER_FREQ
+	int "Simulated counter frequency (Hz)"
+	default 100000000
+	range 1000000 1000000000
+
+config FAKE_CAPTURE_ERROR_PPB
+	int "Simulated counter frequency error (ppb)"
+	default 0
+	range -400000 400000
+	---help---
+		Frequency error of the oscillator of the simulated counter, in
+		parts per billion, as a real crystal would have.
+
+config FAKE_CAPTURE_JITTER_NS
+	int "Simulated edge jitter (ns, peak)"
+	default 0
+	range 0 1000000
+	---help---
+		Uniformly distributed jitter added to the time stamp of every
+		simulated edge.  Typical GNSS receivers have a PPS jitter of a
+		few nanoseconds to some tens of nanoseconds.
+
+endif # FAKE_CAPTURE
 
 endif # CAPTURE
 
@@ -114,6 +185,67 @@ config DSHOT_NCHANNELS
 		may support fewer output channels than this value.
 
 endif # DSHOT
+
+config OCU
+	bool "OCU (Output Compare Unit) Driver Support"
+	default n
+	---help---
+		This selection enables building of the "upper-half" OCU driver.
+		The OCU driver provides a standard interface for hardware output
+		compare functionality. An OCU channel compares a free-running
+		counter against a programmable threshold and performs configurable
+		actions (pin toggle, notification callback) on match.
+		See include/nuttx/timers/ocu.h for further OCU driver information.
+
+config TIMER_IMX_GPT
+	bool "i.MX GPT Driver"
+	default n
+	---help---
+		Enable the i.MX GPT (General Purpose Timer) lower-half driver
+		core: one free-running counter and one shared interrupt.  A single
+		GPT block can expose an Output Compare Unit (/dev/ocuN) and/or an
+		Input Capture Unit (/dev/capN); enable either or both below.
+		Instances are created from the device tree ("fsl,imx-gpt") by the
+		board bring-up code via imx_gpt_initialize().
+
+if TIMER_IMX_GPT
+
+config TIMER_IMX_GPT_OCU
+	bool "Output Compare Unit (OCU) support"
+	default y
+	select OCU
+	---help---
+		Register the GPT output-compare channels as /dev/ocuN and plug
+		them into the generic ocu upper-half driver.
+
+config TIMER_IMX_GPT_NUM_OCU
+	int "Number of OCU (output compare) channels"
+	depends on TIMER_IMX_GPT_OCU
+	default 1
+	range 1 3
+	---help---
+		Number of Output Compare Unit channels to register as /dev/ocuN.
+		The i.MX GPT hardware provides up to 3 output compare channels.
+
+config TIMER_IMX_GPT_ICU
+	bool "Input Capture Unit (ICU) support"
+	default y
+	select CAPTURE
+	select CAPTURE_NOTIFY
+	---help---
+		Register the GPT input-capture channels as /dev/capN and plug
+		them into the generic capture upper-half driver.
+
+config TIMER_IMX_GPT_NUM_ICU
+	int "Number of ICU (input capture) channels"
+	depends on TIMER_IMX_GPT_ICU
+	default 1
+	range 1 2
+	---help---
+		Number of Input Capture Unit channels to register as /dev/capN.
+		The i.MX GPT hardware provides up to 2 input capture channels.
+
+endif # TIMER_IMX_GPT
 
 config TIMER
 	bool "Timer Support"
@@ -461,14 +593,33 @@ config RTC_RPMSG_SERVER
 	bool "The RTC RPMSG Role"
 	depends on RPMSG
 
+config RTC_RPMSG_SERVER_CPUNAME
+	string "RPMSG RTC Server CPU Name"
+	default ""
+	depends on RTC_RPMSG && !RTC_RPMSG_SERVER
+	---help---
+		Specify the CPU name of the RTC RPMSG server to connect to.
+		When set, the RTC client will only match the rpmsg-rtc service
+		from the specified CPU, avoiding conflicts when multiple rpmsg
+		channels are available. Leave empty to match any CPU.
+
 config RTC_RPMSG_SYNC_BASETIME
 	bool "Update g_basetime from rpmsg."
 	default n
-	depends on !RTC_RPMSG_SERVER && !CLOCK_TIMEKEEPING
+	depends on RTC_RPMSG && !RTC_RPMSG_SERVER && !CLOCK_TIMEKEEPING
 	---help---
 		Prevent g_basetime differences in multi-core situations.
 
 endif # RTC
+
+config TIMER_SP804
+	bool "SP804 Dual Timer Support"
+	default n
+	select ONESHOT_COUNT
+	---help---
+		Enables support for the ARM SP804 dual timer module.
+		This timer is commonly found on ARM Versatile, Integrator
+		and RealView platforms, including QEMU emulations.
 
 menuconfig WATCHDOG
 	bool "Watchdog Timer Support"
@@ -479,6 +630,49 @@ menuconfig WATCHDOG
 		information.
 
 if WATCHDOG
+
+config WATCHDOG_WDOG
+	bool "Watchdog implemented by wdog timer"
+	default n
+	depends on !WATCHDOG_AUTOMONITOR_BY_ONESHOT && !WATCHDOG_AUTOMONITOR_BY_TIMER
+	---help---
+		Build a watchdog timer on top of the wdog timers, for the platforms
+		that have no watchdog hardware, e.g. the simulator. It cannot detect
+		a system where the tick stopped. Not to be confused with
+		WATCHDOG_AUTOMONITOR_BY_WDOG, where a wdog feeds a real watchdog. It
+		is not available with the oneshot and timer auto-monitors, which
+		change the watchdog_register() prototype. Call
+		watchdog_wdog_initialize() from the board to register it.
+
+if WATCHDOG_WDOG
+
+config WATCHDOG_WDOG_TIMEOUT
+	int "Initial timeout (millisecond)"
+	default 5000
+
+choice WATCHDOG_WDOG_ACTION
+	prompt "Action when the watchdog expires"
+	default WATCHDOG_WDOG_PANIC
+
+config WATCHDOG_WDOG_PANIC
+	bool "Panic"
+
+config WATCHDOG_WDOG_REBOOT
+	bool "Reboot"
+	depends on BOARDCTL_RESET
+
+config WATCHDOG_WDOG_POWEROFF
+	bool "Power off"
+	depends on BOARDCTL_POWEROFF
+
+endchoice # WATCHDOG_WDOG_ACTION
+
+config WATCHDOG_WDOG_STATUS
+	int "Status passed to the board when it reboots or powers off"
+	default 0
+	depends on WATCHDOG_WDOG_REBOOT || WATCHDOG_WDOG_POWEROFF
+
+endif # WATCHDOG_WDOG
 
 config WATCHDOG_DEVPATH
 	string "Watchdog Device Path"
@@ -546,11 +740,17 @@ config WATCHDOG_AUTOMONITOR_BY_WDOG
 	---help---
 		Feed watchdog through wdog functions periodically
 
-config WATCHDOG_AUTOMONITOR_BY_WORKER
-	bool "Worker callback"
+config WATCHDOG_AUTOMONITOR_BY_LPWORK
+	bool "Low priority worker callback"
 	depends on SCHED_WORKQUEUE
 	---help---
-		Feed watchdog through wqueue functions periodically
+		Feed watchdog through low priority wqueue functions periodically
+
+config WATCHDOG_AUTOMONITOR_BY_HPWORK
+	bool "High priority worker callback"
+	depends on SCHED_WORKQUEUE
+	---help---
+		Feed watchdog through high priority wqueue functions periodically
 
 config WATCHDOG_AUTOMONITOR_BY_IDLE
 	bool "Idle callback"
@@ -577,7 +777,47 @@ config WATCHDOG_AUTOMONITOR_PING_INTERVAL
 
 endif # !WATCHDOG_AUTOMONITOR_BY_CAPTURE && !WATCHDOG_AUTOMONITOR_BY_IDLE
 
+config WATCHDOG_AUTOMONITOR_TASKS
+	bool "Supervise the tasks"
+	default n
+	---help---
+		Supervise the tasks that use the watchdog devices. Each open() of a
+		device creates a channel with its own timeout, which the task feeds
+		with write() or WDIOC_KEEPALIVE. The auto-monitor feeds the hardware
+		watchdog only while all the armed channels are within their timeouts,
+		so a task that hangs, exits or crashes makes the system reset. The
+		device no longer gives the tasks control over the hardware watchdog,
+		which stays with the auto-monitor. A channel timeout is detected up to
+		one keepalive interval late, see WATCHDOG_AUTOMONITOR_PING_INTERVAL.
+
+if WATCHDOG_AUTOMONITOR_TASKS
+
+config WATCHDOG_AUTOMONITOR_TASKS_TIMEOUT
+	int "Default channel timeout (millisecond)"
+	default 5000
+
+config WATCHDOG_AUTOMONITOR_TASKS_PANIC
+	bool "Panic when a channel times out"
+	default n
+	---help---
+		Panic as soon as a channel times out, to get a crash dump, instead of
+		waiting for the hardware watchdog to reset the system. Note that
+		WATCHDOG_PANIC_NOTIFIER stops the hardware watchdog on a panic.
+
+endif # WATCHDOG_AUTOMONITOR_TASKS
+
 endif # WATCHDOG_AUTOMONITOR
+
+config WATCHDOG_CMSDK
+	bool "ARM CMSDK APB Watchdog support"
+	default n
+	---help---
+		Enables the lower-half driver for the ARM CMSDK APB Watchdog
+		(the watchdog IP defined in the ARM Cortex-M System Design Kit
+		TRM, ARM DDI 0479), as modelled by QEMU's cmsdk-apb-watchdog.
+		The device implements a two-stage timeout: the first expiry
+		raises an early-warning interrupt and, if the counter is not
+		reloaded, the second expiry asserts a system reset.
 
 endif # WATCHDOG
 
@@ -622,11 +862,88 @@ config PTP_CLOCK
 		devices. If you want to use a PTP clock, then you should
 		also enable at least one clock driver as well.
 
+if PTP_CLOCK
+
+config PTP_CLOCK_EXTTS_QUEUE_SIZE
+	int "External time stamp event queue size"
+	default 16
+	range 1 1024
+	---help---
+		Number of external time stamp (EXTTS) events, for example
+		PPS pulses, that the PTP clock driver keeps until the
+		application reads them from /dev/ptpX.  When the queue is
+		full the oldest event is dropped.
+
+config PTP_CLOCK_NPOLLWAITERS
+	int "Number of poll waiters"
+	default 2
+	range 1 16
+	---help---
+		Maximum number of threads that can poll() one /dev/ptpX
+		device at the same time.
+
+endif # PTP_CLOCK
+
 config PTP_CLOCK_DUMMY
 	bool "the dummy test driver for ptp clock"
 	default n
 	select PTP_CLOCK
 	---help---
 		The dummy test driver.
+
+config PTP_PPS
+	bool "PPS disciplined software PTP clock"
+	default n
+	depends on CAPTURE_NOTIFY
+	select PTP_CLOCK
+	---help---
+		A PTP hardware clock (/dev/ptpX) built on top of a capture
+		lower half (struct cap_lowerhalf_s) whose free running 32-bit
+		counter latches the edges of its input in hardware, for
+		example a timer input capture channel connected to the PPS
+		output of a GNSS receiver.
+
+		The clock is read, stepped and frequency adjusted through the
+		standard clock_gettime(), clock_settime() and clock_adjtime()
+		interfaces, and the captured edges are delivered to the
+		application as struct ptp_extts_event records read from
+		/dev/ptpX.  The gnsspps application in nuttx-apps uses them
+		to discipline the clock to GNSS time, so that boards that
+		each have a GNSS receiver share the same time scale.
+
+		The capture lower half must implement the getcount,
+		getcapture, bind and unbind operations, and the board calls
+		ptp_pps_register() with it.
+
+if PTP_PPS
+
+config PTP_PPS_MAX_ADJ
+	int "Maximum frequency adjustment (ppb)"
+	default 500000
+	range 1000 10000000
+	---help---
+		Largest frequency correction, in parts per billion, that the
+		clock accepts through clock_adjtime(ADJ_FREQUENCY).  It must
+		cover the tolerance of the oscillator that drives the
+		counter.  The default of 500 ppm covers any crystal.
+
+config PTP_PPS_FAKE
+	bool "PPS disciplined clock on a fake capture"
+	default n
+	depends on FAKE_CAPTURE
+	---help---
+		Register a PPS disciplined clock on a fake capture lower half
+		(see FAKE_CAPTURE) that simulates a 1 Hz PPS.  Set the
+		frequency error of its counter and the jitter of the PPS with
+		FAKE_CAPTURE_ERROR_PPB and FAKE_CAPTURE_JITTER_NS, so that the
+		complete chain (driver, EXTTS events and the gnsspps servo) can
+		be tested on the simulator without any hardware.
+
+config PTP_PPS_FAKE_DEVNO
+	int "Device number (/dev/ptpX)"
+	default 0
+	depends on PTP_PPS_FAKE
+
+endif # PTP_PPS
 
 endmenu # Timer Driver Support

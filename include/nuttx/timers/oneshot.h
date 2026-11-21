@@ -282,13 +282,9 @@ struct oneshot_start_s
  * Public Data
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -324,7 +320,7 @@ void oneshot_count_init(FAR struct oneshot_lowerhalf_s *lower,
 
   ASSERT(frequency > 1);
 
-  invdiv_init_param64(frequency, &lower->invdiv_freq);
+  invdiv_init_param(frequency, &lower->invdiv_freq);
 #  endif
 }
 
@@ -523,10 +519,10 @@ int oneshot_start_absolute(FAR struct oneshot_lowerhalf_s *lower,
     {
       /* IRQ should be disable or the timer will be fired too late. */
 
-      irqstate_t flags = up_irq_save();
+      irqstate_t flags = irq_save();
       clkcnt_t   delay = expected - lower->ops->current(lower);
       lower->ops->start(lower, delay);
-      up_irq_restore(flags);
+      irq_restore(flags);
     }
 #else
   struct timespec curr =
@@ -660,10 +656,10 @@ int oneshot_tick_absolute(FAR struct oneshot_lowerhalf_s *lower,
     {
       /* IRQ should be disable or the timer will be fired too late. */
 
-      irqstate_t flags = up_irq_save();
+      irqstate_t flags = irq_save();
       clkcnt_t   delay = expected - lower->ops->current(lower);
       lower->ops->start(lower, delay);
-      up_irq_restore(flags);
+      irq_restore(flags);
     }
 #else
   struct timespec ts;
@@ -772,7 +768,6 @@ int oneshot_register(FAR const char *devname,
                      FAR struct oneshot_lowerhalf_s *lower);
 #endif
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

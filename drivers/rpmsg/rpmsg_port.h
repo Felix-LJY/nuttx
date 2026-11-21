@@ -40,6 +40,8 @@
  * Pre-processor Definitions
  ****************************************************************************/
 
+#define rpmsgvbs                rpmsgerr
+
 #define RPMSG_PORT_DROP_TXQ     0x01
 #define RPMSG_PORT_DROP_RXQ     0x02
 #define RPMSG_PORT_DROP_ALL     0x03
@@ -67,37 +69,42 @@ struct rpmsg_port_list_s
   struct list_node head;          /* List head */
 };
 
+struct rpmsg_port_node_s
+{
+  struct list_node node;          /* List node for free/ready/retx queue */
+};
+
 struct rpmsg_port_s;
 
 struct rpmsg_port_queue_s
 {
   /* Pointer to the rpmsg port handler */
 
-  FAR struct rpmsg_port_s  *port;
+  FAR struct rpmsg_port_s      *port;
 
   /* Indicate buffers current queue managed is dynamic alloced */
 
-  bool                     alloced;
+  bool                         alloced;
 
   /* Buffer array's base address of current queue managed */
 
-  FAR void                 *buf;
+  FAR void                     *buf;
 
   /* Node related to buffer for buffer management */
 
-  FAR struct list_node     *node;
+  FAR struct rpmsg_port_node_s *node;
 
   /* Length of buffers current queue managed */
 
-  uint16_t                 len;
+  uint16_t                     len;
 
   /* Free list of buffers which have not been occupied data yet */
 
-  struct rpmsg_port_list_s free;
+  struct rpmsg_port_list_s     free;
 
   /* Ready list of buffers which have been occupied data already */
 
-  struct rpmsg_port_list_s ready;
+  struct rpmsg_port_list_s     ready;
 };
 
 typedef void (*rpmsg_port_rx_cb_t)(FAR struct rpmsg_port_s *port,
@@ -127,7 +134,7 @@ struct rpmsg_port_ops_s
 
   /* Dump the transport debug information */
 
-  CODE void (*dump)(FAR struct rpmsg_port_s *port);
+  CODE void (*dump)(FAR struct rpmsg_port_s *port, bool verbose);
 };
 
 struct rpmsg_port_s
@@ -144,11 +151,8 @@ struct rpmsg_port_s
 
 #ifndef __ASSEMBLY__
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -251,7 +255,13 @@ void rpmsg_port_queue_add_buffer(FAR struct rpmsg_port_queue_s *queue,
 static inline_function
 uint16_t rpmsg_port_queue_navail(FAR struct rpmsg_port_queue_s *queue)
 {
-  return atomic_read(&queue->free.num);
+  irqstate_t flags;
+  uint16_t num;
+
+  flags = spin_lock_irqsave(&queue->free.lock);
+  num = queue->free.num;
+  spin_unlock_irqrestore(&queue->free.lock, flags);
+  return num;
 }
 
 /****************************************************************************
@@ -271,7 +281,13 @@ uint16_t rpmsg_port_queue_navail(FAR struct rpmsg_port_queue_s *queue)
 static inline_function
 uint16_t rpmsg_port_queue_nused(FAR struct rpmsg_port_queue_s *queue)
 {
-  return atomic_read(&queue->ready.num);
+  irqstate_t flags;
+  uint16_t num;
+
+  flags = spin_lock_irqsave(&queue->ready.lock);
+  num = queue->ready.num;
+  spin_unlock_irqrestore(&queue->ready.lock, flags);
+  return num;
 }
 
 /****************************************************************************
@@ -360,7 +376,6 @@ int rpmsg_port_register(FAR struct rpmsg_port_s *port,
 
 void rpmsg_port_unregister(FAR struct rpmsg_port_s *port);
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

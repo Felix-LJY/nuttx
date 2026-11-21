@@ -30,9 +30,11 @@
 #include <nuttx/config.h>
 
 #include <sys/types.h>
+#include <sys/resource.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <sched.h>
+#include <sys/prctl.h>
 #include <signal.h>
 #include <pthread.h>
 #include <time.h>
@@ -98,18 +100,20 @@
 #  define TCB_FLAG_SCHED_FIFO      (0 << TCB_FLAG_POLICY_SHIFT)  /* FIFO scheding policy */
 #  define TCB_FLAG_SCHED_RR        (1 << TCB_FLAG_POLICY_SHIFT)  /* Round robin scheding policy */
 #  define TCB_FLAG_SCHED_SPORADIC  (2 << TCB_FLAG_POLICY_SHIFT)  /* Sporadic scheding policy */
+#  define TCB_FLAG_SCHED_OTHER     (3 << TCB_FLAG_POLICY_SHIFT)  /* Other scheduling policy */
 #define TCB_FLAG_CPU_LOCKED        (1 << 5)                      /* Bit 5: Locked to this CPU */
 #define TCB_FLAG_SIGNAL_ACTION     (1 << 6)                      /* Bit 6: In a signal handler */
 #define TCB_FLAG_SYSCALL           (1 << 7)                      /* Bit 7: In a system call */
 #define TCB_FLAG_EXIT_PROCESSING   (1 << 8)                      /* Bit 8: Exiting */
 #define TCB_FLAG_FREE_STACK        (1 << 9)                      /* Bit 9: Free stack after exit */
 #define TCB_FLAG_HEAP_CHECK        (1 << 10)                     /* Bit 10: Heap check */
-#define TCB_FLAG_HEAP_DUMP         (1 << 11)                     /* Bit 11: Heap dump */
 #define TCB_FLAG_DETACHED          (1 << 12)                     /* Bit 12: Pthread detached */
 #define TCB_FLAG_FORCED_CANCEL     (1 << 13)                     /* Bit 13: Pthread cancel is forced */
 #define TCB_FLAG_JOIN_COMPLETED    (1 << 14)                     /* Bit 14: Pthread join completed */
 #define TCB_FLAG_FREE_TCB          (1 << 15)                     /* Bit 15: Free tcb after exit */
 #define TCB_FLAG_PREEMPT_SCHED     (1 << 16)                     /* Bit 16: tcb is PREEMPT_SCHED */
+#define TCB_FLAG_SIGMASK_SAVED     (1 << 17)                     /* Bit 17: sigsavedmask to restore */
+#define TCB_FLAG_UNINTERRUPTIBLE   (1 << 18)                     /* Bit 18: Blocking wait ignores signals */
 
 /* Values for struct task_group tg_flags */
 
@@ -120,7 +124,8 @@
 #define GROUP_FLAG_FD_BACKTRACE    (1 << 4)                      /* Bit 4: Enable FD backtrace for the group */
 #define GROUP_FLAG_SECURE_EXEC     (1 << 5)                      /* Bit 5: Secure (setuid/setgid) executable */
 #define GROUP_FLAG_DUMPABLE        (1 << 6)                      /* Bit 6: Process may be traced / coredumped */
-                                                                 /* Bit 7: Available */
+#define GROUP_FLAG_VFORK           (1 << 7)                      /* Bit 7: In the address environment of the vfork() parent */
+#define GROUP_FLAG_EXECED          (1 << 8)                      /* Bit 8: The process image came from exec() */
 
 /* Values for struct child_status_s ch_flags */
 
@@ -195,7 +200,7 @@
 #  define TCB_NAME_OFF               0
 #endif
 #define TCB_REGS_OFF                 offsetof(struct tcb_s, xcp.regs)
-#define TCB_REG_OFF(reg)             (reg * sizeof(uintptr_t))
+#define TCB_REG_OFF(reg)             ((reg) * sizeof(uintptr_t))
 #define TCB_STACK_OFF                offsetof(struct tcb_s, stack_base_ptr)
 #define TCB_STACK_SIZE_OFF           offsetof(struct tcb_s, adj_stack_size)
 
@@ -228,6 +233,12 @@
 #endif
 
 #define running_regs()               ((FAR void **)(g_running_tasks[this_cpu()]->xcp.regs))
+
+#if defined(CONFIG_BUILD_FLAT) || defined(__KERNEL__)
+#  define is_idle_task(t)            ((t)->pid < CONFIG_SMP_NCPUS)
+#else
+#  define is_idle_task(t)            false
+#endif
 
 /****************************************************************************
  * Public Type Definitions
@@ -365,6 +376,9 @@ struct child_status_s
   uint8_t ch_flags;                 /* Child status:  See CHILD_FLAG_* defines */
   pid_t   ch_pid;                   /* Child task ID                           */
   int     ch_status;                /* Child exit status                       */
+#ifdef CONFIG_SCHED_USER_IDENTITY
+  uid_t   ch_uid;                   /* Child real user ID at exit              */
+#endif
 };
 #endif
 
@@ -455,7 +469,23 @@ struct task_group_s
 {
   pid_t tg_pid;                     /* The ID of the task within the group      */
   pid_t tg_ppid;                    /* This is the ID of the parent thread      */
-  uint8_t tg_flags;                 /* See GROUP_FLAG_* definitions             */
+  uint16_t tg_flags;                /* See GROUP_FLAG_* definitions             */
+#ifdef CONFIG_SCHED_CAPABILITIES
+  uint8_t tg_caps;                  /* See PR_CAP_* definitions                 */
+#endif
+  mode_t  tg_umask;                 /* File mode creation mask (umask())        */
+
+#ifdef CONFIG_SCHED_PROCESS_GROUPS
+  /* Process group and session (setpgid() and setsid()) *********************/
+
+  pid_t   tg_pgid;                  /* Process group ID                         */
+  pid_t   tg_sid;                   /* Session ID                               */
+#endif
+
+  /* Resource limits (getrlimit() and setrlimit()) **************************/
+
+  struct rlimit tg_rlimit_stack;    /* RLIMIT_STACK                             */
+  struct rlimit tg_rlimit_nofile;   /* RLIMIT_NOFILE                            */
 
   /* User identity (POSIX real, effective, and saved-set IDs) ***************/
 
@@ -476,6 +506,9 @@ struct task_group_s
 
 #ifdef HAVE_GROUP_MEMBERS
   sq_queue_t tg_members;            /* List of members for task             */
+#  if CONFIG_SCHED_CRITMONITOR_MAXTIME_THREAD >= 0
+  clock_t tg_run_time;              /* Run time of the members that left    */
+#  endif
 #endif
 
 #ifdef CONFIG_BINFMT_LOADABLE
@@ -529,22 +562,34 @@ struct task_group_s
 #ifndef CONFIG_DISABLE_ALL_SIGNALS
   sq_queue_t tg_sigpendingq;        /* List of pending signals                  */
 #endif /* !CONFIG_DISABLE_ALL_SIGNALS */
+
+#ifdef CONFIG_SIGNAL_FD
+  /* signalfd poll waiters.  Signal notification is delivered from the signal
+   * dispatch path (possibly interrupt context), which cannot take the
+   * per-device sleeping mutex.  Anchoring the poll waiters on the long-lived
+   * task group instead of the fd-scoped device removes the dangling-pointer
+   * and use-after-free hazards of the old per-device kernel-action callback.
+   *
+   * The waiter array is allocated lazily on first signalfd poll setup and
+   * freed at group teardown, so a group that never uses signalfd carries
+   * only this NULL pointer rather than a fixed-size array.
+   */
+
+  FAR struct pollfd_s **tg_sigfds;
+#endif
+
 #ifdef CONFIG_SIG_DEFAULT
   sigset_t tg_sigdefault;           /* Set of signals set to the default action */
 #endif
 
-#ifndef CONFIG_DISABLE_ENVIRON
-  /* Environment variables **************************************************/
-
-  FAR char **tg_envp;               /* Allocated environment strings        */
-  ssize_t    tg_envpc;              /* Maximum entries of environment array */
-  ssize_t    tg_envc;               /* Number of environment strings        */
-#endif
-
 #ifndef CONFIG_DISABLE_POSIX_TIMERS
-  /* Interval timer *********************************************************/
+  /* Interval timers, indexed by ITIMER_* ***********************************/
 
-  timer_t itimer;
+#  if CONFIG_SCHED_CRITMONITOR_MAXTIME_THREAD >= 0
+  timer_t itimer[3];                /* ITIMER_REAL, _VIRTUAL and _PROF          */
+#  else
+  timer_t itimer[1];                /* ITIMER_REAL                              */
+#  endif
 #endif
 
   /* PIC data space and address environments ********************************/
@@ -557,6 +602,12 @@ struct task_group_s
   /* File descriptors *******************************************************/
 
   struct fdlist tg_fdlist;          /* Maps file descriptor to file         */
+
+#ifdef CONFIG_FS_CHROOT
+  /* chroot() jail **********************************************************/
+
+  FAR char *tg_root;                /* Absolute jail path, NULL = no jail   */
+#endif
 
   /* Virtual memory mapping info ********************************************/
 
@@ -647,6 +698,13 @@ struct tcb_s
   FAR struct sporadic_s *sporadic;       /* Sporadic scheduling parameters  */
 #endif
 
+  /* Spinlock debug support *************************************************/
+
+#ifdef CONFIG_SPINLOCK_DEBUG
+  sq_queue_t hold_spinlock;
+  FAR spinlock_debug_t *wait_spinlock;
+#endif
+
   struct wdog_s waitdog;                 /* All timed waits use this timer  */
 
   /* Stack-Related Fields ***************************************************/
@@ -693,6 +751,7 @@ struct tcb_s
 #ifndef CONFIG_DISABLE_ALL_SIGNALS
   sigset_t   sigprocmask;                /* Signals that are blocked        */
   sigset_t   sigwaitmask;                /* Waiting for pending signals     */
+  sigset_t   sigsavedmask;               /* Mask to restore at syscall exit */
   siginfo_t  *sigunbinfo;                /* Signal info when task unblocked */
 #endif /* !CONFIG_DISABLE_ALL_SIGNALS */
 
@@ -705,7 +764,6 @@ struct tcb_s
   /* Pre-emption monitor support ********************************************/
 
 #if CONFIG_SCHED_CRITMONITOR_MAXTIME_THREAD >= 0
-  clock_t run_start;                     /* Time when thread begin run      */
   clock_t run_max;                       /* Max time thread run             */
   clock_t run_time;                      /* Total time thread run           */
 #endif
@@ -754,15 +812,9 @@ struct tcb_s
 #endif
 };
 
-/* struct pthread_tcb_s *****************************************************/
-
-/* This is the particular form of the task control block (TCB) structure used
- * by pthreads. There are two TCB forms:  one for pthreads and one for tasks.
- * Both share the common TCB fields (which must appear at the top of the
- * structure) plus additional fields unique to tasks and threads.
- * Having separate structures for tasks and pthreads adds some complexity,
- * but saves memory in that it prevents pthreads from being burdened with
- * the overhead required for tasks (and vice versa).
+/* pthread startup parameters.  This structure is appended to the TCB and
+ * fetched with (FAR struct pthread_entry_s *)(tcb + 1).  Pthreads thus
+ * share the common struct tcb_s and need no TCB type of their own.
  */
 
 #ifndef CONFIG_DISABLE_PTHREAD
@@ -778,10 +830,14 @@ struct pthread_entry_s
 /* struct tcbinfo_s *********************************************************/
 
 /* The structure save key filed offset of tcb_s while can be used by
- * debuggers to parse the tcb information
+ * debuggers to parse the tcb information.
+ *
+ * Aligned so that g_tcbinfo never lands on an odd address: GDB clears
+ * bit 0 of addresses in code sections on Thumb targets, so a debugger
+ * looking it up by symbol would read it one byte off.
  */
 
-begin_packed_struct struct tcbinfo_s
+begin_packed_struct struct aligned_data(8) tcbinfo_s
 {
   uint16_t pid_off;                      /* Offset of tcb.pid               */
   uint16_t state_off;                    /* Offset of tcb.task_state        */
@@ -833,37 +889,33 @@ struct smp_call_data_s
  ****************************************************************************/
 
 #ifndef __ASSEMBLY__
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /* Maximum time with pre-emption disabled or within critical section. */
 
 #if CONFIG_SCHED_CRITMONITOR_MAXTIME_PREEMPTION >= 0
-EXTERN clock_t g_preemp_max[CONFIG_SMP_NCPUS];
+extern clock_t g_preemp_max[CONFIG_SMP_NCPUS];
 #endif /* CONFIG_SCHED_CRITMONITOR_MAXTIME_PREEMPTION  >= 0 */
 
 #if CONFIG_SCHED_CRITMONITOR_MAXTIME_CSECTION >= 0
-EXTERN clock_t g_crit_max[CONFIG_SMP_NCPUS];
+extern clock_t g_crit_max[CONFIG_SMP_NCPUS];
 #endif /* CONFIG_SCHED_CRITMONITOR_MAXTIME_CSECTION >= 0 */
 
 #if CONFIG_SCHED_CRITMONITOR_MAXTIME_BUSYWAIT >= 0
-EXTERN clock_t g_busywait_max[CONFIG_SMP_NCPUS];
-EXTERN clock_t g_busywait_total[CONFIG_SMP_NCPUS];
+extern clock_t g_busywait_max[CONFIG_SMP_NCPUS];
+extern clock_t g_busywait_total[CONFIG_SMP_NCPUS];
 #endif /* CONFIG_SCHED_CRITMONITOR_MAXTIME_BUSYWAIT >= 0 */
 
 /* g_running_tasks[] holds a references to the running task for each CPU.
  * It is valid only when up_interrupt_context() returns true.
  */
 
-EXTERN FAR struct tcb_s *g_running_tasks[CONFIG_SMP_NCPUS];
+extern FAR struct tcb_s *g_running_tasks[CONFIG_SMP_NCPUS];
 
-EXTERN const struct tcbinfo_s g_tcbinfo;
+extern const struct tcbinfo_s g_tcbinfo;
 
 /****************************************************************************
  * Public Function Prototypes
@@ -917,6 +969,12 @@ static inline_function bool nxsched_has_gid(FAR struct tcb_s *tcb,
  ****************************************************************************/
 
 FAR struct tcb_s *nxsched_self(void);
+
+#ifdef CONFIG_SCHED_CAPABILITIES
+#  define nxsched_capable(c) ((nxsched_self()->group->tg_caps & (c)) == (c))
+#else
+#  define nxsched_capable(c) true
+#endif
 
 /****************************************************************************
  * Name: nxsched_foreach
@@ -1276,7 +1334,7 @@ size_t nxtask_argvstr(FAR struct tcb_s *tcb, FAR char *args, size_t size);
  *
  ****************************************************************************/
 
-int nxsched_get_param(pid_t pid, FAR struct sched_param *param);
+int nxsched_get_param(pid_t pid, FAR struct sched_param *);
 
 /****************************************************************************
  * Name:  nxsched_set_param
@@ -1312,7 +1370,7 @@ int nxsched_get_param(pid_t pid, FAR struct sched_param *param);
  *
  ****************************************************************************/
 
-int nxsched_set_param(pid_t pid, FAR const struct sched_param *param);
+int nxsched_set_param(pid_t pid, FAR const struct sched_param *);
 
 /****************************************************************************
  * Name: nxsched_get_scheduler
@@ -1380,7 +1438,7 @@ int nxsched_get_scheduler(pid_t pid);
  ****************************************************************************/
 
 int nxsched_set_scheduler(pid_t pid, int policy,
-                          FAR const struct sched_param *param);
+                          FAR const struct sched_param *);
 
 /****************************************************************************
  * Name: nxsched_get_affinity
@@ -1605,14 +1663,15 @@ pid_t nxsched_getppid(void);
  * Name: nxsched_collect_deadlock
  *
  * Description:
- *   Check if there is a deadlock and get the thread pid of the deadlock.
+ *   Find mutex deadlocks and collect the IDs of participating threads.
  *
  * Input parameters:
- *   pid   - The array to store the thread pid of the deadlock.
- *   count - The size of the pid array.
+ *   pid   - The array to store deadlocked thread IDs.
+ *   count - The maximum number of thread IDs to store.
  *
  * Returned Value:
- *   The number of thread deadlocks.
+ *   The number of thread IDs stored in pid.  A return value equal to count
+ *   may indicate that the result was truncated.
  *
  ****************************************************************************/
 
@@ -1887,7 +1946,6 @@ void nxsched_sleep(unsigned int sec);
 int nxsched_nanosleep(FAR const struct timespec *rqtp,
                       FAR struct timespec *rmtp);
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

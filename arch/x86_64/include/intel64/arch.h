@@ -106,6 +106,14 @@
 #define X86_GDT_USERCODE_SEL_NUM       7
 #  define X86_GDT_USERCODE_SEL         (X86_GDT_USERCODE_SEL_NUM * X86_GDT_ENTRY_SIZE)
 
+/* Privilege level carried in the low two bits of a segment selector.  In the
+ * CS of a saved exception frame this is the CPL the fault was taken at, and
+ * so tells kernel code from user code.
+ */
+
+#define X86_GDT_PL_MASK                3
+#define X86_GDT_RPL_USER               3
+
 /* The first TSS entry */
 
 #define X86_GDT_ISTL_SEL_NUM           8
@@ -545,6 +553,7 @@ begin_packed_struct struct tss_s
 
 /* These are defined in intel64_head.S */
 
+extern volatile uint8_t g_pml4_low;
 extern volatile uint8_t g_pdpt_low;
 extern volatile uint8_t g_pd_low;
 extern volatile uint8_t g_pt_low;
@@ -578,14 +587,10 @@ extern void __enable_pcid(void);
 extern void x86_64_syscall_entry(void);
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

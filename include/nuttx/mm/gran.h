@@ -63,9 +63,9 @@ typedef FAR void *GRAN_HANDLE;
 struct graninfo_s
 {
   uint8_t   log2gran;  /* Log base 2 of the size of one granule */
-  uint16_t  ngranules; /* The total number of (aligned) granules in the heap */
-  uint16_t  nfree;     /* The number of free granules */
-  uint16_t  mxfree;    /* The longest sequence of free granules */
+  uint32_t  ngranules; /* The total number of (aligned) granules in the heap */
+  uint32_t  nfree;     /* The number of free granules */
+  uint32_t  mxfree;    /* The longest sequence of free granules */
 };
 
 /****************************************************************************
@@ -73,11 +73,8 @@ struct graninfo_s
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -213,7 +210,7 @@ FAR void *gran_alloc(GRAN_HANDLE handle, size_t size);
  * Input Parameters:
  *   handle - The handle previously returned by gran_initialize
  *   size   - The size of the memory region to allocate.
- *   align  - The size of the memory region to align.
+ *   align  - The alignment in bytes: a power of two, or zero for none.
  *
  * Returned Value:
  *   On success, a non-NULL pointer to the allocated memory is returned;
@@ -258,7 +255,6 @@ void gran_free(GRAN_HANDLE handle, FAR void *memory, size_t size);
 
 void gran_info(GRAN_HANDLE handle, FAR struct graninfo_s *info);
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

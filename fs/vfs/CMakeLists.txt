@@ -45,14 +45,25 @@ set(SRCS
     fs_stat.c
     fs_sendfile.c
     fs_statfs.c
-    fs_uio.c
     fs_unlink.c
     fs_write.c
-    fs_dir.c
     fs_fsync.c
     fs_syncfs.c
+    fs_sync.c
     fs_truncate.c
     fs_link.c)
+
+if(CONFIG_FS_UIO)
+  list(APPEND SRCS fs_uio.c)
+endif()
+
+if(NOT CONFIG_DISABLE_DIRECTORY_OPERATIONS)
+  list(APPEND SRCS fs_dir.c)
+endif()
+
+if(CONFIG_FS_CHROOT)
+  list(APPEND SRCS fs_chroot.c)
+endif()
 
 # File notify support
 

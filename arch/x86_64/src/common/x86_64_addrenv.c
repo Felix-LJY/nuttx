@@ -130,6 +130,7 @@ static void map_spgtables(arch_addrenv_t *addrenv, uintptr_t vaddr)
   for (i = 0; i < (ARCH_SPGTS - 1); i++)
     {
       uintptr_t next = addrenv->spgtables[i + 1];
+
       mmu_ln_setentry(i, prev, next, vaddr, MMU_UPGT_FLAGS);
       prev = x86_64_pgvaddr(next);
     }
@@ -236,8 +237,6 @@ static int x86_64_create_region(arch_addrenv_t *addrenv, uintptr_t vaddr,
   uint32_t  ptlevel;
   int       npages;
   int       nmapped;
-  int       i;
-  int       j;
 
   /* Only one entry in PML4 supported now */
 
@@ -260,9 +259,11 @@ static int x86_64_create_region(arch_addrenv_t *addrenv, uintptr_t vaddr,
 
   map_spgtables(addrenv, vaddr);
 
-  /* Begin allocating memory for the page tables */
+  /* Begin allocating memory for the page tables.  Each PT is filled from
+   * the index of vaddr in it.
+   */
 
-  for (i = 0; i < npages; i += X86_MMU_ENTRIES_PER_PGT)
+  while (nmapped < size)
     {
       /* Get the current final level entry (PT) corresponding to this vaddr */
 
@@ -288,11 +289,11 @@ static int x86_64_create_region(arch_addrenv_t *addrenv, uintptr_t vaddr,
 
       ptlast = x86_64_pgvaddr(paddr);
 
-      /* Then allocate memory for the region data */
+      /* Then allocate memory for the region data, up to the end of this
+       * PT
+       */
 
-      for (j = X86_MMU_VADDR_INDEX(vaddr, ptlevel);
-           j < X86_MMU_ENTRIES_PER_PGT && nmapped < size;
-           j++)
+      do
         {
           paddr = mm_pgalloc(1);
           if (!paddr)
@@ -310,6 +311,7 @@ static int x86_64_create_region(arch_addrenv_t *addrenv, uintptr_t vaddr,
           nmapped += MM_PGSIZE;
           vaddr   += MM_PGSIZE;
         }
+      while (nmapped < size && X86_MMU_VADDR_INDEX(vaddr, ptlevel + 1) != 0);
     }
 
   /* Flush the data cache, so the changes are committed to memory */
@@ -416,6 +418,24 @@ int up_addrenv_create(size_t textsize, size_t datasize, size_t heapsize,
   heapbase = database + MM_PGALIGNUP(datasize);
 #endif
 
+#if (CONFIG_ARCH_TEXT_VBASE != 0x0) && (CONFIG_ARCH_HEAP_VBASE != 0x0) && \
+    (CONFIG_ARCH_TEXT_VBASE < CONFIG_ARCH_DATA_VBASE) && \
+    (CONFIG_ARCH_DATA_VBASE < CONFIG_ARCH_HEAP_VBASE)
+  /* The regions have fixed windows: the text up to the data, the data up to
+   * the heap.  A region past its window would be mapped over the next one,
+   * so a program that does not fit cannot run.
+   */
+
+  if (textbase + MM_PGALIGNUP(textsize) > CONFIG_ARCH_DATA_VBASE ||
+      database + MM_PGALIGNUP(datasize) > CONFIG_ARCH_HEAP_VBASE)
+    {
+      berr("ERROR: text %zu or data %zu bytes do not fit\n",
+           textsize, datasize);
+      ret = -ENOMEM;
+      goto errout;
+    }
+#endif
+
   /* Map the reserved area */
 
   ret = x86_64_create_region(addrenv, resvbase, resvsize, MMU_UDATA_FLAGS);
@@ -482,6 +502,190 @@ errout:
   up_addrenv_destroy(addrenv);
   return ret;
 }
+
+#ifdef CONFIG_ARCH_HAVE_FORK
+/****************************************************************************
+ * Name: vaddr_is_text
+ *
+ * Description:
+ *   Check if a vaddr is part of the .text area, which is mapped read/execute
+ *   while everything else is mapped read/write.  The two arms mirror exactly
+ *   the two layouts up_addrenv_create() builds.
+ *
+ ****************************************************************************/
+
+static inline bool vaddr_is_text(const arch_addrenv_t *addrenv,
+                                 uintptr_t vaddr)
+{
+#if (CONFIG_ARCH_TEXT_VBASE != 0x0) && (CONFIG_ARCH_HEAP_VBASE != 0x0)
+  UNUSED(addrenv);
+  return vaddr >= CONFIG_ARCH_TEXT_VBASE && vaddr < ARCH_TEXT_VEND;
+#else
+  /* Contiguous layout:  the reserve sits below .text, and .data begins where
+   * .text ends.
+   */
+
+  return vaddr >= addrenv->textvbase && vaddr < addrenv->datavbase;
+#endif
+}
+
+/****************************************************************************
+ * Name: up_addrenv_fork
+ *
+ * Description:
+ *   Duplicate an address environment for POSIX fork().  The destination gets
+ *   its own page tables and its own physical pages, holding a copy of the
+ *   source's contents and mapped at the same virtual addresses.
+ *
+ *   The walk mirrors up_addrenv_destroy():  every page table (PT) the source
+ *   has under its page directory is visited, and every page it maps is
+ *   duplicated.  The copy is eager -- there is no copy-on-write -- so this
+ *   needs as much free page memory as the parent occupies.
+ *
+ * Input Parameters:
+ *   src  - The address environment to be duplicated.
+ *   dest - The location to receive the duplicate.
+ *
+ * Returned Value:
+ *   Zero (OK) on success; a negated errno value on failure.
+ *
+ ****************************************************************************/
+
+int up_addrenv_fork(const arch_addrenv_t *src, arch_addrenv_t *dest)
+{
+  uintptr_t *sptprev;
+  uintptr_t *sptlast;
+  uintptr_t  dptprev;
+  uintptr_t *dptlast;
+  uintptr_t  paddr;
+  uintptr_t  vaddr;
+  uintptr_t  pgvaddr;
+  size_t     pdsize;
+  int        i;
+  int        j;
+  int        ret;
+
+  DEBUGASSERT(src && dest);
+
+  memset(dest, 0, sizeof(arch_addrenv_t));
+
+  /* Give the child its own static page tables and kernel mappings */
+
+  ret = create_spgtables(dest);
+  if (ret < 0)
+    {
+      berr("ERROR: Failed to create static page tables\n");
+      goto errout;
+    }
+
+  copy_kernel_mappings(dest);
+
+  /* The duplicate lives at the same virtual addresses as the original */
+
+  dest->textvbase = src->textvbase;
+  dest->datavbase = src->datavbase;
+  dest->heapvbase = src->heapvbase;
+  dest->heapsize  = src->heapsize;
+  dest->cr3       = mmu_cr3_reg(dest->spgtables[0], 0);
+
+  /* Make sure the source's page tables are visible before walking them */
+
+  UP_DSB();
+  UP_DMB();
+
+  /* Each entry of the page directory -- the last static level -- covers one
+   * page table's worth of address space.
+   */
+
+  vaddr   = ARCH_ADDRENV_VBASE;
+  pdsize  = (size_t)X86_MMU_ENTRIES_PER_PGT * X86_MMU_PAGE_SIZE;
+  sptprev = (uintptr_t *)x86_64_pgvaddr(src->spgtables[ARCH_SPGTS - 1]);
+  dptprev = x86_64_pgvaddr(dest->spgtables[ARCH_SPGTS - 1]);
+
+  if (sptprev == NULL || dptprev == 0)
+    {
+      ret = -EINVAL;
+      goto errout;
+    }
+
+  for (i = 0; i < X86_MMU_ENTRIES_PER_PGT; i++, vaddr += pdsize)
+    {
+      sptlast = (uintptr_t *)x86_64_pgvaddr(mmu_pte_to_paddr(sptprev[i]));
+      if (sptlast == NULL)
+        {
+          continue;
+        }
+
+      /* Hook the static tables up for this address, then give the child its
+       * own page table here.
+       */
+
+      map_spgtables(dest, vaddr);
+
+      paddr = mm_pgalloc(1);
+      if (!paddr)
+        {
+          ret = -ENOMEM;
+          goto errout;
+        }
+
+      x86_64_pgwipe(paddr);
+      mmu_ln_setentry(ARCH_SPGTS - 1, dptprev, paddr, vaddr, MMU_UPGT_FLAGS);
+      dptlast = (uintptr_t *)x86_64_pgvaddr(paddr);
+
+      for (j = 0; j < X86_MMU_ENTRIES_PER_PGT; j++)
+        {
+          uintptr_t srcpage;
+          uintptr_t destpage;
+
+          srcpage = mmu_pte_to_paddr(sptlast[j]);
+          if (!srcpage)
+            {
+              continue;
+            }
+
+          pgvaddr = vaddr + (uintptr_t)j * X86_MMU_PAGE_SIZE;
+
+          if (vaddr_is_shm(pgvaddr))
+            {
+              /* Shared memory stays shared across fork().  Map the very same
+               * page; up_addrenv_destroy() knows not to free SHM pages.
+               */
+
+              dptlast[j] = sptlast[j];
+              continue;
+            }
+
+          destpage = mm_pgalloc(1);
+          if (!destpage)
+            {
+              ret = -ENOMEM;
+              goto errout;
+            }
+
+          memcpy((void *)x86_64_pgvaddr(destpage),
+                 (const void *)x86_64_pgvaddr(srcpage), X86_MMU_PAGE_SIZE);
+
+          mmu_ln_setentry(ARCH_SPGTS, (uintptr_t)dptlast, destpage, pgvaddr,
+                          vaddr_is_text(src, pgvaddr) ? MMU_UTEXT_FLAGS
+                                                      : MMU_UDATA_FLAGS);
+        }
+    }
+
+  UP_DSB();
+  UP_DMB();
+
+#ifdef CONFIG_SMP
+  x86_64_tlb_shootdown();
+#endif
+
+  return OK;
+
+errout:
+  up_addrenv_destroy(dest);
+  return ret;
+}
+#endif /* CONFIG_ARCH_HAVE_FORK */
 
 /****************************************************************************
  * Name: up_addrenv_destroy
@@ -714,6 +918,32 @@ int up_addrenv_select(const arch_addrenv_t *addrenv)
 }
 
 /****************************************************************************
+ * Name: up_addrenv_select_kernel
+ *
+ * Description:
+ *   Select the page tables of the kernel alone on this CPU: after the call
+ *   the CPU uses no address environment of a process, and the address
+ *   environment that it used before can be destroyed.
+ *
+ * Input Parameters:
+ *   None
+ *
+ * Returned Value:
+ *   Zero (OK) on success; a negated errno value on failure.
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_BUILD_KERNEL
+int up_addrenv_select_kernel(void)
+{
+  /* The PML4 of the kernel: the processes have copies of it */
+
+  set_cr3(mmu_cr3_reg((uintptr_t)&g_pml4_low, 0));
+  return OK;
+}
+#endif
+
+/****************************************************************************
  * Name: up_addrenv_coherent
  *
  * Description:
@@ -808,4 +1038,113 @@ int up_addrenv_detach(struct tcb_s *tcb)
   /* There is nothing that needs to be done */
 
   return OK;
+}
+
+/****************************************************************************
+ * Name: up_addrenv_find_page
+ *
+ * Description:
+ *   Find physical page mapped to user virtual address from the address
+ *   environment page directory.
+ *
+ * Input Parameters:
+ *   addrenv - The user address environment.
+ *   vaddr   - The user virtual address
+ *
+ * Returned Value:
+ *   Page physical address on success; NULL on failure.
+ *
+ ****************************************************************************/
+
+uintptr_t up_addrenv_find_page(arch_addrenv_t *addrenv, uintptr_t vaddr)
+{
+  uintptr_t lnvaddr;
+  uintptr_t paddr;
+  uint32_t  ptlevel;
+
+  /* If vaddr is not user space, get out */
+
+  if (!up_addrenv_user_vaddr(vaddr))
+    {
+      return 0;
+    }
+
+  /* Walk the tables as the MMU does, from the PML4 (level 0) to the PT
+   * (level 3).  An entry that is not used is zero.
+   */
+
+  lnvaddr = x86_64_pgvaddr(addrenv->spgtables[0]);
+  if (!lnvaddr)
+    {
+      return 0;
+    }
+
+  for (ptlevel = 0; ptlevel < X86_MMU_PT_LEVELS - 1; ptlevel++)
+    {
+      paddr = mmu_pte_to_paddr(mmu_ln_getentry(ptlevel, lnvaddr, vaddr));
+      lnvaddr = x86_64_pgvaddr(paddr);
+      if (!lnvaddr)
+        {
+          return 0;
+        }
+    }
+
+  /* Got it, now convert it to physical page */
+
+  return mmu_pte_to_paddr(mmu_ln_getentry(ptlevel, lnvaddr, vaddr));
+}
+
+/****************************************************************************
+ * Name: up_addrenv_user_vaddr
+ *
+ * Description:
+ *   Check if a virtual address is in user virtual address space.
+ *
+ ****************************************************************************/
+
+bool up_addrenv_user_vaddr(uintptr_t vaddr)
+{
+  return (vaddr >= ARCH_ADDRENV_VBASE && vaddr <= ARCH_ADDRENV_VEND)
+#ifdef CONFIG_ARCH_VMA_MAPPING
+         || (vaddr >= CONFIG_ARCH_SHM_VBASE && vaddr <= ARCH_SHM_VEND)
+#endif
+         ;
+}
+
+/****************************************************************************
+ * Name: up_addrenv_va_to_pa
+ *
+ * Description:
+ *   Translate a virtual address through the active page tables; 0 when it
+ *   is not mapped.
+ *
+ ****************************************************************************/
+
+uintptr_t up_addrenv_va_to_pa(FAR void *va)
+{
+  uintptr_t vaddr   = (uintptr_t)va;
+  uintptr_t lnvaddr = x86_64_pgvaddr(get_pml4());
+  uintptr_t mask;
+  uintptr_t pte;
+  uint32_t  ptlevel;
+
+  for (ptlevel = 0; ptlevel < X86_MMU_PT_LEVELS && lnvaddr; ptlevel++)
+    {
+      pte = mmu_ln_getentry(ptlevel, lnvaddr, vaddr);
+      if ((pte & X86_PAGE_PRESENT) == 0)
+        {
+          break;
+        }
+
+      if (ptlevel == X86_MMU_PT_LEVELS - 1 ||
+          (ptlevel > 0 && (pte & X86_PAGE_HUGE) != 0))
+        {
+          mask = ((uintptr_t)1 << X86_MMU_VADDR_SHIFT(ptlevel)) - 1;
+          return (mmu_pte_to_paddr(pte) & ~mask) | (vaddr & mask);
+        }
+
+      lnvaddr = x86_64_pgvaddr(mmu_pte_to_paddr(pte));
+    }
+
+  return 0;
 }

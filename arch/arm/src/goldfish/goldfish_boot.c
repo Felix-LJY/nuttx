@@ -44,15 +44,13 @@
 #  include <nuttx/sched_note.h>
 #endif
 
-#include <nuttx/syslog/syslog_rpmsg.h>
-
 /****************************************************************************
- * Private Data
+ * Pre-processor Definitions
  ****************************************************************************/
 
-#ifdef CONFIG_SYSLOG_RPMSG
-static char g_syslog_rpmsg_buf[4096];
-#endif
+/* The emulator (QEMU) counts the PMU cycle counter at 1 GHz */
+
+#define GOLDFISH_PMU_CYCLES_PER_SEC  1000000000
 
 /****************************************************************************
  * Public Functions
@@ -71,7 +69,7 @@ void arm_boot(void)
 #ifdef CONFIG_ARCH_PERF_EVENTS
   /* Perf init */
 
-  up_perf_init(0);
+  up_perf_init((void *)GOLDFISH_PMU_CYCLES_PER_SEC);
 #endif
 
   /* Set the page table for section */
@@ -100,10 +98,6 @@ void arm_boot(void)
    */
 
   arm_earlyserialinit();
-#endif
-
-#ifdef CONFIG_SYSLOG_RPMSG
-  syslog_rpmsg_init_early(g_syslog_rpmsg_buf, sizeof(g_syslog_rpmsg_buf));
 #endif
 }
 

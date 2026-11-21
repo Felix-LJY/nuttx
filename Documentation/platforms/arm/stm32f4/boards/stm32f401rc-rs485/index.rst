@@ -1,8 +1,8 @@
-=================
-stm32f401rc-rs485
-=================
+====================
+ST STM32F401RC-RS485
+====================
 
-.. tags:: chip:stm32, chip:stm32f4, chip:stm32f401
+.. tags:: arch:arm, chip:stm32f4, part:stm32f401, vendor:st
 
 This page discusses issues unique to NuttX configurations for the
 NuttX STM32F4-RS485 development board.
@@ -986,7 +986,7 @@ Connect the HX711 to the STM32F4 board using the following pins:
     gain................: 128
     value per unit......: 0
     nsh> hx711 -v 813 -t 10
-    Taring with *float*g precision
+    Taring with ?g precision
     nsh> hx711 -r 10
     11
     9
@@ -999,7 +999,7 @@ Connect the HX711 to the STM32F4 board using the following pins:
     11
     10
 
-For more details, refer to the official `HX711 NuttX documentation <https://nuttx.apache.org/docs/latest/components/drivers/character/analog/adc/hx711/index.html>`_.
+For more details, refer to the official `HX711 NuttX documentation <https://nuttx.apache.org/docs/latest/os/drivers/character/analog/adc/hx711/index.html>`_.
 
 MAX31855
 --------

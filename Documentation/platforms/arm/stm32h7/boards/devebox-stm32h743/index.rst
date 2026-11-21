@@ -1,8 +1,8 @@
-==================
-devebox-stm32h743
-==================
+=================
+DevEbox STM32H743
+=================
 
-.. tags:: chip:stm32, chip:stm32h7, chip:stm32h743
+.. tags:: arch:arm, chip:stm32h7, part:stm32h743, vendor:st
 
 NuttX port for the DevEbox STM32H743 board.
 

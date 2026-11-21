@@ -28,14 +28,17 @@
 
 #include <assert.h>
 #include <stdio.h>
+#include <string.h>
 #include <fcntl.h>
 #include <poll.h>
 #include <errno.h>
-#include <nuttx/debug.h>
 #include <termios.h>
+#include <unistd.h>
 
+#include <nuttx/debug.h>
 #include <nuttx/kmalloc.h>
 #include <nuttx/kthread.h>
+#include <nuttx/lib/lib.h>
 #include <nuttx/signal.h>
 #include <nuttx/mutex.h>
 #include <nuttx/fs/fs.h>
@@ -69,6 +72,7 @@
 
 /* Telnet protocol stuff ****************************************************/
 
+#define TELNET_NUL            0x00
 #define TELNET_NL             0x0a
 #define TELNET_CR             0x0d
 
@@ -119,15 +123,24 @@ struct telnet_dev_s
   uint8_t           td_crefs;     /* The number of open references to the session */
   uint8_t           td_minor;     /* Minor device number */
   bool              td_sb_iac;    /* Saw IAC within sub-negotiation payload */
+  bool              td_txcr;      /* Last byte sent was a CR */
   uint16_t          td_offset;    /* Offset to the valid, pending bytes in the rxbuffer */
   uint16_t          td_pending;   /* Number of valid, pending bytes in the rxbuffer */
 #ifdef CONFIG_TELNET_SUPPORT_NAWS
+  bool              td_winch;     /* Window size changed, send SIGWINCH */
   uint16_t          td_rows;      /* Number of NAWS rows */
   uint16_t          td_cols;      /* Number of NAWS cols */
   int               td_sb_count;  /* Count of TELNET_SB bytes received */
+  struct winsize    td_winsize;   /* Window size (TIOCGWINSZ, TIOCSWINSZ) */
 #endif
 #ifdef HAVE_SIGNALS
   pid_t             td_pid;
+#endif
+#ifdef CONFIG_TTY_SIGINT
+  cc_t              td_vintr;     /* c_cc[VINTR] */
+#endif
+#ifdef CONFIG_TTY_SIGTSTP
+  cc_t              td_vsusp;     /* c_cc[VSUSP] */
 #endif
   tcflag_t          td_lflag;     /* Local modes */
   FAR struct socket td_psock;     /* A clone of the internal socket structure */
@@ -156,6 +169,11 @@ static bool    telnet_putchar(FAR struct telnet_dev_s *priv, uint8_t ch,
                  int *nwritten);
 static void    telnet_sendopt(FAR struct telnet_dev_s *priv, uint8_t option,
                  uint8_t value);
+#if defined(CONFIG_TELNET_SUPPORT_NAWS) && defined(HAVE_SIGNALS)
+static void    telnet_winch(FAR struct telnet_dev_s *priv);
+#else
+#  define telnet_winch(priv)
+#endif
 
 /* Telnet character driver methods */
 
@@ -167,7 +185,7 @@ static ssize_t telnet_write(FAR struct file *filep, FAR const char *buffer,
                             size_t len);
 static int     telnet_ioctl(FAR struct file *filep, int cmd,
                             unsigned long arg);
-static int     telnet_poll(FAR struct file *filep, FAR struct pollfd *fds,
+static int     telnet_poll(FAR struct file *filep, FAR struct pollfd_s *fds,
                            bool setup);
 
 /* Telnet session creation */
@@ -264,7 +282,8 @@ static void telnet_check_ctrlchar(FAR struct telnet_dev_s *priv,
        * signal?
        */
 
-      if (*buffer == CONFIG_TTY_SIGINT_CHAR)
+      if (priv->td_vintr != _POSIX_VDISABLE &&
+          (cc_t)*buffer == priv->td_vintr)
         {
           /* Yes.. note that the kill is needed and do not put the character
            * into the Rx buffer.  It should not be read as normal data.
@@ -280,7 +299,8 @@ static void telnet_check_ctrlchar(FAR struct telnet_dev_s *priv,
        * signal?
        */
 
-      if (*buffer == CONFIG_TTY_SIGTSTP_CHAR)
+      if (priv->td_vsusp != _POSIX_VDISABLE &&
+          (cc_t)*buffer == priv->td_vsusp)
         {
           /* Note that the kill is needed and do not put the character
            * into the Rx buffer.  It should not be read as normal data.
@@ -298,7 +318,7 @@ static void telnet_check_ctrlchar(FAR struct telnet_dev_s *priv,
 
   if (signo != 0)
     {
-      nxsig_kill(priv->td_pid, signo);
+      nxsig_kill_foreground(priv->td_pid, signo);
     }
 }
 #endif
@@ -335,14 +355,18 @@ static ssize_t telnet_receive(FAR struct telnet_dev_s *priv,
                               FAR const char *src, size_t srclen,
                               FAR char *dest, size_t destlen)
 {
+  FAR const char *iac;
+  size_t ncopy;
   int nread;
   uint8_t ch;
 
   ninfo("srclen: %zd destlen: %zd\n", srclen, destlen);
 
-  for (nread = 0; srclen > 0 && nread < destlen; srclen--)
+  nread = 0;
+  while (srclen > 0 && nread < destlen)
     {
       ch = *src++;
+      srclen--;
       ninfo("ch=%02x state=%d\n", ch, priv->td_state);
 
       switch (priv->td_state)
@@ -352,7 +376,7 @@ static ssize_t telnet_receive(FAR struct telnet_dev_s *priv,
               {
                 telnet_getchar(priv, ch, dest, &nread);
                 priv->td_state = STATE_NORMAL;
-             }
+              }
             else
               {
                 switch (ch)
@@ -457,6 +481,26 @@ static ssize_t telnet_receive(FAR struct telnet_dev_s *priv,
             else
               {
                 telnet_getchar(priv, ch, dest, &nread);
+
+                ncopy = destlen - nread;
+                if (ncopy > srclen)
+                  {
+                    ncopy = srclen;
+                  }
+
+                iac = memchr(src, TELNET_IAC, ncopy);
+                if (iac != NULL)
+                  {
+                    ncopy = iac - src;
+                  }
+
+                if (ncopy > 0)
+                  {
+                    memcpy(&dest[nread], src, ncopy);
+                    nread += ncopy;
+                    src += ncopy;
+                    srclen -= ncopy;
+                  }
               }
             break;
 
@@ -532,6 +576,16 @@ static ssize_t telnet_receive(FAR struct telnet_dev_s *priv,
                 case 3:
                   priv->td_rows = (priv->td_rows & 0xff00) | ch;
                   ninfo("NAWS: %d,%d", priv->td_cols, priv->td_rows);
+
+                  if (priv->td_winsize.ws_row != priv->td_rows ||
+                      priv->td_winsize.ws_col != priv->td_cols)
+                    {
+                      priv->td_winsize.ws_row    = priv->td_rows;
+                      priv->td_winsize.ws_col    = priv->td_cols;
+                      priv->td_winsize.ws_xpixel = 0;
+                      priv->td_winsize.ws_ypixel = 0;
+                      priv->td_winch             = true;
+                    }
                   break;
               }
 
@@ -582,35 +636,39 @@ static ssize_t telnet_receive(FAR struct telnet_dev_s *priv,
 static bool telnet_putchar(FAR struct telnet_dev_s *priv, uint8_t ch,
                            int *nread)
 {
-  register int index;
+  register int index = *nread;
   bool ret = false;
 
-  /* Ignore carriage returns (we will put these in automatically as
-   * necessary).
+  /* Telnet end of line is CR LF and a carriage return alone is CR NUL
+   * (RFC 854): a CR must be followed by LF or NUL.  A CR from the user
+   * buffer is sent at once; the next character decides whether a NUL is
+   * needed after it.
    */
 
-  if (ch != TELNET_CR)
+  if (priv->td_txcr && ch != TELNET_NL)
     {
-      /* Add all other characters to the destination buffer */
+      priv->td_txbuffer[index++] = TELNET_NUL;
+    }
 
-      index = *nread;
-      priv->td_txbuffer[index++] = ch;
+  if (ch == TELNET_NL)
+    {
+      /* Put the carriage return before the line feed, unless it was
+       * already sent.
+       */
 
-      /* Check for line feeds */
-
-      if (ch == TELNET_NL)
+      if (!priv->td_txcr)
         {
-          /* Now add the carriage return */
-
           priv->td_txbuffer[index++] = TELNET_CR;
-
-          /* End of line */
-
-          ret = true;
         }
 
-      *nread = index;
+      /* End of line */
+
+      ret = true;
     }
+
+  priv->td_txbuffer[index++] = ch;
+  priv->td_txcr = (ch == TELNET_CR);
+  *nread = index;
 
   return ret;
 }
@@ -641,6 +699,24 @@ static void telnet_sendopt(FAR struct telnet_dev_s *priv, uint8_t option,
       nerr("ERROR: Failed to send TELNET_IAC: %d\n", ret);
     }
 }
+
+/****************************************************************************
+ * Name: telnet_winch
+ *
+ * Description:
+ *   Send SIGWINCH to the foreground process after a window size change.
+ *
+ ****************************************************************************/
+
+#if defined(CONFIG_TELNET_SUPPORT_NAWS) && defined(HAVE_SIGNALS)
+static void telnet_winch(FAR struct telnet_dev_s *priv)
+{
+  if (priv->td_pid > 0)
+    {
+      nxsig_kill_foreground(priv->td_pid, SIGWINCH);
+    }
+}
+#endif
 
 /****************************************************************************
  * Name: telnet_open
@@ -821,6 +897,18 @@ static ssize_t telnet_read(FAR struct file *filep, FAR char *buffer,
 
       src = &priv->td_rxbuffer[priv->td_offset];
       nread = telnet_receive(priv, src, priv->td_pending, buffer, len);
+
+#ifdef CONFIG_TELNET_SUPPORT_NAWS
+      /* Send SIGWINCH after telnet_receive(), before the next wait.  In a
+       * flat build the handler runs at once and can use this session.
+       */
+
+      if (priv->td_winch)
+        {
+          priv->td_winch = false;
+          telnet_winch(priv);
+        }
+#endif
     }
   while (nread == 0);
 
@@ -851,7 +939,10 @@ static ssize_t telnet_write(FAR struct file *filep, FAR const char *buffer,
 {
   FAR struct inode *inode = filep->f_inode;
   FAR struct telnet_dev_s *priv = inode->i_private;
+  FAR const char *special;
   FAR const char *src = buffer;
+  size_t ncopy;
+  size_t nleft;
   ssize_t ret = 0;
   ssize_t nsent;
   int ncopied;
@@ -860,13 +951,66 @@ static ssize_t telnet_write(FAR struct file *filep, FAR const char *buffer,
 
   ninfo("len: %zd\n", len);
 
-  /* Process each character from the user buffer */
+  /* Process data from the user buffer */
 
-  for (nsent = 0, ncopied = 0; nsent < len; nsent++)
+  for (nsent = 0, ncopied = 0; nsent < len; )
     {
+      ncopy = CONFIG_TELNET_TXBUFFER_SIZE - 2 - ncopied;
+      if (ncopy > 0)
+        {
+          nleft = len - nsent;
+          if (ncopy > nleft)
+            {
+              ncopy = nleft;
+            }
+
+          special = memchr(src, TELNET_CR, ncopy);
+          if (special != NULL)
+            {
+              ncopy = special - src;
+            }
+
+          special = memchr(src, TELNET_NL, ncopy);
+          if (special != NULL)
+            {
+              ncopy = special - src;
+            }
+
+          if (ncopy > 0)
+            {
+              if (priv->td_txcr)
+                {
+                  priv->td_txbuffer[ncopied++] = TELNET_NUL;
+                  priv->td_txcr = false;
+                }
+
+              memcpy(&priv->td_txbuffer[ncopied], src, ncopy);
+              ncopied += ncopy;
+              src += ncopy;
+              nsent += ncopy;
+
+              if (ncopied > CONFIG_TELNET_TXBUFFER_SIZE - 2)
+                {
+                  ret = psock_send(&priv->td_psock, priv->td_txbuffer,
+                                   ncopied, 0);
+                  if (ret < 0)
+                    {
+                      nerr("ERROR: psock_send failed '%s': %zd\n",
+                           priv->td_txbuffer, ret);
+                      goto out;
+                    }
+
+                  ncopied = 0;
+                }
+
+              continue;
+            }
+        }
+
       /* Get the next character from the user buffer */
 
       ch = *src++;
+      nsent++;
 
       /* Add the character to the TX buffer */
 
@@ -962,6 +1106,8 @@ static int telnet_session(FAR struct telnet_session_s *session)
   priv->td_rows      = 25;
   priv->td_cols      = 80;
   priv->td_sb_count  = 0;
+  priv->td_winsize.ws_row = 25;
+  priv->td_winsize.ws_col = 80;
 #endif
 
   /* Clone the internal socket structure.  We do this so that it will be
@@ -1020,6 +1166,12 @@ static int telnet_session(FAR struct telnet_session_s *session)
   /* Setting terminal attributes */
 
   priv->td_lflag = ECHO;
+#ifdef CONFIG_TTY_SIGINT
+  priv->td_vintr = CONFIG_TTY_SIGINT_CHAR;
+#endif
+#ifdef CONFIG_TTY_SIGTSTP
+  priv->td_vsusp = CONFIG_TTY_SIGTSTP_CHAR;
+#endif
 
   /* Register the driver */
 
@@ -1095,79 +1247,120 @@ static int telnet_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
        * process.
        */
 
-    case TIOCSCTTY:
-      {
-        /* Check if the ISIG flag is set in the termios c_lflag to enable
-         * this feature.  This flag is set automatically for a serial console
-         * device.
-         */
+      case TIOCSCTTY:
+        {
+          /* Check if the ISIG flag is set in the termios c_lflag to enable
+           * this feature.  This flag is set automatically for a serial
+           * console device.
+           */
 
-        /* Save the PID of the recipient of the SIGINT signal. */
+          /* Save the PID of the recipient of the SIGINT signal. */
 
-        priv->td_pid = (pid_t)arg;
-        DEBUGASSERT((unsigned long)(priv->td_pid) == arg);
-      }
-      break;
+          priv->td_pid = (pid_t)arg;
+          DEBUGASSERT((unsigned long)(priv->td_pid) == arg);
+        }
+        break;
 #endif
 
 #ifdef CONFIG_TELNET_SUPPORT_NAWS
       case TIOCGWINSZ:
         {
-          FAR struct winsize *pw = (FAR struct winsize *)((uintptr_t)arg);
+          FAR struct winsize *ws = (FAR struct winsize *)((uintptr_t)arg);
 
-          /* Get row/col from the private data */
+          if (ws == NULL)
+            {
+              ret = -EINVAL;
+              break;
+            }
 
-          pw->ws_row = priv->td_rows;
-          pw->ws_col = priv->td_cols;
+          *ws = priv->td_winsize;
         }
-      break;
+        break;
+
+      case TIOCSWINSZ:
+        {
+          FAR const struct winsize *ws =
+            (FAR const struct winsize *)((uintptr_t)arg);
+
+          if (ws == NULL)
+            {
+              ret = -EINVAL;
+              break;
+            }
+
+          if (memcmp(&priv->td_winsize, ws, sizeof(*ws)) != 0)
+            {
+              priv->td_winsize = *ws;
+              telnet_winch(priv);
+            }
+        }
+        break;
 #endif
 
-    /* Handle TERMIOS command */
+      /* Handle TERMIOS command */
 
-    case TCGETS:
-      {
-        termiosp = (FAR struct termios *)((uintptr_t)arg);
-        DEBUGASSERT(termiosp != NULL);
+      case TCGETS:
+        {
+          termiosp = (FAR struct termios *)((uintptr_t)arg);
+          DEBUGASSERT(termiosp != NULL);
 
-        cfmakeraw(termiosp);
+          cfmakeraw(termiosp);
 
-        termiosp->c_lflag = priv->td_lflag;
-      }
-      break;
+          termiosp->c_lflag = priv->td_lflag;
 
-    case TCSETS:
-      {
-        termiosp = (FAR struct termios *)((uintptr_t)arg);
-        DEBUGASSERT(termiosp != NULL);
+          /* The special characters that the session acts on.  The others
+           * are disabled.
+           */
 
-        /* Save the termios settings */
+          memset(termiosp->c_cc, _POSIX_VDISABLE, sizeof(termiosp->c_cc));
+#ifdef CONFIG_TTY_SIGINT
+          termiosp->c_cc[VINTR] = priv->td_vintr;
+#endif
+#ifdef CONFIG_TTY_SIGTSTP
+          termiosp->c_cc[VSUSP] = priv->td_vsusp;
+#endif
+          termiosp->c_cc[VMIN] = 1;
+        }
+        break;
 
-        priv->td_lflag = termiosp->c_lflag;
+      case TCSETS:
+        {
+          termiosp = (FAR struct termios *)((uintptr_t)arg);
+          DEBUGASSERT(termiosp != NULL);
 
-        if ((priv->td_lflag & ECHO) != 0)
-          {
-            /* If ECHO is set, then we need to send the won't echo option
-             * to the client, let the client do echo to emulate
-             * the behavior of a real terminal.
-             */
+          /* Save the termios settings */
 
-            telnet_sendopt(priv, TELNET_WONT, TELNET_ECHO);
-          }
-        else
-          {
-            /* Otherwise, we need to send the will echo option to the
-             * client, let the client don't echo to disable the echo.
-             */
+          priv->td_lflag = termiosp->c_lflag;
+#ifdef CONFIG_TTY_SIGINT
+          priv->td_vintr = termiosp->c_cc[VINTR];
+#endif
+#ifdef CONFIG_TTY_SIGTSTP
+          priv->td_vsusp = termiosp->c_cc[VSUSP];
+#endif
 
-            telnet_sendopt(priv, TELNET_WILL, TELNET_ECHO);
-          }
-      }
-      break;
+          if ((priv->td_lflag & ECHO) != 0)
+            {
+              /* If ECHO is set, then we need to send the won't echo option
+               * to the client, let the client do echo to emulate
+               * the behavior of a real terminal.
+               */
 
-    default:
-      ret = psock_ioctl(&priv->td_psock, cmd, arg);
-      break;
+              telnet_sendopt(priv, TELNET_WONT, TELNET_ECHO);
+            }
+          else
+            {
+              /* Otherwise, we need to send the will echo option to the
+               * client, let the client don't echo to disable the echo.
+               */
+
+              telnet_sendopt(priv, TELNET_WILL, TELNET_ECHO);
+            }
+        }
+        break;
+
+      default:
+        ret = psock_ioctl(&priv->td_psock, cmd, arg);
+        break;
     }
 
   return ret;
@@ -1191,7 +1384,7 @@ static int telnet_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
  *
  ****************************************************************************/
 
-static int telnet_poll(FAR struct file *filep, FAR struct pollfd *fds,
+static int telnet_poll(FAR struct file *filep, FAR struct pollfd_s *fds,
                        bool setup)
 {
   FAR struct inode *inode = filep->f_inode;
@@ -1223,32 +1416,32 @@ static int factory_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
 
   switch (cmd)
     {
-    /* Command:      SIOCTELNET
-     * Description:  Create a Telnet sessions.
-     * Argument:     A pointer to a write-able instance of struct
-     *               telnet_session_s.
-     * Dependencies: CONFIG_NETDEV_TELNET
-     */
+      /* Command:      SIOCTELNET
+       * Description:  Create a Telnet sessions.
+       * Argument:     A pointer to a write-able instance of struct
+       *               telnet_session_s.
+       * Dependencies: CONFIG_NETDEV_TELNET
+       */
 
-    case SIOCTELNET:
-      {
-        FAR struct telnet_session_s *session =
-            (FAR struct telnet_session_s *)((uintptr_t)arg);
+      case SIOCTELNET:
+        {
+          FAR struct telnet_session_s *session =
+              (FAR struct telnet_session_s *)((uintptr_t)arg);
 
-        if (session == NULL)
-          {
-            ret = -EINVAL;
-          }
-        else
-          {
-            ret = telnet_session(session);
-          }
-      }
-      break;
+          if (session == NULL)
+            {
+              ret = -EINVAL;
+            }
+          else
+            {
+              ret = telnet_session(session);
+            }
+        }
+        break;
 
-    default:
-      ret = -ENOTTY;
-      break;
+      default:
+        ret = -ENOTTY;
+        break;
     }
 
   return ret;

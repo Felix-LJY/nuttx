@@ -2,9 +2,7 @@
  * libs/libc/stdlib/lib_bsearch.c
  *
  * SPDX-License-Identifier: BSD-3-Clause
- * SPDX-FileCopyrightText: 1990 The Regents of the University of California.
- * SPDX-FileCopyrightText: 1993 The Regents of the University of California.
- * All rights reserved.
+ * SPDX-FileCopyrightText: 1990, 1993 The Regents of the University of California.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -37,6 +35,10 @@
  ****************************************************************************/
 
 #include <stdlib.h>
+
+#ifdef CONFIG_FDPIC
+#  include <nuttx/fdpic.h>
+#endif
 #include <assert.h>
 
 /****************************************************************************
@@ -113,6 +115,13 @@ FAR void *bsearch(FAR const void *key, FAR const void *base, size_t nel,
   DEBUGASSERT(key != NULL);
   DEBUGASSERT(base != NULL || nel == 0);
   DEBUGASSERT(compar != NULL);
+
+#ifdef CONFIG_FDPIC
+  /* See qsort(): an FDPIC caller passes a descriptor, not a code address */
+
+  compar = (CODE int (*)(FAR const void *, FAR const void *))
+           fdpic_callback((FAR void *)compar);
+#endif
 
   for (lim = nel, lower = (const char *)base; lim != 0; lim >>= 1)
     {

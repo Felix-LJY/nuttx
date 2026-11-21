@@ -26,13 +26,16 @@
 
 #include <nuttx/config.h>
 #include <stdio.h>
+#include <string.h>
 #include <poll.h>
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
 
 #include <nuttx/debug.h>
+#include <nuttx/fs/fs.h>
 #include <nuttx/mutex.h>
+#include <nuttx/poll.h>
 #include <sys/ioctl.h>
 #include <sys/eventfd.h>
 
@@ -64,7 +67,7 @@ struct eventfd_priv_s
    */
 
 #ifdef CONFIG_EVENT_FD_POLL
-  FAR struct pollfd *fds[CONFIG_EVENT_FD_NPOLLWAITERS];
+  FAR struct pollfd_s *fds[CONFIG_EVENT_FD_NPOLLWAITERS];
 #endif
 };
 
@@ -80,7 +83,7 @@ static ssize_t eventfd_do_read(FAR struct file *filep, FAR char *buffer,
 static ssize_t eventfd_do_write(FAR struct file *filep,
                                 FAR const char *buffer, size_t len);
 #ifdef CONFIG_EVENT_FD_POLL
-static int eventfd_do_poll(FAR struct file *filep, FAR struct pollfd *fds,
+static int eventfd_do_poll(FAR struct file *filep, FAR struct pollfd_s *fds,
                            bool setup);
 #endif
 
@@ -272,9 +275,15 @@ static ssize_t eventfd_do_read(FAR struct file *filep, FAR char *buffer,
 {
   FAR struct eventfd_priv_s *dev = filep->f_priv;
   FAR eventfd_waiter_sem_t *cur_sem;
+  eventfd_t value;
   ssize_t ret;
 
-  if (len < sizeof(eventfd_t) || buffer == NULL)
+  if (buffer == NULL)
+    {
+      return -EFAULT;
+    }
+
+  if (len < sizeof(eventfd_t))
     {
       return -EINVAL;
     }
@@ -316,14 +325,16 @@ static ssize_t eventfd_do_read(FAR struct file *filep, FAR char *buffer,
 
   if ((filep->f_oflags & EFD_SEMAPHORE) != 0)
     {
-      *(FAR eventfd_t *)buffer = 1;
+      value = 1;
       dev->counter -= 1;
     }
   else
     {
-      *(FAR eventfd_t *)buffer = dev->counter;
+      value = dev->counter;
       dev->counter = 0;
     }
+
+  memcpy(buffer, &value, sizeof(eventfd_t));
 
 #ifdef CONFIG_EVENT_FD_POLL
   /* Notify all poll/select waiters */
@@ -352,11 +363,22 @@ static ssize_t eventfd_do_write(FAR struct file *filep,
   FAR struct eventfd_priv_s *dev = filep->f_priv;
   FAR eventfd_waiter_sem_t *cur_sem;
   eventfd_t new_counter;
+  eventfd_t value;
   ssize_t ret;
 
-  if (len < sizeof(eventfd_t) || buffer == NULL ||
-      (*(FAR eventfd_t *)buffer == (eventfd_t)-1) ||
-      (*(FAR eventfd_t *)buffer == (eventfd_t)0))
+  if (buffer == NULL)
+    {
+      return -EFAULT;
+    }
+
+  if (len < sizeof(eventfd_t))
+    {
+      return -EINVAL;
+    }
+
+  memcpy(&value, buffer, sizeof(eventfd_t));
+
+  if (value == (eventfd_t)-1 || value == (eventfd_t)0)
     {
       return -EINVAL;
     }
@@ -367,9 +389,9 @@ static ssize_t eventfd_do_write(FAR struct file *filep,
       return ret;
     }
 
-  new_counter = dev->counter + *(FAR eventfd_t *)buffer;
+  new_counter = dev->counter + value;
 
-  if (new_counter < dev->counter)
+  if (new_counter < dev->counter || new_counter == (eventfd_t)-1)
     {
       eventfd_waiter_sem_t sem;
 
@@ -391,8 +413,8 @@ static ssize_t eventfd_do_write(FAR struct file *filep,
               return ret;
             }
         }
-      while ((new_counter = dev->counter + *(FAR eventfd_t *)buffer)
-            < dev->counter);
+      while ((new_counter = dev->counter + value) < dev->counter ||
+             new_counter == (eventfd_t)-1);
 
       nxsem_destroy(&sem.sem);
     }
@@ -423,7 +445,7 @@ static ssize_t eventfd_do_write(FAR struct file *filep,
 }
 
 #ifdef CONFIG_EVENT_FD_POLL
-static int eventfd_do_poll(FAR struct file *filep, FAR struct pollfd *fds,
+static int eventfd_do_poll(FAR struct file *filep, FAR struct pollfd_s *fds,
                            bool setup)
 {
   FAR struct eventfd_priv_s *dev = filep->f_priv;
@@ -443,7 +465,7 @@ static int eventfd_do_poll(FAR struct file *filep, FAR struct pollfd *fds,
     {
       /* This is a request to tear down the poll. */
 
-      FAR struct pollfd **slot = (FAR struct pollfd **)fds->priv;
+      FAR struct pollfd_s **slot = (FAR struct pollfd_s **)fds->priv;
 
       /* Remove all memory of the poll setup */
 
@@ -494,7 +516,15 @@ static int eventfd_do_poll(FAR struct file *filep, FAR struct pollfd *fds,
       eventset |= POLLIN;
     }
 
-  poll_notify(&fds, 1, eventset);
+  /* The eventset is never empty and an epoll node sets POLLALWAYS, so
+   * notifying unconditionally would make epoll_wait() tear down and set
+   * up this fd on every call while reporting nothing.
+   */
+
+  if ((eventset & (fds->events | POLLERR | POLLHUP)) != 0)
+    {
+      poll_notify(&fds, 1, eventset);
+    }
 
 out:
   nxmutex_unlock(&dev->lock);

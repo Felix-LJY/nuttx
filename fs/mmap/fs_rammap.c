@@ -27,6 +27,7 @@
 #include <nuttx/config.h>
 #include <sys/types.h>
 #include <sys/ioctl.h>
+#include <sys/mman.h>
 
 #include <assert.h>
 #include <nuttx/debug.h>
@@ -102,6 +103,8 @@ static int msync_rammap(FAR struct mm_map_entry_s *entry, FAR void *start,
                    entry->offset, nwrite);
               break;
             }
+
+          continue;
         }
 
       /* Increment number of bytes written */
@@ -160,6 +163,17 @@ static int unmap_rammap(FAR struct task_group_s *group,
 
   length = entry->length - offset;
 
+  /* The changes to a shared mapping go to the file */
+
+  if ((entry->flags & MAP_SHARED) != 0 && (entry->prot & PROT_WRITE) != 0)
+    {
+      ret = msync_rammap(entry, start, length, MS_SYNC);
+      if (ret < 0)
+        {
+          ferr("ERROR: Write back failed: %d\n", ret);
+        }
+    }
+
   /* Are we unmapping the entire region (offset == 0)? */
 
   if (length >= entry->length)
@@ -190,16 +204,16 @@ static int unmap_rammap(FAR struct task_group_s *group,
     {
       if (type == MAP_KERNEL)
         {
-          newaddr = fs_heap_realloc(entry->vaddr, length);
+          newaddr = fs_heap_realloc(entry->vaddr, offset);
         }
       else if (type == MAP_USER)
         {
-          newaddr = kumm_realloc(entry->vaddr, length);
+          newaddr = kumm_realloc(entry->vaddr, offset);
         }
 
       DEBUGASSERT(newaddr == entry->vaddr);
       entry->vaddr = newaddr;
-      entry->length = length;
+      entry->length = offset;
     }
 
   return ret;
@@ -240,6 +254,7 @@ int rammap(FAR struct file *filep, FAR struct mm_map_entry_s *entry,
   FAR uint8_t *rdbuffer;
   ssize_t nread;
   off_t fpos;
+  off_t opos;
   int ret;
   size_t length = entry->length;
 
@@ -262,6 +277,14 @@ int rammap(FAR struct file *filep, FAR struct mm_map_entry_s *entry,
    * being, a new memory region is created each time that rammap() is called.
    * Not very useful!
    */
+
+  /* mmap() must not move the file position */
+
+  opos = file_seek(filep, 0, SEEK_CUR);
+  if (opos < 0)
+    {
+      return opos;
+    }
 
   /* Allocate a region of memory of the specified size */
 
@@ -286,7 +309,7 @@ int rammap(FAR struct file *filep, FAR struct mm_map_entry_s *entry,
 
       ferr("ERROR: Seek to position %zu failed\n", (size_t)entry->offset);
       ret = fpos;
-      goto errout_with_region;
+      goto errout_with_pos;
     }
 
   /* Read the file data into the memory region */
@@ -308,8 +331,10 @@ int rammap(FAR struct file *filep, FAR struct mm_map_entry_s *entry,
                    (size_t)entry->offset, nread);
 
               ret = nread;
-              goto errout_with_region;
+              goto errout_with_pos;
             }
+
+          continue;
         }
 
       /* Check for end of file. */
@@ -328,6 +353,7 @@ int rammap(FAR struct file *filep, FAR struct mm_map_entry_s *entry,
   /* Zero any memory beyond the amount read from the file */
 
   memset(rdbuffer, 0, length);
+  file_seek(filep, opos, SEEK_SET);
 
   /* Add the buffer to the list of regions */
 
@@ -340,10 +366,14 @@ out:
   ret = mm_map_add(get_current_mm(), entry);
   if (ret < 0)
     {
+      file_put(filep);
       goto errout_with_region;
     }
 
   return OK;
+
+errout_with_pos:
+  file_seek(filep, opos, SEEK_SET);
 
 errout_with_region:
   if (type == MAP_KERNEL)

@@ -1,6 +1,8 @@
 /****************************************************************************
  * arch/arm/src/stm32h5/stm32_fdcan.c
  *
+ * SPDX-License-Identifier: Apache-2.0
+ *
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.  The
@@ -427,8 +429,14 @@ struct stm32_fdcan_s
   uint8_t nstdalloc;        /* Number of allocated standard filters */
   uint32_t nbtp;            /* Current nominal bit timing */
   uint32_t dbtp;            /* Current data bit timing */
+  bool dar;                 /* Automatic retransmission disabled */
+  uint32_t txbusy;          /* TX buffers requested and not yet reaped */
   uint32_t rxints;          /* Configured RX interrupts */
   uint32_t txints;          /* Configured TX interrupts */
+  uint32_t bus_errors;      /* Accumulated CAN error logging count */
+  uint32_t arb_errors;      /* Protocol error interrupts, arbitration phase */
+  uint32_t data_errors;     /* Protocol error interrupts, data phase */
+  uint32_t rx_overruns;     /* RX FIFO message lost events seen */
 
 #ifdef CONFIG_CAN_EXTID
   uint32_t extfilters[2];   /* Extended filter bit allocator.  2*32=64 */
@@ -513,6 +521,7 @@ static void fdcan_error(struct can_dev_s *dev, uint32_t status);
 static void fdcan_receive(struct can_dev_s *dev,
                           volatile uint32_t *rxbuffer,
                           unsigned long nwords);
+static void fdcan_reaptx(struct can_dev_s *dev);
 static int  fdcan_interrupt(int irq, void *context, void *arg);
 
 /* Hardware initialization */
@@ -762,6 +771,7 @@ static uint32_t fdcan_getreg(struct stm32_fdcan_s *priv, int offset)
 static uint32_t fdcan_getreg(struct stm32_fdcan_s *priv, int offset)
 {
   const struct stm32_config_s *config = priv->config;
+
   return getreg32(config->base + offset);
 }
 
@@ -804,6 +814,7 @@ static void fdcan_putreg(struct stm32_fdcan_s *priv, int offset,
                          uint32_t regval)
 {
   const struct stm32_config_s *config = priv->config;
+
   putreg32(regval, config->base + offset);
 }
 
@@ -1194,12 +1205,12 @@ static int fdcan_add_extfilter(struct stm32_fdcan_s *priv,
               regval |= (FDCAN_CCCR_INIT | FDCAN_CCCR_CCE);
               fdcan_putreg(priv, STM32_FDCAN_CCCR_OFFSET, regval);
 
-             /* Update the Global Filter Configuration so that received
-              * messages are rejected if they do not match the acceptance
-              * filter.
-              *
-              *   ANFE=2: Discard all rejected frames
-              */
+              /* Update the Global Filter Configuration so that received
+               * messages are rejected if they do not match the acceptance
+               * filter.
+               *
+               *   ANFE=2: Discard all rejected frames
+               */
 
               regval  = fdcan_getreg(priv, STM32_FDCAN_RXGFC_OFFSET);
               regval &= ~FDCAN_RXGFC_ANFE_MASK;
@@ -1444,12 +1455,12 @@ static int fdcan_add_stdfilter(struct stm32_fdcan_s *priv,
               regval |= (FDCAN_CCCR_INIT | FDCAN_CCCR_CCE);
               fdcan_putreg(priv, STM32_FDCAN_CCCR_OFFSET, regval);
 
-             /* Update the Global Filter Configuration so that received
-              * messages are rejected if they do not match the acceptance
-              * filter.
-              *
-              *   ANFS=2: Discard all rejected frames
-              */
+              /* Update the Global Filter Configuration so that received
+               * messages are rejected if they do not match the acceptance
+               * filter.
+               *
+               *   ANFS=2: Discard all rejected frames
+               */
 
               regval  = fdcan_getreg(priv, STM32_FDCAN_RXGFC_OFFSET);
               regval &= ~FDCAN_RXGFC_ANFS_MASK;
@@ -1713,6 +1724,11 @@ static int fdcan_setup(struct can_dev_s *dev)
   caninfo("FDCAN%d\n", config->port);
 
   /* FDCAN hardware initialization */
+
+  priv->bus_errors  = 0;
+  priv->arb_errors  = 0;
+  priv->data_errors = 0;
+  priv->rx_overruns = 0;
 
   ret = fdcan_hw_initialize(priv);
   if (ret < 0)
@@ -2163,6 +2179,138 @@ static int fdcan_ioctl(struct can_dev_s *dev, int cmd, unsigned long arg)
         }
         break;
 
+      /* CANIOC_SET_NART:
+       *   Description : Enable/Disable NART (No Automatic Retry).  The frame
+       *                 is dropped instead of retried if it loses
+       *                 arbitration or hits an error (CCCR.DAR).
+       *   Argument : 1 to disable automatic retransmission, 0 to enable it
+       *   Returned Value : Zero (OK) is returned on success.  Otherwise -1
+       *                    (ERROR) is returned with the errno variable set
+       *                    to indicate the nature of the error.
+       *   Dependencies : None
+       *
+       * CCCR.DAR is protected, so the controller passes through
+       * initialization mode, which drops any frame on the wire.  Call this
+       * while the bus is quiet.
+       */
+
+      case CANIOC_SET_NART:
+        {
+          irqstate_t flags;
+          uint32_t   regval;
+          bool       dar = (arg != 0);
+
+          if (priv->dar == dar)
+            {
+              ret = OK;
+              break;
+            }
+
+          flags = enter_critical_section();
+
+          priv->dar = dar;
+
+          regval = fdcan_getreg(priv, STM32_FDCAN_CCCR_OFFSET);
+          fdcan_putreg(priv, STM32_FDCAN_CCCR_OFFSET,
+                       regval | FDCAN_CCCR_INIT);
+          while ((fdcan_getreg(priv, STM32_FDCAN_CCCR_OFFSET) &
+                  FDCAN_CCCR_INIT) == 0);
+
+          regval = fdcan_getreg(priv, STM32_FDCAN_CCCR_OFFSET);
+          fdcan_putreg(priv, STM32_FDCAN_CCCR_OFFSET,
+                       regval | FDCAN_CCCR_CCE);
+
+          regval = fdcan_getreg(priv, STM32_FDCAN_CCCR_OFFSET) &
+                   ~FDCAN_CCCR_DAR;
+          if (dar)
+            {
+              regval |= FDCAN_CCCR_DAR;
+            }
+
+          fdcan_putreg(priv, STM32_FDCAN_CCCR_OFFSET, regval);
+
+          regval &= ~(FDCAN_CCCR_INIT | FDCAN_CCCR_CCE);
+          fdcan_putreg(priv, STM32_FDCAN_CCCR_OFFSET, regval);
+
+          leave_critical_section(flags);
+
+          /* Entering initialization mode cancels any pending transmission */
+
+          fdcan_reaptx(dev);
+          ret = OK;
+        }
+        break;
+
+      /* CANIOC_GET_ERRORS:
+       *   Description : Get the error state and counters
+       *   Argument : A pointer to a write-able struct canioc_errors_s
+       *   Returned Value : Zero (OK) is returned on success.  Otherwise -1
+       *                    (ERROR) is returned with the errno variable set
+       *                    to indicate the nature of the error.
+       *   Dependencies : None
+       *
+       * errors accumulates the hardware CAN error logging counter (ECR.CEL),
+       * which is cleared by each read of ECR and saturates at 255, so poll
+       * often enough that fewer than 256 errors occur between calls.
+       * arb_errors, data_errors and rx_overruns count interrupts.  Protocol
+       * error interrupts are masked after the first until a frame is
+       * transmitted again, and RX overruns until a frame is received, so
+       * these are lower bounds.
+       */
+
+      case CANIOC_GET_ERRORS:
+        {
+          struct canioc_errors_s *errors =
+            (struct canioc_errors_s *)arg;
+          irqstate_t flags;
+          uint32_t   ecr;
+          uint32_t   psr;
+
+          if (errors == NULL)
+            {
+              ret = -EINVAL;
+              break;
+            }
+
+          flags = enter_critical_section();
+
+          ecr = fdcan_getreg(priv, STM32_FDCAN_ECR_OFFSET);
+          psr = fdcan_getreg(priv, STM32_FDCAN_PSR_OFFSET);
+
+          priv->bus_errors += (ecr & FDCAN_ECR_CEL_MASK) >>
+                              FDCAN_ECR_CEL_SHIFT;
+
+          errors->errors      = priv->bus_errors;
+          errors->arb_errors  = priv->arb_errors;
+          errors->data_errors = priv->data_errors;
+          errors->rx_overruns = priv->rx_overruns;
+
+          leave_critical_section(flags);
+
+          errors->txerr = (ecr & FDCAN_ECR_TEC_MASK) >> FDCAN_ECR_TEC_SHIFT;
+          errors->rxerr = (ecr & FDCAN_ECR_REC_MASK) >> FDCAN_ECR_REC_SHIFT;
+
+          if ((psr & FDCAN_PSR_BO) != 0)
+            {
+              errors->state = CANIOC_ERRSTATE_BUSOFF;
+            }
+          else if ((psr & FDCAN_PSR_EP) != 0)
+            {
+              errors->state = CANIOC_ERRSTATE_PASSIVE;
+            }
+          else if ((psr & FDCAN_PSR_EW) != 0)
+            {
+              errors->state = CANIOC_ERRSTATE_WARNING;
+            }
+          else
+            {
+              errors->state = CANIOC_ERRSTATE_ACTIVE;
+            }
+
+          ret = OK;
+        }
+        break;
+
       /* Unsupported/unrecognized command */
 
       default:
@@ -2342,14 +2490,19 @@ static int fdcan_send(struct can_dev_s *dev, struct can_msg_s *msg)
       *dest++ = wordbuffer;
     }
 
-  /* Enable transmit interrupts from the TX FIFOQ buffer by setting TC
-   * interrupt bit in IR (also requires that the TC interrupt is enabled)
+  /* Enable transmit interrupts from every TX FIFOQ buffer by setting their
+   * TC interrupt bits (also requires that the TC interrupt is enabled), so
+   * each buffer is reaped as soon as it finishes.  fdcan_txready() holds
+   * a buffer back until then.
    */
 
-  fdcan_putreg(priv, STM32_FDCAN_TXBTIE_OFFSET, (1 << ndx));
+  fdcan_putreg(priv, STM32_FDCAN_TXBTIE_OFFSET,
+               (1 << config->ntxfifoq) - 1);
 
   /* And request to send the packet */
 
+  DEBUGASSERT((priv->txbusy & (1 << ndx)) == 0);
+  priv->txbusy |= (1 << ndx);
   fdcan_putreg(priv, STM32_FDCAN_TXBAR_OFFSET, (1 << ndx));
 
   return OK;
@@ -2373,16 +2526,20 @@ static bool fdcan_txready(struct can_dev_s *dev)
 {
   struct stm32_fdcan_s *priv    = dev->cd_priv;
   uint32_t              regval  = 0;
+  uint32_t              ndx     = 0;
   bool                  notfull = false;
 
   /* Return the state of the TX FIFOQ.  Return TRUE if the TX FIFO/Queue is
-   * not full.
+   * not full and the buffer it would use next has been reaped: the
+   * hardware frees a buffer before its interrupt reports it done, and
+   * reusing it then would lose that completion.
    */
 
   regval  = fdcan_getreg(priv, STM32_FDCAN_TXFQS_OFFSET);
   notfull = ((regval & FDCAN_TXFQS_TFQF) == 0);
+  ndx     = (regval & FDCAN_TXFQS_TFQPI_MASK) >> FDCAN_TXFQS_TFQPI_SHIFT;
 
-  return notfull;
+  return notfull && (priv->txbusy & (1 << ndx)) == 0;
 }
 
 /****************************************************************************
@@ -2405,35 +2562,17 @@ static bool fdcan_txready(struct can_dev_s *dev)
 
 static bool fdcan_txempty(struct can_dev_s *dev)
 {
-  struct stm32_fdcan_s *priv   = dev->cd_priv;
-  uint32_t              regval = 0;
-#ifndef CONFIG_STM32_FDCAN_QUEUE_MODE
-  int                   tffl   = 0;
-  bool                  empty  = false;
-#endif
+  struct stm32_fdcan_s *priv = dev->cd_priv;
 
   DEBUGASSERT(priv != NULL && priv->config != NULL);
 
-  /* Return the state of the TX FIFOQ.  Return TRUE if the TX FIFO/Queue is
-   * empty.  We don't have a reliable indication that the FIFO is empty, so
-   * we have to use some heuristics.
+  /* Empty only once every request has been reported done.  The upper half
+   * retires a message itself when its queue is full and this says empty,
+   * so saying empty while a completion is still owed would report that
+   * message done twice.
    */
 
-  regval = fdcan_getreg(priv, STM32_FDCAN_TXFQS_OFFSET);
-  if ((regval & FDCAN_TXFQS_TFQF) != 0)
-    {
-      return false;
-    }
-
-  /* Tx FIFO Free Level */
-
-#ifndef CONFIG_STM32_FDCAN_QUEUE_MODE
-  tffl  = (regval & FDCAN_TXFQS_TFFL_MASK) >> FDCAN_TXFQS_TFFL_SHIFT;
-  empty = (tffl >= priv->config->ntxfifoq);
-  return empty;
-#else
-  return true;
-#endif
+  return priv->txbusy == 0;
 }
 
 /****************************************************************************
@@ -2792,6 +2931,42 @@ static void fdcan_receive(struct can_dev_s *dev,
 }
 
 /****************************************************************************
+ * Name: fdcan_reaptx
+ *
+ * Description:
+ *   Call can_txdone() once for each TX buffer we requested that is no
+ *   longer pending, whether it was sent or dropped.  TXBTO cannot be used
+ *   for this: its bits stay set until the buffer is requested again, and
+ *   are never set for a frame dropped with retransmission disabled.
+ *
+ * Input Parameters:
+ *   dev - CAN-common state data
+ *
+ * Returned Value:
+ *   None
+ *
+ ****************************************************************************/
+
+static void fdcan_reaptx(struct can_dev_s *dev)
+{
+  struct stm32_fdcan_s *priv = dev->cd_priv;
+  irqstate_t            flags;
+  uint32_t              done;
+
+  flags = enter_critical_section();
+
+  done = priv->txbusy & ~fdcan_getreg(priv, STM32_FDCAN_TXBRP_OFFSET);
+  priv->txbusy &= ~done;
+
+  for (; done != 0; done &= done - 1)
+    {
+      can_txdone(dev);
+    }
+
+  leave_critical_section(flags);
+}
+
+/****************************************************************************
  * Name: fdcan_interrupt
  *
  * Description:
@@ -2852,6 +3027,16 @@ static int fdcan_interrupt(int irq, void *context, void *arg)
            * successful transfer/receive on the hardware
            */
 
+          if ((pending & FDCAN_INT_PEA) != 0)
+            {
+              priv->arb_errors++;
+            }
+
+          if ((pending & FDCAN_INT_PED) != 0)
+            {
+              priv->data_errors++;
+            }
+
           psr = fdcan_getreg(priv, STM32_FDCAN_PSR_OFFSET);
 
           if ((psr & FDCAN_PSR_LEC_MASK) != 0)
@@ -2909,6 +3094,8 @@ static int fdcan_interrupt(int irq, void *context, void *arg)
           ie &= ~(pending & FDCAN_RXERR_INTS);
           fdcan_putreg(priv, STM32_FDCAN_IE_OFFSET, ie);
 
+          priv->rx_overruns++;
+
           /* Clear the error indications */
 
           fdcan_putreg(priv, STM32_FDCAN_IR_OFFSET, FDCAN_RXERR_INTS);
@@ -2921,16 +3108,26 @@ static int fdcan_interrupt(int irq, void *context, void *arg)
 #endif
     }
 
-  /* Check for successful completion of a transmission */
+  /* Check for completion of a transmission.
+   *
+   * A frame dropped with automatic retransmission disabled (lost
+   * arbitration or an error) raises neither TC nor TCF, though its TXBCF
+   * bit is set and TXBCIE enables it (measured on the STM32H563).  It does
+   * empty the TX FIFO, and with retransmission disabled every pending frame
+   * finishes within a frame time, so the FIFO always empties: TFE always
+   * comes.  Without it, a node that only ever loses arbitration never gets
+   * its sender slots back and write() blocks for good.
+   */
 
-  if ((pending & FDCAN_INT_TC) != 0)
+  if ((pending & (FDCAN_INT_TC | FDCAN_INT_TFE)) != 0)
     {
       /* Check if we have disabled the ACKE in the error-handling above
        * (see FDCAN_TXERR_INTS) to prevent Interrupt-Flooding and
        * re-enable the error interrupt here again.
        */
 
-      if ((ie & (FDCAN_INT_PEA | FDCAN_INT_PED)) == 0)
+      if ((pending & FDCAN_INT_TC) != 0 &&
+          (ie & (FDCAN_INT_PEA | FDCAN_INT_PED)) == 0)
         {
           ie |= (FDCAN_INT_PEA | FDCAN_INT_PED);
           fdcan_putreg(priv, STM32_FDCAN_IE_OFFSET, ie);
@@ -2943,18 +3140,9 @@ static int fdcan_interrupt(int irq, void *context, void *arg)
 
       fdcan_putreg(priv, STM32_FDCAN_IR_OFFSET, priv->txints);
 
-      /* Check all TX buffers */
+      /* Tell the upper half about every finished buffer */
 
-      regval = fdcan_getreg(priv, STM32_FDCAN_TXBTO_OFFSET);
-      for (ndx = 0; ndx < config->ntxfifoq; ndx++)
-        {
-          if ((regval & (1 << ndx)) != 0)
-            {
-              /* Tell the upper half that the transfer is finished. */
-
-              can_txdone(dev);
-            }
-        }
+      fdcan_reaptx(dev);
     }
   else if ((pending & priv->txints) != 0)
     {
@@ -3169,6 +3357,8 @@ static int fdcan_hw_initialize(struct stm32_fdcan_s *priv)
 
   fdcan_putreg(priv, STM32_FDCAN_IR_OFFSET, FDCAN_INT_ALL);
 
+  priv->txbusy = 0;
+
   /* Configure FDCAN bit timing */
 
   fdcan_putreg(priv, STM32_FDCAN_NBTP_OFFSET, priv->nbtp);
@@ -3215,7 +3405,13 @@ static int fdcan_hw_initialize(struct stm32_fdcan_s *priv)
   /* CC control register */
 
   regval  = fdcan_getreg(priv, STM32_FDCAN_CCCR_OFFSET);
-  regval &= ~(FDCAN_CCCR_NISO | FDCAN_CCCR_FDOE | FDCAN_CCCR_BRSE);
+  regval &= ~(FDCAN_CCCR_NISO | FDCAN_CCCR_FDOE | FDCAN_CCCR_BRSE |
+              FDCAN_CCCR_DAR);
+
+  if (priv->dar)
+    {
+      regval |= FDCAN_CCCR_DAR;
+    }
 
   /* Select ISO11898-1 or Non ISO Bosch CAN FD Specification V1.0 */
 

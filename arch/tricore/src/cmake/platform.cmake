@@ -20,22 +20,7 @@
 #
 # ##############################################################################
 
-get_directory_property(TOOLCHAIN_DIR_FLAGS DIRECTORY ${NUTTX_DIR}
-                                                     COMPILE_OPTIONS)
-
-set(NUTTX_EXTRA_FLAGS "")
-foreach(FLAG ${TOOLCHAIN_DIR_FLAGS})
-  if(NOT FLAG MATCHES "^\\$<.*>$")
-    if(NOT FLAG MATCHES "-nostdlib")
-      list(APPEND NUTTX_EXTRA_FLAGS ${FLAG})
-    endif()
-  else()
-    string(REGEX MATCH "\\$<\\$<COMPILE_LANGUAGE:C>:(.*)>" matched ${FLAG})
-    if(matched)
-      list(APPEND NUTTX_EXTRA_FLAGS ${CMAKE_MATCH_1})
-    endif()
-  endif()
-endforeach()
+nuttx_collect_extra_flags(EXCLUDE "-nostdlib")
 
 separate_arguments(CMAKE_C_FLAG_ARGS NATIVE_COMMAND ${CMAKE_C_FLAGS})
 
@@ -44,7 +29,7 @@ if(CONFIG_TRICORE_TOOLCHAIN_GNU)
   if(CONFIG_LIBM_TOOLCHAIN)
     nuttx_find_toolchain_lib(libm.a)
   endif()
-  if(CONFIG_LIBSUPCXX)
+  if(CONFIG_LIBSUPCXX_TOOLCHAIN)
     nuttx_find_toolchain_lib(libsupc++.a)
   endif()
   if(CONFIG_LIBCXXTOOLCHAIN)
@@ -64,6 +49,9 @@ if(CONFIG_TRICORE_TOOLCHAIN_TASKING)
   find_program(TASKING_COMPILER_PATH ctc)
   get_filename_component(C_COMPILER_DIR ${TASKING_COMPILER_PATH} DIRECTORY)
   set(PREPROCESS
-      ${TOOLCHAIN_PREFIX}ctc ${CMAKE_C_FLAG_ARGS} -E
+      ${TASKING_COMPILER_PATH} ${CMAKE_C_FLAG_ARGS} -E
       -I${TOOLCHAIN_PREFIX}/../include.lsl -I${C_COMPILER_DIR}/../include.lsl)
+  if(CONFIG_LIBM_TOOLCHAIN)
+    nuttx_find_toolchain_lib(libm.a)
+  endif()
 endif()

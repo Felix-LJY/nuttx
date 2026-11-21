@@ -1,6 +1,8 @@
-===============
-samd21-xplained
-===============
+=============================
+Microchip SAMD21-Xplained Pro
+=============================
+
+.. tags:: arch:arm, chip:samd2l2, vendor:microchip
 
 .. include:: README.txt
    :literal:

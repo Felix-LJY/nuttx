@@ -20,12 +20,11 @@
 #
 # ##############################################################################
 
-add_subdirectory(${NUTTX_CHIP_ABS_DIR} EXCLUDE_FROM_ALL exclude_chip)
+add_subdirectory(${NUTTX_CHIP_ABS_DIR} exclude_chip EXCLUDE_FROM_ALL)
 add_subdirectory(common)
 
 if(CONFIG_BUILD_KERNEL)
-  add_subdirectory(nuttsbi)
-  target_include_directories(arch BEFORE PUBLIC ${NUTTX_CHIP_ABS_DIR} nuttsbi)
+  add_subdirectory(sbi)
 endif()
 
 # Include directories (before system ones) as PUBLIC so that it can be exposed

@@ -29,6 +29,7 @@
 #include <nuttx/mutex.h>
 #include <nuttx/list.h>
 #include <nuttx/lib/lib.h>
+#include <nuttx/environ.h>
 
 #include "tls.h"
 
@@ -124,6 +125,19 @@ void task_uninit_info(FAR struct task_group_s *group)
 {
   FAR struct task_info_s *info = group->tg_info;
 
+#ifdef CONFIG_BUILD_KERNEL
+  /* The user heap is reclaimed with the address environment.  Its lists
+   * may have been corrupted by the exiting task; neither traversing them
+   * nor freeing their user allocations is necessary in the kernel.  A
+   * vfork() child uses the heap of its parent, which stays.
+   */
+
+  if ((group->tg_flags & (GROUP_FLAG_PRIVILEGED | GROUP_FLAG_VFORK)) == 0)
+    {
+      return;
+    }
+#endif
+
 #ifdef CONFIG_PTHREAD_ATFORK
   /* Remove the functions that registered with pthread_atfork() */
 
@@ -135,7 +149,21 @@ void task_uninit_info(FAR struct task_group_s *group)
       entry = list_first_entry(list,
                                struct pthread_atfork_s, node);
       list_delete_init(&entry->node);
-      lib_free(entry);
+
+      /* pthread_atfork() allocated the entry in the heap of the process:
+       * the user heap, unless the process is privileged.
+       */
+
+#ifdef CONFIG_BUILD_KERNEL
+      /* The user heap of an unprivileged group goes away with its address
+       * environment.
+       */
+
+      if ((group->tg_flags & GROUP_FLAG_PRIVILEGED) != 0)
+#endif
+        {
+          group_free(group, entry);
+        }
     }
 #endif
 
@@ -143,9 +171,50 @@ void task_uninit_info(FAR struct task_group_s *group)
   /* Free resource held by the stream list */
 
   task_uninit_stream(group);
+
+  /* libc allocated the getusershell() state in the heap of the process.
+   * Its stream was closed with the stream list.
+   */
+
+  if (info->ta_usershell != NULL)
+    {
+      group_free(group, info->ta_usershell->us_line);
+      group_free(group, info->ta_usershell);
+      info->ta_usershell = NULL;
+    }
 #endif /* CONFIG_FILE_STREAM */
 
-  nxmutex_destroy(&info->ta_lock);
+#ifdef CONFIG_NETDB_DNSCLIENT
+  /* libc allocated the resolver state in the heap of the process */
+
+  if (info->ta_res != NULL)
+    {
+      group_free(group, info->ta_res);
+      info->ta_res = NULL;
+    }
+#endif
+
+#if CONFIG_LIBC_MAX_EXITFUNS > 0
+  /* Free the heap part of the exit function list (the task did not call
+   * exit())
+   */
+
+  if (info->ta_exit.extra != NULL)
+    {
+      group_free(group, info->ta_exit.extra);
+      info->ta_exit.extra = NULL;
+    }
+#endif
+
+  /* Release all environment variables */
+
+  env_release(info);
+
+#if defined(CONFIG_LIBC_ELF) || defined(CONFIG_BINFMT_LOADABLE)
+  nxrmutex_destroy(&info->ta_modlock);
+#endif
+
+  nxrmutex_destroy(&info->ta_lock);
 #ifdef CONFIG_MM_KERNEL_HEAP
   group_free(group, info);
 #endif

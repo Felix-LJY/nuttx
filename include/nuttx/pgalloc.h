@@ -95,9 +95,9 @@
 
 struct pginfo_s
 {
-  uint16_t  ntotal;  /* The total number of pages */
-  uint16_t  nfree;   /* The number of free pages */
-  uint16_t  mxfree;  /* The longest sequence of free pages */
+  uint32_t  ntotal;  /* The total number of pages */
+  uint32_t  nfree;   /* The number of free pages */
+  uint32_t  mxfree;  /* The longest sequence of free pages */
 };
 
 /****************************************************************************
@@ -105,11 +105,8 @@ struct pginfo_s
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -180,7 +177,8 @@ uintptr_t mm_pgalloc(unsigned int npages);
  *
  * Input Parameters:
  *   npages - The number of pages to allocate, each of size CONFIG_MM_PGSIZE.
- *   align  - The number of pages to align, each of size CONFIG_MM_PGSIZE.
+ *   align  - The alignment in pages, each of size CONFIG_MM_PGSIZE: a
+ *            power of two, or zero for none.
  *
  * Returned Value:
  *   On success, a non-zero, physical address of the allocated page memory
@@ -228,7 +226,6 @@ void mm_pgfree(uintptr_t paddr, unsigned int npages);
 
 void mm_pginfo(FAR struct pginfo_s *info);
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

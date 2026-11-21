@@ -29,12 +29,14 @@
 #include <nuttx/kmalloc.h>
 #include <nuttx/net/net.h>
 #include <nuttx/fs/fs.h>
+#include <nuttx/fs/uio.h>
 #include <nuttx/mm/mm.h>
 
 #include <sys/socket.h>
 #include <assert.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <string.h>
 #include <nuttx/debug.h>
 
 #include "inode/inode.h"
@@ -52,9 +54,13 @@ static ssize_t sock_file_write(FAR struct file *filep,
                                FAR const char *buffer, size_t buflen);
 static int sock_file_ioctl(FAR struct file *filep, int cmd,
                            unsigned long arg);
-static int sock_file_poll(FAR struct file *filep, struct pollfd *fds,
+static int sock_file_poll(FAR struct file *filep, struct pollfd_s *fds,
                           bool setup);
 static int sock_file_truncate(FAR struct file *filep, off_t length);
+static ssize_t sock_file_readv(FAR struct file *filep,
+                               FAR struct uio *uio);
+static ssize_t sock_file_writev(FAR struct file *filep,
+                                FAR struct uio *uio);
 
 /****************************************************************************
  * Private Data
@@ -70,7 +76,9 @@ static const struct file_operations g_sock_fileops =
   sock_file_ioctl,    /* ioctl */
   NULL,               /* mmap */
   sock_file_truncate, /* truncate */
-  sock_file_poll      /* poll */
+  sock_file_poll,     /* poll */
+  sock_file_readv,    /* readv */
+  sock_file_writev,   /* writev */
 };
 
 static struct inode g_sock_inode =
@@ -129,7 +137,11 @@ static ssize_t sock_file_read(FAR struct file *filep, FAR char *buffer,
 static ssize_t sock_file_write(FAR struct file *filep,
                                FAR const char *buffer, size_t buflen)
 {
-  return psock_send(filep->f_priv, buffer, buflen, 0);
+  ssize_t ret;
+
+  ret = psock_send(filep->f_priv, buffer, buflen, 0);
+  psock_sigpipe(filep->f_priv, ret, 0);
+  return ret;
 }
 
 static int sock_file_ioctl(FAR struct file *filep, int cmd,
@@ -138,7 +150,7 @@ static int sock_file_ioctl(FAR struct file *filep, int cmd,
   return psock_ioctl(filep->f_priv, cmd, arg);
 }
 
-static int sock_file_poll(FAR struct file *filep, FAR struct pollfd *fds,
+static int sock_file_poll(FAR struct file *filep, FAR struct pollfd_s *fds,
                           bool setup)
 {
   return psock_poll(filep->f_priv, fds, setup);
@@ -147,6 +159,33 @@ static int sock_file_poll(FAR struct file *filep, FAR struct pollfd *fds,
 static int sock_file_truncate(FAR struct file *filep, off_t length)
 {
   return -EINVAL;
+}
+
+static ssize_t sock_file_readv(FAR struct file *filep,
+                               FAR struct uio *uio)
+{
+  struct msghdr msg;
+
+  memset(&msg, 0, sizeof(struct msghdr));
+  msg.msg_iov = (FAR struct iovec *)uio->uio_iov;
+  msg.msg_iovlen = uio->uio_iovcnt;
+
+  return psock_recvmsg(filep->f_priv, &msg, 0);
+}
+
+static ssize_t sock_file_writev(FAR struct file *filep,
+                                FAR struct uio *uio)
+{
+  struct msghdr msg;
+  ssize_t ret;
+
+  memset(&msg, 0, sizeof(struct msghdr));
+  msg.msg_iov = (FAR struct iovec *)uio->uio_iov;
+  msg.msg_iovlen = uio->uio_iovcnt;
+
+  ret = psock_sendmsg(filep->f_priv, &msg, 0);
+  psock_sigpipe(filep->f_priv, ret, 0);
+  return ret;
 }
 
 /****************************************************************************

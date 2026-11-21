@@ -351,6 +351,21 @@ static always_inline_function uint32_t getpsp(void)
 int up_cpu_index(void) noinstrument_function;
 #endif /* CONFIG_ARCH_HAVE_MULTICPU */
 
+/* Return program counter */
+
+static always_inline_function uint32_t up_getpc(void)
+{
+  register uint32_t pc;
+
+  __asm__ __volatile__
+  (
+    "mov %0, pc\n"
+    : "=r" (pc)
+  );
+
+  return pc;
+}
+
 static always_inline_function uint32_t up_getsp(void)
 {
   register uint32_t sp;
@@ -380,14 +395,10 @@ static always_inline_function bool up_interrupt_context(void)
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

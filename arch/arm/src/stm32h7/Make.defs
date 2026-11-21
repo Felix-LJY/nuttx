@@ -49,16 +49,6 @@ endif
 CHIP_CSRCS += stm32_allocateheap.c stm32_exti_gpio.c stm32_gpio.c stm32_irq.c
 CHIP_CSRCS += stm32_start.c stm32_rcc.c stm32_lowputc.c stm32_serial.c
 
-ifeq ($(CONFIG_SCHED_TICKLESS),y)
-CHIP_CSRCS += stm32_tickless.c
-else
-CHIP_CSRCS += stm32_timerisr.c
-endif
-
-ifeq ($(CONFIG_STM32_ONESHOT),y)
-CHIP_CSRCS += stm32_oneshot.c stm32_oneshot_lowerhalf.c
-endif
-
 ifeq ($(CONFIG_ARM_MPU),y)
 CHIP_CSRCS += stm32_mpuinit.c
 endif
@@ -79,12 +69,12 @@ ifeq ($(CONFIG_STM32_DAC),y)
 CHIP_CSRCS += stm32_dac.c
 endif
 
-ifeq ($(CONFIG_STM32_FDCAN),y)
-CHIP_CSRCS += stm32_fdcan_sock.c
+ifeq ($(CONFIG_STM32_FDCAN_CHARDRIVER),y)
+CHIP_CSRCS += stm32_fdcan.c
 endif
 
-ifeq ($(CONFIG_STM32_RNG),y)
-CHIP_CSRCS += stm32_rng.c
+ifeq ($(CONFIG_STM32_FDCAN_SOCKET),y)
+CHIP_CSRCS += stm32_fdcan_sock.c
 endif
 
 ifeq ($(CONFIG_STM32_BBSRAM),y)
@@ -97,10 +87,6 @@ endif
 
 ifeq ($(CONFIG_STM32_FMC),y)
 CHIP_CSRCS += stm32_fmc.c
-endif
-
-ifeq ($(filter y,$(CONFIG_STM32_IWDG) $(CONFIG_STM32_RTC_LSICLOCK)),y)
-CHIP_CSRCS += stm32_lsi.c
 endif
 
 ifeq ($(CONFIG_STM32_RTC_LSECLOCK),y)
@@ -144,14 +130,6 @@ ifeq ($(CONFIG_SPI_SLAVE),y)
 CHIP_CSRCS += stm32_spi_slave.c
 endif
 
-ifeq ($(CONFIG_STM32_SDMMC),y)
-CHIP_CSRCS += stm32_sdmmc.c
-endif
-
-ifeq ($(CONFIG_TIMER),y)
-CHIP_CSRCS += stm32_tim_lowerhalf.c
-endif
-
 ifeq ($(CONFIG_STM32_TIMX_CAP),y)
 CHIP_CSRCS += stm32_capture.c
 endif
@@ -179,28 +157,8 @@ endif
 endif
 endif
 
-ifeq ($(CONFIG_STM32_TIM),y)
-CHIP_CSRCS += stm32_tim.c
-endif
-
-ifeq ($(CONFIG_STM32_LPTIM),y)
-CHIP_CSRCS += stm32_lptim.c
-endif
-
 ifeq ($(CONFIG_STM32_PWM),y)
 CHIP_CSRCS += stm32_pwm.c
-endif
-
-ifeq ($(CONFIG_STM32_ETHMAC),y)
-CHIP_CSRCS += stm32_ethernet.c
-endif
-
-ifeq ($(CONFIG_MDIO_BUS),y)
-CHIP_CSRCS += stm32_mdio.c
-endif 
-
-ifeq ($(CONFIG_SENSORS_QENCODER),y)
-CHIP_CSRCS += stm32_qencoder.c
 endif
 
 ifeq ($(CONFIG_PM),y)
@@ -208,14 +166,6 @@ CHIP_CSRCS += stm32_pmsleep.c stm32_pmstandby.c stm32_pmstop.c
 ifneq ($(CONFIG_ARCH_CUSTOM_PMINIT),y)
 CHIP_CSRCS += stm32_pminitialize.c
 endif
-endif
-
-ifeq ($(CONFIG_STM32_IWDG),y)
-CHIP_CSRCS += stm32_iwdg.c
-endif
-
-ifeq ($(CONFIG_STM32_WWDG),y)
-CHIP_CSRCS += stm32_wwdg.c
 endif
 
 ifeq ($(CONFIG_STM32_CRYP),y)

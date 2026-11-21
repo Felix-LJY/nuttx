@@ -212,9 +212,14 @@
    *          Do not set the LASTXFER-Bit at the last word of the next
    *          exchange, Flag is auto-resetting after the next LASTXFER
    *          condition. (see spi_exchange)
-   *   Bit 4: HWFEAT_LSBFIRST
+   *   Bit 4: HWFEAT_AUTO_CS_CONTROL
+   *          CS is automatically controlled by the Hardware spi controller
+   *          with programmable timings.
+   *   Bit 5: HWFEAT_INVERT_CS_LEVEL
+   *          Invert the CS level (active high)
+   *   Bit 6: HWFEAT_LSBFIRST
    *          Data transferred LSB first (default is MSB first)
-   *   Bit 5: Turn deferred trigger mode on or off.  Primarily used for DMA
+   *   Bit 7: Turn deferred trigger mode on or off.  Primarily used for DMA
    *          mode.  If a transfer is deferred then the DMA will not actually
    *          be triggered until a subsequent call to SPI_TRIGGER to set it
    *          off.
@@ -225,19 +230,21 @@
 #  endif
 
 #  ifdef CONFIG_SPI_CS_CONTROL
-#    define HWFEAT_FORCE_CS_CONTROL_MASK             (7 << 1)
+#    define HWFEAT_FORCE_CS_CONTROL_MASK             (31 << 1)
 #    define HWFEAT_FORCE_CS_INACTIVE_AFTER_TRANSFER  (1 << 1)
 #    define HWFEAT_FORCE_CS_ACTIVE_AFTER_TRANSFER    (1 << 2)
 #    define HWFEAT_ESCAPE_LASTXFER                   (1 << 3)
+#    define HWFEAT_AUTO_CS_CONTROL                   (1 << 4)
+#    define HWFEAT_INVERT_CS_LEVEL                   (1 << 5)
 #  endif
 
 #  ifdef CONFIG_SPI_BITORDER
-#    define HWFEAT_MSBFIRST                          (0 << 4)
-#    define HWFEAT_LSBFIRST                          (1 << 4)
+#    define HWFEAT_MSBFIRST                          (0 << 6)
+#    define HWFEAT_LSBFIRST                          (1 << 6)
 #  endif
 
 #  ifdef CONFIG_SPI_TRIGGER
-#    define HWFEAT_TRIGGER                           (1 << 5)
+#    define HWFEAT_TRIGGER                           (1 << 7)
 #  endif
 
 #else
@@ -272,6 +279,7 @@
 
 #define SPI_STATUS_PRESENT     0x01 /* Bit 0=1: MMC/SD card present */
 #define SPI_STATUS_WRPROTECTED 0x02 /* Bit 1=1: MMC/SD card write protected */
+#define SPI_STATUS_DEVBUSY     0x04 /* Bit 2=1: MMC/SD card busy */
 
 /****************************************************************************
  * Name: SPI_CMDDATA
@@ -317,7 +325,7 @@
  *
  ****************************************************************************/
 
-#define SPI_SEND(d,wd) ((d)->ops->send(d,(uint16_t)(wd)))
+#define SPI_SEND(d,wd) ((d)->ops->send(d,wd))
 
 /****************************************************************************
  * Name: SPI_SNDBLOCK
@@ -388,12 +396,87 @@
  *              uint16_t's
  *
  * Returned Value:
- *   None
+ *   Returns zero (OK) on success; a negated errno value on failure.
  *
  ****************************************************************************/
 
 #ifdef CONFIG_SPI_EXCHANGE
 #  define SPI_EXCHANGE(d,t,r,l) ((d)->ops->exchange(d,t,r,l))
+#endif
+
+/****************************************************************************
+ * Name: SPI_EXCHANGESEQS
+ *
+ * Description:
+ *   Exchange n SPI data sequences.
+ *   Support sending multiple seqs of data.
+ *
+ *   Based on the SPI parameters in the seqs, the lower half driver can
+ *   organize the data itself, which is convenient for link transmission
+ *   using DMA. With DMA support, it can switch channels and config
+ *   related parameters automatically.
+ *
+ *   If a callback function is set in struct spi_sequence_s, asynchronous
+ *   operations are performed. After the data exchange is complete,
+ *   the callback function can be called to notify the user.
+ *
+ *   The cookie serves as a handle that can be used later to reference
+ *   the specific sequence(s), for example, to cancel them using the
+ *   `cancelseqs` function. The caller is responsible for storing this
+ *   cookie for future operations.
+ *
+ *   lowerhalf reference Summarize:
+ *   1. Check if the callback function is not NULL.
+ *   2. check if para cookie is NULL, if not, initialize it.
+ *   3. Assemble the sequence info into a DMA link info.
+ *   4. Configure SPI.
+ *   5. Configure and start DMA.
+ *   6. Call the callback function in the DMA interrupt.
+ *
+ * Input Parameters:
+ *   dev    - Device-specific state data
+ *   seqs   - A pointer to the spi sequence info to be exchanged
+ *   nseqs  - The number of sequences to be exchanged
+ *   cookie - A pointer to the cookie info to return a unique identifier for
+ *            the spi sequences being exchanged.
+ *
+ * Returned Value:
+ *   0 on success; negated errno on failure.  -ENOTSUP declines the
+ *   request and spi_transfer()/spi_transferseqs() fall back to their
+ *   generic loops; it must be returned before any transfer is started.
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_SPI_EXCHANGE
+#  define SPI_EXCHANGESEQS(d,s,n,c) ((d)->ops->exchangeseqs(d,s,n,c))
+#endif
+
+/****************************************************************************
+ * Name: SPI_CANCELSEQS
+ *
+ * Description:
+ *   Cancel seqs transmission
+ *
+ *   In asynchronous communication, this interface can be called to
+ *   cancel seqs that have not yet been transmitted by hardware.
+ *
+ *   The `cookie` is typically returned by the `exchangeseqs` function when
+ *   the sequences were initially submitted. The lower-half driver uses
+ *   this cookie to locate and cancel the specified sequences.
+ *   If `cookie` is `NULL`, the function should cancel all pending sequences
+ *   on the device.
+ *
+ * Input Parameters:
+ *   dev    - Device-specific state data
+ *   cookie - A pointer of unique identifiers for sequences to be canceled.
+ *
+ * Returned Value:
+ *   0 on success; negated errno on failure.
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_SPI_EXCHANGE
+#  define SPI_CANCELSEQS(d,c) ((d)->ops->cancelseqs(d,c))
 #endif
 
 /****************************************************************************
@@ -545,6 +628,9 @@ typedef uint8_t spi_hwfeatures_t;
 /* The SPI vtable */
 
 struct spi_dev_s;
+#ifdef CONFIG_SPI_EXCHANGE
+struct spi_sequence_s;
+#endif
 struct spi_ops_s
 {
   CODE int      (*lock)(FAR struct spi_dev_s *dev, bool lock);
@@ -569,9 +655,13 @@ struct spi_ops_s
 #endif
   CODE uint32_t (*send)(FAR struct spi_dev_s *dev, uint32_t wd);
 #ifdef CONFIG_SPI_EXCHANGE
-  CODE void     (*exchange)(FAR struct spi_dev_s *dev,
+  CODE int      (*exchange)(FAR struct spi_dev_s *dev,
                   FAR const void *txbuffer, FAR void *rxbuffer,
                   size_t nwords);
+  CODE int      (*exchangeseqs)(FAR struct spi_dev_s *dev,
+                  FAR struct spi_sequence_s *seqs, size_t nseqs,
+                  FAR void **cookie);
+  CODE int      (*cancelseqs)(FAR struct spi_dev_s *dev, FAR void *cookie);
 #else
   CODE void     (*sndblock)(FAR struct spi_dev_s *dev,
                   FAR const void *buffer, size_t nwords);
@@ -595,16 +685,11 @@ struct spi_dev_s
   FAR const struct spi_ops_s *ops;
 };
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

@@ -33,6 +33,10 @@
 #endif
 
 NXSYMBOLS(__cxa_atexit)
+#ifdef CONFIG_TLS_EMUTLS
+NXSYMBOLS(__emutls_get_address)
+NXSYMBOLS(__emutls_register_common)
+#endif
 NXSYMBOLS(abort)
 NXSYMBOLS(accept)
 NXSYMBOLS(access)
@@ -83,7 +87,7 @@ NXSYMBOLS(lstat)
 NXSYMBOLS(malloc)
 NXSYMBOLS(malloc_size)
 NXSYMBOLS(malloc_usable_size)
-NXSYMBOLS(memchr)  
+NXSYMBOLS(memchr)
 NXSYMBOLS(memcpy)
 NXSYMBOLS(memfd_create)
 NXSYMBOLS(mkdir)
@@ -122,6 +126,7 @@ NXSYMBOLS(pthread_setspecific)
 #endif
 NXSYMBOLS(pthread_self)
 NXSYMBOLS(pthread_sigmask)
+NXSYMBOLS(pthread_sigqueue)
 NXSYMBOLS(puts)
 NXSYMBOLS(read)
 NXSYMBOLS(readdir)

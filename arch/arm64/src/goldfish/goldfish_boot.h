@@ -40,19 +40,19 @@
 
 #define CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC  62500000
 
+/* The emulator (QEMU) counts the PMU cycle counter at 1 GHz */
+
+#define GOLDFISH_PMU_CYCLES_PER_SEC         1000000000
+
 /****************************************************************************
  * Public Function Prototypes
  ****************************************************************************/
 
 #ifndef __ASSEMBLY__
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -74,7 +74,6 @@ extern "C"
 
 void goldfish_board_initialize(void);
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

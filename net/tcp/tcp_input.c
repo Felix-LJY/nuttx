@@ -53,6 +53,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <assert.h>
+#include <errno.h>
 #include <nuttx/debug.h>
 
 #include <nuttx/net/netconfig.h>
@@ -62,6 +63,7 @@
 #include <nuttx/net/tcp.h>
 
 #include "devif/devif.h"
+#include "socket/socket.h"
 #include "utils/utils.h"
 #include "tcp/tcp.h"
 
@@ -671,6 +673,35 @@ static void tcp_clear_zero_probe(FAR struct tcp_conn_s *conn,
 }
 
 /****************************************************************************
+ * Name: tcp_input_dropack
+ *
+ * Description:
+ *   Drop the data of a segment.  A new ACK in the segment is passed to the
+ *   application first, as the ACK has already been accounted.
+ *
+ * Assumptions:
+ *   The network is locked.
+ *
+ ****************************************************************************/
+
+static void tcp_input_dropack(FAR struct net_driver_s *dev,
+                              FAR struct tcp_conn_s *conn,
+                              uint32_t flags, uint16_t tcpiplen)
+{
+  if ((flags & TCP_ACKDATA) != 0)
+    {
+      dev->d_len    = 0;
+      dev->d_sndlen = 0;
+      tcp_appsend(dev, conn, tcp_callback(dev, conn, TCP_ACKDATA) |
+                             TCP_SNDACK);
+    }
+  else
+    {
+      tcp_send(dev, conn, TCP_ACK, tcpiplen);
+    }
+}
+
+/****************************************************************************
  * Name: tcp_input
  *
  * Description:
@@ -740,6 +771,27 @@ static void tcp_input(FAR struct net_driver_s *dev, uint8_t domain,
     }
 #endif
 
+  /* Calculated the length of the data, if the application has sent
+   * any data to us.
+   */
+
+  len = (tcp->tcpoffset >> 4) << 2;
+
+  if (len < TCP_HDRLEN || dev->d_len < (iplen + len))
+    {
+      /* According RFC 793 chapter 3.1, the TCP header length must be
+       * greater than 20. Meanwhile, the total length of the packet
+       * cannot be less than the sum of the IP header and TCP header.
+       */
+
+#ifdef CONFIG_NET_STATISTICS
+      g_netstats.tcp.drop++;
+      g_netstats.tcp.headerr++;
+#endif
+      nwarn("WARNING: TCP offset info error\n");
+      goto drop;
+    }
+
   /* Demultiplex this segment. First check any active connections. */
 
   conn = tcp_active(dev, tcp);
@@ -763,6 +815,7 @@ static void tcp_input(FAR struct net_driver_s *dev, uint8_t domain,
       if ((conn->tcpstateflags & TCP_STATE_MASK) == TCP_SYN_SENT)
         {
           uint32_t ackseq;
+
           if ((tcp->flags & TCP_ACK) != 0)
             {
               ackseq = tcp_getsequence(tcp->ackno);
@@ -847,13 +900,14 @@ static void tcp_input(FAR struct net_driver_s *dev, uint8_t domain,
       /* RFC793,p71 In all states except SYN-SENT: "If the SYN is in the
        * window it is an error, send a reset", except the subsequent SYN
        * arriving in TCP_SYN_RCVD state after the SYNACK packet was
-       * lost.
+       * lost or SYN arriving in TCP_SYN_SEND in simultaneous connect.
        */
 
       if ((conn->tcpstateflags & TCP_STATE_MASK) != TCP_SYN_RCVD &&
+          (conn->tcpstateflags & TCP_STATE_MASK) != TCP_SYN_SENT &&
           (tcp->flags & TCP_CTL) == TCP_SYN)
         {
-          nwarn("WARNING: SYN in TCP_SYN_RCVD\n");
+          nwarn("WARNING: SYN not in TCP_SYN_RCVD and TCP_SYN_SENT\n");
           goto reset;
         }
       else if ((conn->tcpstateflags & TCP_STATE_MASK) == TCP_SYN_RCVD &&
@@ -867,6 +921,14 @@ static void tcp_input(FAR struct net_driver_s *dev, uint8_t domain,
               tcp_reset(dev, conn);
               conn->tcpstateflags = TCP_CLOSED;
               nwarn("WARNING: RESET in TCP_SYN_RCVD\n");
+
+              if (_SS_ISCONNECTING(conn->sconn.s_flags))
+                {
+                  /* Notify this connection of the reset event */
+
+                  tcp_callback(dev, conn, TCP_ABORT);
+                  goto drop;
+                }
 
               /* We must free this TCP connection structure; this connection
                * will never be established.  There should only be one
@@ -1051,8 +1113,66 @@ found:
         }
       else
         {
-          conn->tcpstateflags = TCP_CLOSED;
+#ifdef CONFIG_NET_TCPBACKLOG
+          /* Race condition:
+           * case1) blparent is in close progress
+           * case2) conn is in accept progress
+           */
+
+          FAR struct tcp_conn_s *listen;
+
+          tcp_conn_list_lock();
+          listen = conn->blparent;
+          if (listen != NULL)
+            {
+              bool orphaned = false;
+
+              /* If this connection is, itself, backlogged,
+               * then remove it from the parent connection's
+               * backlog list.
+               */
+
+              conn_lock(&listen->sconn);
+
+              /* Double check the connection is in accept progress */
+
+              if (conn->blparent != NULL)
+                {
+                  tcp_backlogdelete(conn->blparent, conn);
+                  orphaned = true;
+                }
+
+              conn_unlock(&listen->sconn);
+
+              if (orphaned)
+                {
+                  tcp_conn_list_unlock();
+                  DEBUGASSERT(conn->crefs == 1);
+                  conn->tcpstateflags = TCP_CLOSED;
+                  conn->crefs = 0;
+                  tcp_free(conn);
+                  goto drop;
+                }
+            }
+
+          tcp_conn_list_unlock();
+#endif
+
+          /* A RST before the FIN of the peer: the next receive or send
+           * gives ECONNRESET.  In TCP_SYN_SENT the RST refuses the
+           * connection (ECONNREFUSED).  After the FIN of the peer a
+           * receive gives end-of-file and a send EPIPE.
+           */
+
+          if ((conn->tcpstateflags & TCP_STATE_MASK) >= TCP_ESTABLISHED &&
+              (conn->tcpstateflags & TCP_STATE_MASK) <= TCP_FIN_WAIT_2)
+            {
+              conn->flags |= TCP_RESET | TCP_RESETERR;
+              _SO_CONN_SETERRNO(conn, ECONNRESET);
+            }
+
           nwarn("WARNING: RESET TCP state: TCP_CLOSED\n");
+          conn->tcpstateflags = TCP_CLOSED;
 
           /* Notify this connection of the reset event */
 
@@ -1064,21 +1184,9 @@ found:
       goto drop;
     }
 
-  /* Calculated the length of the data, if the application has sent
-   * any data to us.
-   */
-
-  len = (tcp->tcpoffset >> 4) << 2;
-
   /* d_appdata should remove the tcp specific option field. */
 
-  if ((tcp->tcpoffset & 0xf0) > 0x50)
-    {
-      if (dev->d_len >= len)
-        {
-          dev->d_appdata += len - TCP_HDRLEN;
-        }
-    }
+  dev->d_appdata += len - TCP_HDRLEN;
 
   /* d_len will contain the length of the actual TCP data. This is
    * calculated by subtracting the length of the TCP header (in
@@ -1210,6 +1318,21 @@ found:
           goto skip_rtt;
         }
 
+      if ((conn->tcpstateflags & TCP_STATE_MASK) >= TCP_ESTABLISHED &&
+          !TCP_SEQ_GT(ackseq, conn->snd_wl2))
+        {
+          /* The segment acknowledges no new data (a duplicate ACK: not
+           * beyond snd_wl2, the highest ACK so far): it gives no RTT
+           * sample, does not restart the retransmission timer (RFC 6298,
+           * section 5.3; else a peer that sends data keeps the timer from
+           * expiring) and does not reset the count of retransmissions
+           * (the backoff of section 5.5).
+           */
+
+          flags |= TCP_ACKDATA;
+          goto skip_rtt;
+        }
+
 #ifdef CONFIG_NET_TCP_WRITE_BUFFERS
 #ifdef CONFIG_NET_SENDFILE
       if (!conn->sendfile)
@@ -1221,6 +1344,7 @@ found:
            */
 
           uint32_t sndseq = tcp_getsequence(conn->sndseq);
+
           if (TCP_SEQ_LTE(sndseq, ackseq))
             {
               ninfo("sndseq: %08" PRIx32 "->%08" PRIx32
@@ -1239,6 +1363,7 @@ found:
       if (conn->nrtx == 0)
         {
           signed char m;
+
           m = conn->rto - conn->timer;
 
           /* This is taken directly from VJs original code in his paper */
@@ -1262,7 +1387,9 @@ found:
 
       /* Check if no packet need to retransmission, clear timer. */
 
-      if (conn->tx_unacked == 0 && (conn->tcpstateflags == TCP_ESTABLISHED ||
+      if (conn->tx_unacked == 0 && (conn->tcpstateflags == TCP_SYN_SENT ||
+                                    conn->tcpstateflags == TCP_SYN_RCVD ||
+                                    conn->tcpstateflags == TCP_ESTABLISHED ||
                                     conn->tcpstateflags == TCP_CLOSE_WAIT ||
                                     conn->tcpstateflags == TCP_FIN_WAIT_1))
         {
@@ -1283,13 +1410,15 @@ skip_rtt:
   /* Check if the sequence number of the incoming packet is what we are
    * expecting next.  If not, we send out an ACK with the correct numbers
    * in, unless we are in the SYN_RCVD state and receive a SYN, in which
-   * case we should retransmit our SYNACK (which is done further down).
+   * case we should retransmit our SYNACK (which is done further down),
+   * or in simultaneous open scenario receive a SYN in the SYN_SEND state
+   * and receive a SYNACK in the SYN_RCVD state.
    */
 
-  if (!((((conn->tcpstateflags & TCP_STATE_MASK) == TCP_SYN_SENT) &&
-        ((tcp->flags & TCP_CTL) == (TCP_SYN | TCP_ACK))) ||
-        (((conn->tcpstateflags & TCP_STATE_MASK) == TCP_SYN_RCVD) &&
-        ((tcp->flags & TCP_CTL) == TCP_SYN))))
+  if (!(((conn->tcpstateflags & TCP_STATE_MASK) == TCP_SYN_SENT ||
+         (conn->tcpstateflags & TCP_STATE_MASK) == TCP_SYN_RCVD) &&
+        ((tcp->flags & TCP_CTL) == (TCP_SYN | TCP_ACK) ||
+         (tcp->flags & TCP_CTL) == TCP_SYN)))
     {
       uint32_t seq;
       uint32_t rcvseq;
@@ -1333,7 +1462,7 @@ skip_rtt:
                    * E.g. a keep-alive segment.
                    */
 
-                  tcp_send(dev, conn, TCP_ACK, tcpiplen);
+                  tcp_input_dropack(dev, conn, flags, tcpiplen);
                   return;
                 }
             }
@@ -1344,7 +1473,7 @@ skip_rtt:
 
               tcp_input_ofosegs(dev, conn, iplen);
 #endif
-              tcp_send(dev, conn, TCP_ACK, tcpiplen);
+              tcp_input_dropack(dev, conn, flags, tcpiplen);
               return;
             }
         }
@@ -1360,7 +1489,7 @@ skip_rtt:
 #ifdef CONFIG_NET_TCP_CC_NEWRENO
       /* If the packet is ack, update the cc var. */
 
-      tcp_cc_recv_ack(conn, tcp);
+      tcp_cc_recv_ack(conn, tcp, dev->d_len);
 #endif
       if (tcp_snd_wnd_update(conn, tcp))
         {
@@ -1397,7 +1526,8 @@ skip_rtt:
 
             /* Wake up any listener waiting for a connection on this port */
 
-            if (tcp_accept_connection(dev, conn, tcp->destport) != OK)
+            if (!_SS_ISCONNECTING(conn->sconn.s_flags) &&
+                tcp_accept_connection(dev, conn, tcp->destport) != OK)
               {
                 /* No more listener for current port.  We can free conn here
                  * because it has not been shared with upper layers yet as
@@ -1495,6 +1625,30 @@ skip_rtt:
             return;
           }
 
+        if ((tcp->flags & TCP_CTL) == TCP_SYN)
+          {
+            /* We see SYN without ACK. It is attempt of
+             * simultaneous connect with crossed SYNs.
+             * Particularly, it can be connect to self.
+             */
+
+            conn->tcpstateflags = TCP_SYN_RCVD;
+
+            memcpy(conn->rcvseq, tcp->seqno, 4);
+            conn->rcv_adv = tcp_getsequence(conn->rcvseq);
+            net_incr32(conn->rcvseq, 1); /* ack SYN */
+
+            /* Parse the TCP MSS option, if present. */
+
+            tcp_parse_option(dev, conn, iplen);
+
+            /* Our response will be a SYNACK. */
+
+            tcp_setsequence(conn->sndseq, conn->rexmit_seq);
+            tcp_synack(dev, conn, TCP_ACK | TCP_SYN);
+            return;
+          }
+
         /* Inform the application that the connection failed */
 
         tcp_callback(dev, conn, TCP_ABORT);
@@ -1578,15 +1732,15 @@ skip_rtt:
                 dev->d_urglen = dev->d_len;
               }
 
-             /* The d_len field contains the length of the incoming data.
-              * d_urgdata points to the "urgent" data at the beginning of
-              * the payload; d_appdata field points to the any "normal" data
-              * that may follow the urgent data.
-              *
-              * NOTE: If the urgent data continues in the next packet, then
-              * d_len will be zero and d_appdata will point past the end of
-              * the payload (which is OK).
-              */
+            /* The d_len field contains the length of the incoming data.
+             * d_urgdata points to the "urgent" data at the beginning of
+             * the payload; d_appdata field points to the any "normal" data
+             * that may follow the urgent data.
+             *
+             * NOTE: If the urgent data continues in the next packet, then
+             * d_len will be zero and d_appdata will point past the end of
+             * the payload (which is OK).
+             */
 
             net_incr32(conn->rcvseq, dev->d_urglen);
             dev->d_len     -= dev->d_urglen;
@@ -1762,9 +1916,9 @@ skip_rtt:
       case TCP_CLOSE_WAIT:
 #ifdef CONFIG_NET_TCP_KEEPALIVE
         /* If the established socket receives an ACK or any kind of data
-        * from the remote peer (whether we accept it or not), then reset
-        * the keep alive timer.
-        */
+         * from the remote peer (whether we accept it or not), then reset
+         * the keep alive timer.
+         */
 
         if (conn->keepalive && (tcp->flags & TCP_ACK) != 0)
           {

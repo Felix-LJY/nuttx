@@ -38,6 +38,7 @@
 
 #include <nuttx/arch.h>
 #include <nuttx/fs/procfs.h>
+#include <nuttx/lib/lib.h>
 #include <nuttx/mutex.h>
 #include <nuttx/mm/mm.h>
 #include <nuttx/mm/kasan.h>
@@ -185,6 +186,8 @@ static void mm_delayfree(struct mm_heap_s *heap, void *mem, bool delay);
  * Private Functions
  ****************************************************************************/
 
+#if defined(CONFIG_BUILD_FLAT) || defined(__KERNEL__)
+
 /****************************************************************************
  * Name: mm_lock_irq
  *
@@ -196,7 +199,7 @@ static void mm_delayfree(struct mm_heap_s *heap, void *mem, bool delay);
 static irqstate_t mm_lock_irq(FAR struct mm_heap_s *heap)
 {
   UNUSED(heap);
-  return up_irq_save();
+  return irq_save();
 }
 
 /****************************************************************************
@@ -210,8 +213,10 @@ static irqstate_t mm_lock_irq(FAR struct mm_heap_s *heap)
 static void mm_unlock_irq(FAR struct mm_heap_s *heap, irqstate_t state)
 {
   UNUSED(heap);
-  up_irq_restore(state);
+  irq_restore(state);
 }
+
+#endif
 
 static void memdump_allocnode(FAR void *ptr, size_t size)
 {
@@ -261,6 +266,7 @@ static int memdump_record_comare(FAR const void *a, FAR const void *b)
   FAR struct mm_tlsf_node_s *node_b = (FAR struct mm_tlsf_node_s *)b;
   size_t size_a = node_a->size;
   size_t size_b = node_b->size;
+
   return size_a > size_b ? 1 : -1;
 }
 
@@ -294,6 +300,7 @@ static void memdump_record_biggest(FAR struct mm_memdump_priv_s *priv,
 static void memdump_dump_biggestnodes(FAR struct mm_memdump_priv_s *priv)
 {
   size_t i;
+
   for (i = 0; i < priv->filled; i++)
     {
       priv->info.uordblks += priv->node[i].size;
@@ -314,20 +321,15 @@ static void memdump_dump_biggestnodes(FAR struct mm_memdump_priv_s *priv)
 static void memdump_backtrace(FAR struct mm_heap_s *heap,
                               FAR struct memdump_backtrace_s *buf)
 {
-#  if CONFIG_MM_BACKTRACE > 0
-  FAR struct tcb_s *tcb;
-#  endif
-
   buf->pid = _SCHED_GETTID();
   MM_INCSEQNO(buf);
 #  if CONFIG_MM_BACKTRACE > 0
-  tcb = nxsched_get_tcb(buf->pid);
-  if (heap->mm_procfs.backtrace ||
-      (tcb && tcb->flags & TCB_FLAG_HEAP_DUMP))
+  if (heap->mm_procfs.backtrace)
     {
       int ret = sched_backtrace(buf->pid, buf->backtrace,
                                 CONFIG_MM_BACKTRACE,
                                 CONFIG_MM_BACKTRACE_SKIP);
+
       if (ret < CONFIG_MM_BACKTRACE)
         {
           buf->backtrace[ret] = NULL;
@@ -641,20 +643,21 @@ static void mm_delayfree(FAR struct mm_heap_s *heap, FAR void *mem,
   if (mm_lock(heap) == 0)
     {
       size_t size = mm_malloc_size(heap, mem);
+
       UNUSED(size);
 #ifdef CONFIG_MM_FILL_ALLOCATIONS
 #if CONFIG_MM_FREE_DELAYCOUNT_MAX > 0
-  /* If delay free is enabled, a memory node will be freed twice.
-   * The first time is to add the node to the delay list, and the second
-   * time is to actually free the node. Therefore, we only colorize the
-   * memory node the first time, when `delay` is set to true.
-   */
+      /* If delay free is enabled, a memory node will be freed twice.
+       * The first time is to add the node to the delay list, and the second
+       * time is to actually free the node. Therefore, we only colorize the
+       * memory node the first time, when `delay` is set to true.
+       */
 
-  if (delay)
+      if (delay)
 #endif
-    {
-      memset(mem, MM_FREE_MAGIC, size);
-    }
+        {
+          memset(mem, MM_FREE_MAGIC, size);
+        }
 #endif
 
       kasan_poison(mem, size);
@@ -1019,13 +1022,13 @@ bool mm_heapmember(FAR struct mm_heap_s *heap, FAR void *mem)
 FAR struct mm_heap_s *
 mm_initialize_heap(FAR const struct mm_heap_config_s *config)
 {
-  FAR struct mm_heap_s *heap = config->heap;
+  FAR struct mm_heap_s *heap;
   FAR const char *name = config->name;
   FAR void *heapstart = config->start;
   size_t heapsize = config->size;
 
   minfo("Heap: name=%s start=%p size=%zu\n", name, heapstart, heapsize);
-  if (heap == NULL)
+  if (!config->allocheap)
     {
       /* Reserve a block space for mm_heap_s context */
 
@@ -1039,7 +1042,7 @@ mm_initialize_heap(FAR const struct mm_heap_config_s *config)
     }
   else
     {
-      heap = mm_memalign(heap, MM_ALIGN, sizeof(struct mm_heap_s));
+      heap = lib_memalign(MM_ALIGN, sizeof(struct mm_heap_s));
       if (heap == NULL)
         {
           return NULL;
@@ -1277,7 +1280,9 @@ void mm_memdump(FAR struct mm_heap_s *heap,
       else
         {
           name = "Unknown";
+#if defined(CONFIG_BUILD_FLAT) || defined(__KERNEL__)
           tcb  = nxsched_get_tcb(pid);
+#endif
         }
 
       if (tcb == NULL)
@@ -1344,10 +1349,18 @@ void mm_memdump(FAR struct mm_heap_s *heap,
 
 size_t mm_malloc_size(FAR struct mm_heap_s *heap, FAR void *mem)
 {
+  /* Protect against attempts to query a NULL reference */
+
+  if (mem == NULL)
+    {
+      return 0;
+    }
+
 #ifdef CONFIG_MM_HEAP_MEMPOOL
   if (heap->mm_mpool)
     {
       ssize_t size = mempool_multiple_alloc_size(heap->mm_mpool, mem);
+
       if (size >= 0)
         {
           return size;
@@ -1470,6 +1483,15 @@ FAR void *mm_memalign(FAR struct mm_heap_s *heap, size_t alignment,
 {
   size_t nodesize;
   FAR void *ret;
+
+  /* Treat zero as a request for the natural malloc alignment.  Some
+   * internal callers pass zero when no extra alignment is required.
+   */
+
+  if (alignment == 0)
+    {
+      alignment = MM_ALIGN;
+    }
 
 #ifdef CONFIG_MM_HEAP_MEMPOOL
   if (heap->mm_mpool)
@@ -1653,6 +1675,7 @@ FAR void *mm_realloc(FAR struct mm_heap_s *heap, FAR void *oldmem,
     {
 #if CONFIG_MM_BACKTRACE >= 0
       FAR struct memdump_backtrace_s *buf = newmem + newsize;
+
       memdump_backtrace(heap, buf);
 #endif
     }
@@ -1729,7 +1752,7 @@ FAR void *mm_zalloc(FAR struct mm_heap_s *heap, size_t size)
 
   if (alloc)
     {
-       memset(alloc, 0, size);
+      memset(alloc, 0, size);
     }
 
   return alloc;

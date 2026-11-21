@@ -135,6 +135,10 @@
 #  define UP_SEV()
 #endif
 
+#if !defined(UP_RELAX)
+#  define UP_RELAX()
+#endif
+
 #ifdef CONFIG_SMP
 #  define SMP_MB()  UP_DMB()
 #  define SMP_RMB() UP_RMB()
@@ -183,13 +187,9 @@ typedef CODE void (*debug_callback_t)(int type, FAR void *addr, size_t size,
  * Public Data
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 #ifdef CONFIG_SCHED_TICKLESS_LIMIT_MAX_SLEEP
@@ -207,7 +207,7 @@ extern "C"
  * value (in ticks).
  */
 
-EXTERN uint32_t g_oneshot_maxticks;
+extern uint32_t g_oneshot_maxticks;
 #endif
 
 #ifdef CONFIG_RTC
@@ -218,7 +218,7 @@ EXTERN uint32_t g_oneshot_maxticks;
  * some reason fails.
  */
 
-EXTERN volatile bool g_rtc_enabled;
+extern volatile bool g_rtc_enabled;
 #endif
 
 #ifdef CONFIG_ARCH_MINIMAL_VECTORTABLE
@@ -227,7 +227,7 @@ EXTERN volatile bool g_rtc_enabled;
  * in the configuration.  See declaration in include/nuttx/irq.h
  */
 
-/* EXTERN const irq_mapped_t g_irqmap[NR_IRQS]; */
+/* extern const irq_mapped_t g_irqmap[NR_IRQS]; */
 
 #endif
 
@@ -387,6 +387,9 @@ void up_initial_state(FAR struct tcb_s *tcb);
  *     kernel thread stacks should be allocated from protected kernel memory.
  *     Stacks for user tasks and threads must come from memory that is
  *     accessible to user code.
+ *
+ * Returned Value:
+ *   Zero (OK) on success; -ENOMEM if the stack cannot be allocated.
  *
  ****************************************************************************/
 
@@ -859,6 +862,11 @@ void up_extraheaps_init(void);
  * Description:
  *   Allocate memory for text with the specified alignment and sectname.
  *
+ *   If the architecture does not provide a separate text heap
+ *   (CONFIG_ARCH_USE_TEXT_HEAP is not set), the text heap API falls back
+ *   to the normal kernel heap: on flat-memory architectures the kernel
+ *   heap is executable, so no separate allocator is needed.
+ *
  ****************************************************************************/
 
 #if defined(CONFIG_ARCH_USE_TEXT_HEAP)
@@ -867,6 +875,12 @@ FAR void *up_textheap_memalign(FAR const char *sectname,
                                size_t align, size_t size);
 #  else
 FAR void *up_textheap_memalign(size_t align, size_t size);
+#  endif
+#else
+#  if defined(CONFIG_ARCH_USE_SEPARATED_SECTION)
+#    define up_textheap_memalign(s,a,z) kmm_memalign(a,z)
+#  else
+#    define up_textheap_memalign(a,z) kmm_memalign(a,z)
 #  endif
 #endif
 
@@ -880,6 +894,8 @@ FAR void *up_textheap_memalign(size_t align, size_t size);
 
 #if defined(CONFIG_ARCH_USE_TEXT_HEAP)
 void up_textheap_free(FAR void *p);
+#else
+#  define up_textheap_free(p) kmm_free(p)
 #endif
 
 /****************************************************************************
@@ -892,6 +908,8 @@ void up_textheap_free(FAR void *p);
 
 #if defined(CONFIG_ARCH_USE_TEXT_HEAP)
 bool up_textheap_heapmember(FAR void *p);
+#else
+#  define up_textheap_heapmember(p) kmm_heapmember(p)
 #endif
 
 /****************************************************************************
@@ -912,12 +930,11 @@ bool up_textheap_heapmember(FAR void *p);
  *
  ****************************************************************************/
 
-#if defined(CONFIG_ARCH_USE_TEXT_HEAP)
-#if defined(CONFIG_ARCH_HAVE_TEXT_HEAP_SEPARATE_DATA_ADDRESS)
+#if defined(CONFIG_ARCH_USE_TEXT_HEAP) && \
+    defined(CONFIG_ARCH_HAVE_TEXT_HEAP_SEPARATE_DATA_ADDRESS)
 FAR void *up_textheap_data_address(FAR void *p);
 #else
 #define up_textheap_data_address(p) ((FAR void *)p)
-#endif
 #endif
 
 /****************************************************************************
@@ -930,12 +947,11 @@ FAR void *up_textheap_data_address(FAR void *p);
  *
  ****************************************************************************/
 
-#if defined(CONFIG_ARCH_USE_TEXT_HEAP)
-#if defined(CONFIG_ARCH_HAVE_TEXT_HEAP_SEPARATE_DATA_ADDRESS)
+#if defined(CONFIG_ARCH_USE_TEXT_HEAP) && \
+    defined(CONFIG_ARCH_HAVE_TEXT_HEAP_SEPARATE_DATA_ADDRESS)
 void up_textheap_data_sync(void);
 #else
 #define up_textheap_data_sync() do {} while (0)
-#endif
 #endif
 
 /****************************************************************************
@@ -1071,6 +1087,7 @@ int up_copy_section(FAR void *dest, FAR const void *src, size_t n);
  *                         address environment
  *   up_addrenv_heapsize - Returns the size of the initial heap allocation.
  *   up_addrenv_select   - Instantiate an address environment
+ *   up_addrenv_select_kernel - Select the page tables of the kernel alone
  *   up_addrenv_clone    - Copy an address environment from one location to
  *                         another.
  *
@@ -1295,6 +1312,26 @@ ssize_t up_addrenv_heapsize(FAR const arch_addrenv_t *addrenv);
 
 #ifdef CONFIG_ARCH_ADDRENV
 int up_addrenv_select(FAR const arch_addrenv_t *addrenv);
+#endif
+
+/****************************************************************************
+ * Name: up_addrenv_select_kernel
+ *
+ * Description:
+ *   Select the page tables of the kernel alone on this CPU, so that the
+ *   address environment that the CPU used before can be destroyed.  Each
+ *   architecture that supports CONFIG_BUILD_KERNEL must provide it.
+ *
+ * Input Parameters:
+ *   None
+ *
+ * Returned Value:
+ *   Zero (OK) on success; a negated errno value on failure.
+ *
+ ****************************************************************************/
+
+#if defined(CONFIG_ARCH_ADDRENV) && defined(CONFIG_BUILD_KERNEL)
+int up_addrenv_select_kernel(void);
 #endif
 
 /****************************************************************************
@@ -2181,6 +2218,23 @@ int up_timer_tick_cancel(FAR clock_t *ticks);
 int up_timer_start(FAR const struct timespec *ts);
 int up_timer_tick_start(clock_t ticks);
 #endif
+
+/****************************************************************************
+ * Name: up_getpc
+ *
+ * Input Parameters:
+ *   None
+ *
+ * Returned Value:
+ *   Current program counter.
+ *
+ ****************************************************************************/
+
+/* uintptr_t up_getpc(void);
+ *
+ * The actual declaration or definition is provided in arch/arch.h.
+ * The actual implementation may be a MACRO or an inline function.
+ */
 
 /****************************************************************************
  * Name: up_getsp
@@ -3111,7 +3165,6 @@ void up_memtag_tag_mem(const void *addr, size_t size);
 
 #endif /* CONFIG_ARCH_HAVE_MEMTAG */
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

@@ -52,15 +52,17 @@
 #  include <nuttx/init.h>
 #endif
 
-#include <nuttx/syslog/syslog_rpmsg.h>
+#ifdef CONFIG_ARCH_ARMV8R
+#  include "sctlr.h"
+#endif
 
 /****************************************************************************
- * Private Data
+ * Pre-processor Definitions
  ****************************************************************************/
 
-#ifdef CONFIG_SYSLOG_RPMSG
-static char g_syslog_rpmsg_buf[4096];
-#endif
+/* QEMU counts the PMU cycle counter (PMCCNTR) at 1 GHz */
+
+#define QEMU_PMU_CYCLES_PER_SEC  1000000000
 
 /****************************************************************************
  * Public Functions
@@ -79,7 +81,7 @@ void arm_boot(void)
 #ifdef CONFIG_ARCH_PERF_EVENTS
   /* Perf init */
 
-  up_perf_init(0);
+  up_perf_init((void *)QEMU_PMU_CYCLES_PER_SEC);
 #endif
 
 #ifdef CONFIG_ARCH_ARMV7A
@@ -112,10 +114,6 @@ void arm_boot(void)
   arm_earlyserialinit();
 #endif
 
-#ifdef CONFIG_SYSLOG_RPMSG
-  syslog_rpmsg_init_early(g_syslog_rpmsg_buf, sizeof(g_syslog_rpmsg_buf));
-#endif
-
 #ifdef CONFIG_BUILD_PROTECTED
   qemu_userspace();
 #endif
@@ -145,5 +143,27 @@ int up_cpu_start(int cpu)
 #endif
 
   return psci_cpu_on(cpu, (uintptr_t)__start);
+}
+#endif
+
+#ifdef CONFIG_ARCH_ARMV8R
+/****************************************************************************
+ * Name: arm_el_init
+ *
+ * Description:
+ *   The function called from arm_head.S at very early stage to:
+ *   - Handling special hardware initialize routine which is need to
+ *     run at high ELs
+ *   - Initialize system software such as hypervisor or security firmware
+ *     which is need to run at high ELs
+ *
+ ****************************************************************************/
+
+void arm_el_init(void)
+{
+  CP15_SET(ICC_HSRE, ICC_SRE_ELX_SRE_BIT | ICC_SRE_ELX_DFB_BIT |
+                     ICC_SRE_ELX_DIB_BIT | ICC_SRE_EL3_EN_BIT);
+
+  UP_ISB();
 }
 #endif

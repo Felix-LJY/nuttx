@@ -42,13 +42,6 @@
  * Pre-processor Definitions
  ****************************************************************************/
 
-/* This is the size of a large, allocated temporary buffer that we will use
- * to construct custom configuration descriptors for each member class.
- */
-
-#define CUSTOM_CONFIG_BUFSIZE  \
-  (USB_SIZEOF_CFGDESC + 3 * USB_SIZEOF_IFDESC + 9 * USB_SIZEOF_EPDESC)
-
 /****************************************************************************
  * Private Types
  ****************************************************************************/
@@ -269,7 +262,6 @@ static int usbhost_disconnected(struct usbhost_class_s *usbclass)
  *   negated errno value is returned indicating the nature of the failure:
  *
  *   -ENOENT: Did not find interface descriptor
- *   -EINVAL: Did not find all endpoint descriptors
  *   -ENOSPC: Provided buffer too small to hold all found descriptors
  *
  ****************************************************************************/
@@ -280,135 +272,116 @@ static int usbhost_copyinterface(uint8_t ifno, FAR const uint8_t *configdesc,
 {
   FAR struct usb_desc_s   *desc;
   FAR struct usb_ifdesc_s *ifdesc;
-  int retsize;
-  int offset;
+  int retsize = 0;
+  int offset = 0;
   int neps;
   int len;
 
-  /* Make sure that the buffer will hold at least the interface descriptor */
-
-  if (buflen < USB_SIZEOF_IFDESC)
+  if (configdesc == NULL || buffer == NULL ||
+      desclen < sizeof(struct usb_desc_s))
     {
-      return -ENOSPC;
+      return -EINVAL;
     }
 
-  /* Search for the interface */
+  /* Walk the whole configuration: an interface may have several alternate
+   * settings that share one interface number, and a class driver usually
+   * needs all of them.  A UVC camera puts its format and frame descriptors
+   * in the alternate setting without endpoints and the isochronous endpoint
+   * in the others, so copying only the first one loses the endpoint.
+   */
 
-  for (offset = 0, retsize = 0;
-       offset < desclen - sizeof(struct usb_desc_s);
-       offset += len)
+  while (offset < desclen - sizeof(struct usb_desc_s))
     {
       desc = (FAR struct usb_desc_s *)&configdesc[offset];
       len  = desc->len;
 
-      /* Is this an interface descriptor? */
-
-      if (desc->type == USB_DESC_TYPE_INTERFACE)
+      if (len < sizeof(struct usb_desc_s) || len > desclen - offset)
         {
-          ifdesc = (FAR struct usb_ifdesc_s *)&configdesc[offset];
+          return -EINVAL;
+        }
 
-          /* Is it the one we are looking for? */
+      if (desc->type != USB_DESC_TYPE_INTERFACE)
+        {
+          offset += len;
+          continue;
+        }
 
-          if (ifdesc->ifno == ifno && ifdesc->neps != 0)
+      ifdesc = (FAR struct usb_ifdesc_s *)&configdesc[offset];
+      if (ifdesc->ifno != ifno)
+        {
+          offset += len;
+          continue;
+        }
+
+      /* Yes.. return the interface descriptor */
+
+      if (buflen < len)
+        {
+          return -ENOSPC;
+        }
+
+      memcpy(buffer, desc, len);
+      buffer  += len;
+      buflen  -= len;
+      retsize += len;
+      offset  += len;
+
+      /* Then the descriptors that belong to this alternate setting: the
+       * class specific ones and at most the number of endpoints the
+       * interface declares.  A zero-endpoint interface, such as the
+       * VideoControl interface of a UVC device, has class specific
+       * descriptors only and ends with the next interface descriptor.
+       */
+
+      neps = ifdesc->neps;
+
+      while (offset < desclen - sizeof(struct usb_desc_s))
+        {
+          desc = (FAR struct usb_desc_s *)&configdesc[offset];
+          len  = desc->len;
+
+          if (len < sizeof(struct usb_desc_s) || len > desclen - offset)
             {
-              /* Yes.. return the interface descriptor */
+              return -EINVAL;
+            }
+
+          if (desc->type == USB_DESC_TYPE_INTERFACE)
+            {
+              break;
+            }
+
+          if (desc->type == USB_DESC_TYPE_CSINTERFACE ||
+              desc->type == USB_DESC_TYPE_ENDPOINT)
+            {
+              if (buflen < len)
+                {
+                  return -ENOSPC;
+                }
 
               memcpy(buffer, desc, len);
               buffer  += len;
               buflen  -= len;
               retsize += len;
 
-              /* Make sure that the buffer will hold at least the endpoint
-               * descriptors.
-               */
-
-              neps = ifdesc->neps;
-              if (buflen < neps * USB_SIZEOF_EPDESC)
+              if (desc->type == USB_DESC_TYPE_ENDPOINT && --neps == 0)
                 {
-                  return -ENOSPC;
+                  offset += len;
+                  break;
                 }
-
-              /* The CS and endpoint descriptors should immediately
-               * follow the interface descriptor.
-               */
-
-              for (offset += len;
-                   offset < desclen - sizeof(struct usb_desc_s);
-                   offset += len)
-                {
-                  desc = (FAR struct usb_desc_s *)&configdesc[offset];
-                  len  = desc->len;
-
-                  /* Is this a class-specific interface descriptor?  */
-
-                  if (desc->type == USB_DESC_TYPE_CSINTERFACE)
-                    {
-                      /* Yes... return the descriptor */
-
-                      if (buflen < len)
-                        {
-                          return -ENOSPC;
-                        }
-
-                      memcpy(buffer, desc, len);
-                      buffer  += len;
-                      buflen  -= len;
-                      retsize += len;
-                    }
-
-                  /* Is this an endpoint descriptor?  */
-
-                  else if (desc->type == USB_DESC_TYPE_ENDPOINT)
-                    {
-                      /* Yes.. return the endpoint descriptor */
-
-                      if (buflen < len)
-                        {
-                          return -ENOSPC;
-                        }
-
-                      memcpy(buffer, desc, len);
-                      buffer  += len;
-                      buflen  -= len;
-                      retsize += len;
-
-                      /* And reduce the number of endpoints we are looking
-                       * for.
-                       */
-
-                      if (--neps <= 0)
-                        {
-                          /* That is all of them!  Return the total size
-                           * copied.
-                           */
-
-                          return retsize;
-                        }
-                    }
-
-                  /* The endpoint descriptors following the interface
-                   * descriptor should all be contiguous.  But we will
-                   * complain only if another interface descriptor is
-                   * encountered before all of the endpoint descriptors have
-                   * been found.
-                   */
-
-                  else if (desc->type == USB_DESC_TYPE_INTERFACE)
-                    {
-                      break;
-                    }
-                }
-
-              /* Did not find all of the interface descriptors */
-
-              return -EINVAL;
             }
+
+          offset += len;
         }
     }
 
-  /* Could not find the interface descriptor */
+  if (retsize == 0)
+    {
+      /* Could not find the interface descriptor */
 
-  return -ENOENT;
+      return -ENOENT;
+    }
+
+  return retsize;
 }
 
 /****************************************************************************
@@ -584,6 +557,11 @@ int usbhost_composite(FAR struct usbhost_hubport_s *hport,
       desc = (FAR struct usb_desc_s *)&configdesc[offset];
       int len = desc->len;
 
+      if (len < sizeof(struct usb_desc_s) || len > desclen - offset)
+        {
+          return -EINVAL;
+        }
+
       if (offset + len <= desclen)
         {
           /* Is this an interface descriptor? */
@@ -593,7 +571,10 @@ int usbhost_composite(FAR struct usbhost_hubport_s *hport,
               FAR struct usb_ifdesc_s *ifdesc =
                 (FAR struct usb_ifdesc_s *)desc;
 
-              DEBUGASSERT(ifdesc->ifno < 32);
+              if (len < USB_SIZEOF_IFDESC || ifdesc->ifno >= 32)
+                {
+                  return -EINVAL;
+                }
 
               /* Increment the count of interfaces */
 
@@ -614,13 +595,18 @@ int usbhost_composite(FAR struct usbhost_hubport_s *hport,
                 (FAR struct usb_iaddesc_s *)desc;
               uint32_t mask;
 
+              if (len < USB_SIZEOF_IADDESC || iad->nifs == 0 ||
+                  iad->firstif >= 32 || iad->nifs > 32 - iad->firstif)
+                {
+                  return -EINVAL;
+                }
+
               /* Keep count of the number of interfaces that will be merged */
 
               nmerged += (iad->nifs - 1);
 
               /* Keep track of which interfaces will be merged */
 
-              DEBUGASSERT(iad->firstif + iad->nifs < 32);
               mask      = (1 << iad->nifs) - 1;
               mergeset |= mask << iad->firstif;
             }
@@ -700,6 +686,12 @@ int usbhost_composite(FAR struct usbhost_hubport_s *hport,
       desc = (FAR struct usb_desc_s *)&configdesc[offset];
       int len = desc->len;
 
+      if (len < sizeof(struct usb_desc_s) || len > desclen - offset)
+        {
+          ret = -EINVAL;
+          goto errout_with_members;
+        }
+
       if (offset + len <= desclen)
         {
           /* Is this an interface descriptor? */
@@ -711,9 +703,20 @@ int usbhost_composite(FAR struct usbhost_hubport_s *hport,
 
               /* Was the interface merged via an IAD descriptor? */
 
-              DEBUGASSERT(ifdesc->ifno < 32);
+              if (len < USB_SIZEOF_IFDESC || ifdesc->ifno >= 32)
+                {
+                  ret = -EINVAL;
+                  goto errout_with_members;
+                }
+
               if ((mergeset & (1 << ifdesc->ifno)) == 0)
                 {
+                  if (i >= nclasses)
+                    {
+                      ret = -EINVAL;
+                      goto errout_with_members;
+                    }
+
                   /* No, this interface was not merged.  Save the registry
                    * lookup information from the interface descriptor.
                    */
@@ -745,6 +748,14 @@ int usbhost_composite(FAR struct usbhost_hubport_s *hport,
               FAR struct usb_iaddesc_s *iad =
                 (FAR struct usb_iaddesc_s *)desc;
 
+              if (len < USB_SIZEOF_IADDESC || iad->nifs == 0 ||
+                  iad->firstif >= 32 || iad->nifs > 32 - iad->firstif ||
+                  i >= nclasses)
+                {
+                  ret = -EINVAL;
+                  goto errout_with_members;
+                }
+
               /* Yes.. Save the registry lookup information from the IAD. */
 
               member              = (FAR struct usbhost_member_s *)
@@ -773,11 +784,17 @@ int usbhost_composite(FAR struct usbhost_hubport_s *hport,
 
   DEBUGASSERT(i == nclasses);
 
+  if (i != nclasses)
+    {
+      ret = -EINVAL;
+      goto errout_with_members;
+    }
+
   /* Allocate a temporary buffer in which we can construct a custom
    * configuration descriptor for each member class.
    */
 
-  cfgbuffer = kmm_malloc(CUSTOM_CONFIG_BUFSIZE);
+  cfgbuffer = kmm_malloc(desclen);
   if (cfgbuffer == NULL)
     {
       uerr("ERROR: Failed to allocate configuration buffer");
@@ -791,7 +808,7 @@ int usbhost_composite(FAR struct usbhost_hubport_s *hport,
 
   for (i = 0; i < nclasses; i++)
     {
-       member = &priv->members[i];
+      member = &priv->members[i];
 
       /* Is there is a class implementation registered to support this
        * device.
@@ -824,7 +841,7 @@ int usbhost_composite(FAR struct usbhost_hubport_s *hport,
       /* Construct a custom configuration descriptor for this member */
 
       cfgsize = usbhost_createconfig(member, configdesc, desclen,
-                                     cfgbuffer, CUSTOM_CONFIG_BUFSIZE);
+                                     cfgbuffer, desclen);
       if (cfgsize < 0)
         {
           uerr("ERROR: Failed to create the custom configuration: %d\n",

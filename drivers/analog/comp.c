@@ -51,7 +51,7 @@ static ssize_t comp_read(FAR struct file *filep, FAR char *buffer,
                          size_t buflen);
 static int     comp_ioctl(FAR struct file *filep, int cmd,
                           unsigned long arg);
-static int     comp_poll(FAR struct file *filep, FAR struct pollfd *fds,
+static int     comp_poll(FAR struct file *filep, FAR struct pollfd_s *fds,
                          bool setup);
 static int     comp_notify(FAR struct comp_dev_s *dev, uint8_t val);
 
@@ -85,7 +85,7 @@ static const struct comp_callback_s g_comp_callback =
  * Name: comp_poll
  ****************************************************************************/
 
-static int comp_poll(FAR struct file *filep, FAR struct pollfd *fds,
+static int comp_poll(FAR struct file *filep, FAR struct pollfd_s *fds,
                      bool setup)
 {
   FAR struct inode      *inode = filep->f_inode;
@@ -134,7 +134,7 @@ static int comp_poll(FAR struct file *filep, FAR struct pollfd *fds,
     {
       /* This is a request to tear down the poll. */
 
-      FAR struct pollfd **slot = (FAR struct pollfd **)fds->priv;
+      FAR struct pollfd_s **slot = (FAR struct pollfd_s **)fds->priv;
 
 #ifdef CONFIG_DEBUG_FEATURES
       if (!slot)
@@ -220,16 +220,14 @@ static int comp_open(FAR struct file *filep)
             {
               /* Yes.. perform one time hardware initialization. */
 
-              irqstate_t flags = enter_critical_section();
               ret = dev->ad_ops->ao_setup(dev);
-              if (ret == OK)
-                {
-                  /* Save the new open count on success */
+            }
 
-                  dev->ad_ocount = tmp;
-                }
+          /* Save the new open count on success */
 
-              leave_critical_section(flags);
+          if (ret == OK)
+            {
+              dev->ad_ocount = tmp;
             }
         }
 
@@ -252,7 +250,6 @@ static int comp_close(FAR struct file *filep)
 {
   FAR struct inode      *inode = filep->f_inode;
   FAR struct comp_dev_s *dev   = inode->i_private;
-  irqstate_t            flags;
   int                   ret;
 
   ret = nxmutex_lock(&dev->ad_lock);
@@ -273,11 +270,9 @@ static int comp_close(FAR struct file *filep)
 
           dev->ad_ocount = 0;
 
-          /* Free the IRQ and disable the COMP device */
+          /* Disable the IRQ and then disable the COMP device */
 
-          flags = enter_critical_section();       /* Disable interrupts */
-          dev->ad_ops->ao_shutdown(dev);          /* Disable the COMP */
-          leave_critical_section(flags);
+          dev->ad_ops->ao_shutdown(dev);
 
           nxmutex_unlock(&dev->ad_lock);
         }

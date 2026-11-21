@@ -20,8 +20,6 @@
 #
 ############################################################################
 
-include $(TOPDIR)/Make.defs
-
 CSRCS = stm32_boot.c
 
 ifeq ($(CONFIG_ARCH_LEDS),y)
@@ -38,14 +36,6 @@ ifeq ($(CONFIG_ADC),y)
 CSRCS += stm32_adc.c
 endif
 
-ifeq ($(CONFIG_STM32_CAN_CHARDRIVER),y)
-CSRCS += stm32_can.c
-endif
-
-ifeq ($(CONFIG_DAC),y)
-CSRCS += stm32_dac.c
-endif
-
 ifeq ($(CONFIG_PWM),y)
 CSRCS += stm32_pwm.c
 endif
@@ -56,10 +46,6 @@ endif
 
 ifeq ($(CONFIG_LCD_SSD1351),y)
 CSRCS += stm32_ssd1351.c
-endif
-
-ifeq ($(CONFIG_TIMER),y)
-CSRCS += stm32_timer.c
 endif
 
 ifeq ($(CONFIG_BOARDCTL_UNIQUEID),y)

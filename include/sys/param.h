@@ -33,7 +33,24 @@
  * Pre-processor Definitions
  ****************************************************************************/
 
+#define NBBY           CHAR_BIT      /* Number of bits in a byte */
 #define MAXHOSTNAMELEN HOST_NAME_MAX
+#define MAXNAMLEN      NAME_MAX
+#define MAXPATHLEN     PATH_MAX
+
+/* The byte order of the host, as in <sys/endian.h>.  BSD systems and glibc
+ * give these names in <sys/param.h> too, and programs test them there
+ * (autoconf's AC_C_BIGENDIAN).
+ */
+
+#define LITTLE_ENDIAN  1234
+#define BIG_ENDIAN     4321
+
+#ifdef CONFIG_ENDIAN_BIG
+#  define BYTE_ORDER   BIG_ENDIAN
+#else
+#  define BYTE_ORDER   LITTLE_ENDIAN
+#endif
 
 /* Macros for min/max. */
 
@@ -102,6 +119,24 @@
 #ifndef powerof2
 #  define powerof2(a)	(!(((a) - 1) & (a)))
 #endif /* powerof2 */
+
+/* Macros for bit-strings. */
+
+#ifndef setbit
+#  define setbit(a, i)       ((a)[(i) / NBBY] |= (1 << ((i) % NBBY)))
+#endif /* setbit */
+
+#ifndef clrbit
+#  define clrbit(a, i)       ((a)[(i) / NBBY] &= ~(1 << ((i) % NBBY)))
+#endif /* clrbit */
+
+#ifndef isset
+#  define isset(a, i)        ((a)[(i) / NBBY] & (1 << ((i) % NBBY)))
+#endif /* isset */
+
+#ifndef isclr
+#  define isclr(a, i)        (((a)[(i) / NBBY] & (1 << ((i) % NBBY))) == 0)
+#endif /* isclr */
 
 /****************************************************************************
  * Public Type Definitions

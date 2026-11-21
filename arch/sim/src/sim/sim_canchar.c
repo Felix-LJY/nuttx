@@ -26,7 +26,10 @@
 
 #include <nuttx/debug.h>
 #include <stdio.h>
+#include <sys/param.h>
+#include <time.h>
 
+#include <nuttx/clock.h>
 #include <nuttx/kmalloc.h>
 #include <nuttx/wqueue.h>
 
@@ -224,8 +227,10 @@ static int sim_can_send(struct can_dev_s *dev, struct can_msg_s *msg)
     {
       struct can_frame frame;
 
+      /* DLC 9..15 of a classic frame means 8 data bytes */
+
       frame.can_id  = msg->cm_hdr.ch_id;
-      frame.can_dlc = msg->cm_hdr.ch_dlc;
+      frame.can_dlc = MIN(msg->cm_hdr.ch_dlc, CAN_MAX_DLEN);
 
       if (msg->cm_hdr.ch_rtr)
         {
@@ -290,9 +295,16 @@ static void sim_can_work(void *arg)
   struct sim_canchar_s *priv = arg;
   struct canfd_frame    frame;
   struct can_hdr_s      hdr;
+#ifdef CONFIG_CAN_TIMESTAMP
+  struct timespec       ts;
+#endif
   int                   ret;
 
-  if (host_can_avail(&priv->host))
+  /* Drain all frames queued on the host socket, otherwise only one frame
+   * is delivered per work period and the RX path lags behind the bus.
+   */
+
+  while (host_can_avail(&priv->host))
     {
       /* Wait for data from host stack */
 
@@ -321,7 +333,9 @@ static void sim_can_work(void *arg)
 #endif
       hdr.ch_tcf   = 0;
 #ifdef CONFIG_CAN_TIMESTAMP
-      hdr.ch_ts    = 0;
+      clock_gettime(CLOCK_MONOTONIC, &ts);
+      hdr.ch_ts.tv_sec  = ts.tv_sec;
+      hdr.ch_ts.tv_usec = ts.tv_nsec / NSEC_PER_USEC;
 #endif
 
       /* Notify upper-half */

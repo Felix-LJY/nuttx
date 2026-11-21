@@ -83,9 +83,24 @@ struct inotify_event
   char     name[0];         /* Stub for possible name */
 };
 
+/* Payload written to an inotify file descriptor (CONFIG_FS_NOTIFY_INJECT):
+ * one write injects one file change notification.
+ */
+
+struct notify_inject_s
+{
+  uint32_t mask;            /* inotify event mask */
+  char     path[1];         /* NUL terminated absolute path */
+};
+
 /****************************************************************************
  * Public Function Prototypes
  ****************************************************************************/
+
+#if defined(__cplusplus)
+extern "C"
+{
+#endif
 
 /****************************************************************************
  * Name: inotify_init
@@ -168,4 +183,8 @@ int inotify_add_watch(int fd, FAR const char *pathname, uint32_t mask);
 
 int inotify_rm_watch(int fd, int wd);
 
+#if defined(__cplusplus)
+}
 #endif
+
+#endif /* __INCLUDE_SYS_INOTIFY_H */

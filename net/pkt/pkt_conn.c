@@ -29,6 +29,7 @@
 
 #include <assert.h>
 #include <errno.h>
+#include <limits.h>
 #include <nuttx/debug.h>
 
 #include <arch/irq.h>
@@ -98,9 +99,13 @@ FAR struct pkt_conn_s *pkt_alloc(void)
   conn = NET_BUFPOOL_TRYALLOC(g_pkt_connections);
   if (conn)
     {
+      /* Use conn_init to initialize the connection structure */
+
+      conn_init(&conn->sconn);
+
       /* Enqueue the connection into the active list */
 
-      dq_addlast(&conn->sconn.node, &g_active_pkt_connections);
+      dq_addlast(&conn->sconn.s_node, &g_active_pkt_connections);
     }
 
   NET_BUFPOOL_UNLOCK(g_pkt_connections);
@@ -126,8 +131,31 @@ void pkt_free(FAR struct pkt_conn_s *conn)
 
   /* Remove the connection from the active list */
 
-  dq_rem(&conn->sconn.node, &g_active_pkt_connections);
-  nxrmutex_destroy(&conn->sconn.s_lock);
+  dq_rem(&conn->sconn.s_node, &g_active_pkt_connections);
+
+  /* Use conn_uninit to release all connection resources */
+
+  conn_uninit(&conn->sconn);
+
+  /* Free the read-ahead data.  pkt_in_() queues frames with the list
+   * locked, so no new frame can come in after dq_rem().
+   */
+
+  iob_free_queue(&conn->readahead);
+
+#ifdef CONFIG_NET_TIMESTAMP
+  iob_free_queue(&conn->errahead);
+#endif
+
+  /* Free the read-ahead data.  pkt_in_() queues frames with the list
+   * locked, so no new frame can come in after dq_rem().
+   */
+
+  iob_free_queue(&conn->readahead);
+
+#ifdef CONFIG_NET_TIMESTAMP
+  iob_free_queue(&conn->errahead);
+#endif
 
 #ifdef CONFIG_NET_PKT_WRITE_BUFFERS
   /* Free the write queue */
@@ -140,48 +168,6 @@ void pkt_free(FAR struct pkt_conn_s *conn)
   NET_BUFPOOL_FREE(g_pkt_connections, conn);
 
   NET_BUFPOOL_UNLOCK(g_pkt_connections);
-}
-
-/****************************************************************************
- * Name: pkt_active()
- *
- * Description:
- *   Find a connection structure that is the appropriate connection to be
- *   used with the provided network device
- *
- * Assumptions:
- *   This function is called from network logic at with the network locked.
- *
- ****************************************************************************/
-
-FAR struct pkt_conn_s *pkt_active(FAR struct net_driver_s *dev)
-{
-  FAR struct pkt_conn_s *conn =
-    (FAR struct pkt_conn_s *)g_active_pkt_connections.head;
-  uint16_t ethertype = 0;
-
-  if (dev->d_lltype == NET_LL_ETHERNET || dev->d_lltype == NET_LL_IEEE80211)
-    {
-      FAR struct eth_hdr_s *ethhdr = NETLLBUF;
-      ethertype = ethhdr->type;
-    }
-
-  while (conn)
-    {
-      if (dev->d_ifindex == conn->ifindex &&
-          (conn->type == HTONS(ETH_P_ALL) || conn->type == ethertype))
-        {
-          /* Matching connection found.. return a reference to it */
-
-          break;
-        }
-
-      /* Look at the next active connection */
-
-      conn = (FAR struct pkt_conn_s *)conn->sconn.node.flink;
-    }
-
-  return conn;
 }
 
 /****************************************************************************
@@ -203,8 +189,70 @@ FAR struct pkt_conn_s *pkt_nextconn(FAR struct pkt_conn_s *conn)
     }
   else
     {
-      return (FAR struct pkt_conn_s *)conn->sconn.node.flink;
+      return (FAR struct pkt_conn_s *)conn->sconn.s_node.flink;
     }
+}
+
+/****************************************************************************
+ * Name: pkt_active()
+ *
+ * Description:
+ *   Find a connection structure that is the appropriate connection to be
+ *   used with the provided network device
+ *
+ * Input Parameters:
+ *   dev  - The device driver structure containing the received packet
+ *   conn - A pointer to the PKT connection structure
+ *   loopback - Indicate whether it is a loopback packet
+ *
+ * Assumptions:
+ *   This function is called from network logic at with the network locked.
+ *
+ ****************************************************************************/
+
+FAR struct pkt_conn_s *pkt_active(FAR struct net_driver_s *dev,
+                                  FAR struct pkt_conn_s *conn,
+                                  bool loopback)
+{
+  uint16_t ethertype = 0;
+
+  if (dev->d_lltype == NET_LL_ETHERNET || dev->d_lltype == NET_LL_IEEE80211)
+    {
+      FAR struct eth_hdr_s *ethhdr = NETLLBUF;
+
+      ethertype = ethhdr->type;
+    }
+
+#ifdef CONFIG_NET_IPv4
+  else if ((IPv4BUF->vhl & IP_VERSION_MASK) == IPv4_VERSION)
+    {
+      ethertype = HTONS(ETH_P_IP);
+    }
+#endif
+#ifdef CONFIG_NET_IPv6
+  else if ((IPv6BUF->vtc & IP_VERSION_MASK) == IPv6_VERSION)
+    {
+      ethertype = HTONS(ETH_P_IPV6);
+    }
+#endif
+
+  while ((conn = pkt_nextconn(conn)) != NULL)
+    {
+      if (dev->d_ifindex != conn->ifindex)
+        {
+          continue;
+        }
+
+      if (conn->type == HTONS(ETH_P_ALL) ||
+          (!loopback && conn->type == ethertype))
+        {
+          /* Matching connection found.. return a reference to it */
+
+          break;
+        }
+    }
+
+  return conn;
 }
 
 /****************************************************************************
@@ -229,11 +277,32 @@ int pkt_sendmsg_is_valid(FAR struct socket *psock,
 {
   FAR struct sockaddr_ll *addr = msg->msg_name;
 
+  /* POSIX: fail with EMSGSIZE if msg_iovlen <= 0 or > IOV_MAX */
+
+  if (msg->msg_iovlen == 0 || msg->msg_iovlen > IOV_MAX)
+    {
+      return -EMSGSIZE;
+    }
+
   /* Only single iov supported */
 
   if (msg->msg_iovlen != 1)
     {
       return -ENOTSUP;
+    }
+
+  /* An iov must be provided */
+
+  if (msg->msg_iov == NULL)
+    {
+      return -EINVAL;
+    }
+
+  /* Elements of the iov must not be NULL if length is non-zero */
+
+  if (msg->msg_iov[0].iov_len > 0 && msg->msg_iov[0].iov_base == NULL)
+    {
+      return -EINVAL;
     }
 
   /* Verify that the sockfd corresponds to valid, allocated socket */

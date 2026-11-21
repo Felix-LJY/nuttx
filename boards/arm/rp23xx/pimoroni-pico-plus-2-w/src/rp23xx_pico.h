@@ -1,6 +1,8 @@
 /****************************************************************************
  * boards/arm/rp23xx/pimoroni-pico-plus-2-w/src/rp23xx_pico.h
  *
+ * SPDX-License-Identifier: Apache-2.0
+ *
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.  The
@@ -41,7 +43,7 @@
 /* LEDs
  *
  * The board's only LED hangs off GPIO 0 of the CYW43439, see
- * include/rp23xx_extra_gpio.h.  There is no LED on an RP2350 pin.
+ * common/include/rp23xx_extra_gpio.h.  There is no LED on an RP2350 pin.
  */
 
 /* Buttons */

@@ -2,7 +2,7 @@
 ST Nucleo L432KC
 ================
 
-.. tags:: chip:stm32, chip:stm32l4, chip:stm32l432
+.. tags:: arch:arm, chip:stm32l4, part:stm32l432, vendor:st
 
 This page discusses issues unique to NuttX configurations for the ST
 Nucleo-l432kc board from ST Micro.  See
@@ -438,6 +438,12 @@ NOTES:
        Pin 33 PA10 USART1_TX    some RS-232 converters
        Pin 20 GND
        Pin 8  U5V
+
+ostest:
+-------
+
+Same as nsh, with the OS test (``apps/testing/ostest``) added as an NSH
+builtin.  Run ``ostest`` from NSH.
 
 spwm
 ----

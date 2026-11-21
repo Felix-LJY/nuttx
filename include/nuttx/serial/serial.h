@@ -37,6 +37,7 @@
 
 #include <nuttx/fs/fs.h>
 #include <nuttx/semaphore.h>
+#include <nuttx/spinlock.h>
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -311,6 +312,25 @@ struct serial_icounter_s
   uint32_t buf_overrun;
 };
 
+/* termios state shared by the tty-like drivers (serial, pty, uart_rpmsg) */
+
+struct uart_termios_s
+{
+  tcflag_t iflag;
+  tcflag_t oflag;
+  tcflag_t lflag;
+#ifdef CONFIG_TTY_SIGINT
+  cc_t     vintr;                    /* c_cc[VINTR] */
+#endif
+#ifdef CONFIG_TTY_SIGTSTP
+  cc_t     vsusp;                    /* c_cc[VSUSP] */
+#endif
+#ifdef CONFIG_SERIAL_TERMIOS
+  cc_t     vmin;                     /* c_cc[VMIN] */
+  cc_t     vtime;                    /* c_cc[VTIME] */
+#endif
+};
+
 /* This is the device structure used by the driver.  The caller of
  * uart_register() must allocate and initialize this structure.  The
  * calling logic need only set all fields to zero except:
@@ -325,7 +345,7 @@ struct uart_dev_s
 {
   /* State data */
 
-  uint8_t              open_count;   /* Number of times the device has been opened */
+  uint16_t             open_count;   /* Number of times the device has been opened */
   uint8_t              escape;       /* VT100/ANSI escape sequence echo-
                                        * suppression state (see the
                                        * UART_ESCAPE_* values used in
@@ -351,15 +371,18 @@ struct uart_dev_s
 
   /* Terminal control flags */
 
-  tcflag_t             tc_iflag;     /* Input modes */
-  tcflag_t             tc_oflag;     /* Output modes */
-  tcflag_t             tc_lflag;     /* Local modes */
+  struct uart_termios_s termios;
+
+  /* Terminal window size (TIOCGWINSZ, TIOCSWINSZ) */
+
+  struct winsize       winsize;
 
   /* Semaphores & mutex */
 
   sem_t                xmitsem;      /* Wakeup user waiting for space in xmit.buffer */
   sem_t                recvsem;      /* Wakeup user waiting for data in recv.buffer */
   mutex_t              closelock;    /* Locks out new open while close is in progress */
+  rspinlock_t          lock;         /* The protection rspinlock for critical section */
 
   /* I/O buffers */
 
@@ -381,37 +404,158 @@ struct uart_dev_s
   FAR void                    *priv; /* Used by the arch-specific logic */
 
   /* The following is a list if poll structures of threads waiting for
-   * driver events. The 'struct pollfd' reference for each open is also
+   * driver events. The 'struct pollfd_s' reference for each open is also
    * retained in the f_priv field of the 'struct file'.
    */
 
 #ifdef CONFIG_SERIAL_TERMIOS
   uint8_t minrecv;                   /* Minimum received bytes */
-  uint8_t minread;                   /* c_cc[VMIN] */
-  uint8_t timeout;                   /* c_cc[VTIME] */
 #endif
 
-  FAR struct pollfd *fds[CONFIG_SERIAL_NPOLLWAITERS];
+  FAR struct pollfd_s *fds[CONFIG_SERIAL_NPOLLWAITERS];
 };
 
 typedef struct uart_dev_s uart_dev_t;
 
 /****************************************************************************
+ * Inline Functions
+ ****************************************************************************/
+
+/****************************************************************************
+ * Name: uart_termios_init
+ *
+ * Description:
+ *   Initialize all fields of the state: the given iflag, oflag and lflag,
+ *   the INTR and SUSP characters of the configuration, and VMIN 1 and
+ *   VTIME 0.
+ *
+ ****************************************************************************/
+
+static inline_function void
+uart_termios_init(FAR struct uart_termios_s *tc, tcflag_t iflag,
+                  tcflag_t oflag, tcflag_t lflag)
+{
+  tc->iflag = iflag;
+  tc->oflag = oflag;
+  tc->lflag = lflag;
+#ifdef CONFIG_TTY_SIGINT
+  tc->vintr = CONFIG_TTY_SIGINT_CHAR;
+#endif
+#ifdef CONFIG_TTY_SIGTSTP
+  tc->vsusp = CONFIG_TTY_SIGTSTP_CHAR;
+#endif
+#ifdef CONFIG_SERIAL_TERMIOS
+  tc->vmin  = 1;
+  tc->vtime = 0;
+#endif
+}
+
+/****************************************************************************
+ * Name: uart_termios_in_char
+ *
+ * Description:
+ *   Apply input processing to one character.  Returns false if it must be
+ *   discarded.
+ *
+ ****************************************************************************/
+
+static inline_function bool
+uart_termios_in_char(FAR const struct uart_termios_s *tc, FAR char *ch)
+{
+  if (*ch == '\r')
+    {
+      if (tc->iflag & IGNCR)
+        {
+          return false;
+        }
+
+      if (tc->iflag & ICRNL)
+        {
+          *ch = '\n';
+        }
+    }
+  else if (*ch == '\n' && (tc->iflag & INLCR))
+    {
+      *ch = '\r';
+    }
+
+  return true;
+}
+
+/****************************************************************************
+ * Name: uart_termios_out_char
+ *
+ * Description:
+ *   Apply output processing to one character.  Returns the number of bytes
+ *   written to dst, or 0 if dst is too small.
+ *
+ ****************************************************************************/
+
+static inline_function size_t
+uart_termios_out_char(FAR const struct uart_termios_s *tc, char ch,
+                      FAR char *dst, size_t dstlen)
+{
+  if (dstlen == 0)
+    {
+      return 0;
+    }
+
+  if (tc->oflag & OPOST)
+    {
+      if (ch == '\n' && (tc->oflag & ONLCR))
+        {
+          if (dstlen < 2)
+            {
+              return 0;
+            }
+
+          dst[0] = '\r';
+          dst[1] = '\n';
+          return 2;
+        }
+
+      if (ch == '\r' && (tc->oflag & OCRNL))
+        {
+          ch = '\n';
+        }
+    }
+
+  dst[0] = ch;
+  return 1;
+}
+
+/****************************************************************************
  * Public Data
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
  * Public Function Prototypes
  ****************************************************************************/
+
+/****************************************************************************
+ * Name: uart_spinlock
+ *
+ * Description:
+ *   Enter critical section for this uart.
+ *
+ ****************************************************************************/
+
+irqstate_t uart_spinlock(FAR uart_dev_t *dev, bool nopreempt);
+
+/****************************************************************************
+ * Name: uart_spinunlock
+ *
+ * Description:
+ *   Leave critical section for this uart.
+ *
+ ****************************************************************************/
+
+void uart_spinunlock(FAR uart_dev_t *dev, bool nopreempt, irqstate_t flags);
 
 /****************************************************************************
  * Name: uart_register
@@ -569,24 +713,20 @@ void uart_reset_sem(FAR uart_dev_t *dev);
  * Name: uart_check_special
  *
  * Description:
- *   Check if the SIGINT or SIGTSTP character is in the contiguous Rx DMA
- *   buffer region.  The first signal associated with the first such
- *   character is returned.
- *
- *   If there multiple such characters in the buffer, only the signal
- *   associated with the first is returned (this a bug!)
+ *   Act on the special characters in the *size characters at buf and
+ *   remove them: the INTR and SUSP characters that send a signal (POSIX:
+ *   the terminal discards them), the launch character and the panic
+ *   character.  *size returns the number of characters that are left.
  *
  * Returned Value:
- *   0 if a signal-related character does not appear in the.  Otherwise,
- *   SIGKILL or SIGTSTP may be returned to indicate the appropriate signal
- *   action.
+ *   SIGINT or SIGTSTP for the first INTR or SUSP character, else 0.
  *
  ****************************************************************************/
 
 #if defined(CONFIG_TTY_SIGINT) || defined(CONFIG_TTY_SIGTSTP) || \
     defined(CONFIG_TTY_FORCE_PANIC) || defined(CONFIG_TTY_LAUNCH)
-int uart_check_special(FAR uart_dev_t *dev, FAR const char *buf,
-                       size_t size);
+int uart_check_special(FAR uart_dev_t *dev, FAR char *buf,
+                       FAR size_t *size);
 #endif
 
 /****************************************************************************
@@ -602,7 +742,62 @@ int uart_check_special(FAR uart_dev_t *dev, FAR const char *buf,
 int uart_gdbstub_register(FAR uart_dev_t *dev, FAR const char *path);
 #endif
 
-#undef EXTERN
+/****************************************************************************
+ * Name: uart_termios_getattr / uart_termios_setattr
+ *
+ * Description:
+ *   Copy c_iflag/c_oflag/c_lflag and the INTR and SUSP characters between
+ *   the state and a termios.  getattr sets the other entries of c_cc to
+ *   _POSIX_VDISABLE and c_cc[VMIN] to 1; the caller adds the ones that it
+ *   acts on.
+ *
+ ****************************************************************************/
+
+void uart_termios_getattr(FAR const struct uart_termios_s *tc,
+                          FAR struct termios *termiosp);
+void uart_termios_setattr(FAR struct uart_termios_s *tc,
+                          FAR const struct termios *termiosp);
+
+/****************************************************************************
+ * Name: uart_termios_in_copy
+ *
+ * Description:
+ *   Copy src to dst with input processing.  dst may equal src.  Returns the
+ *   number of bytes written.
+ *
+ ****************************************************************************/
+
+size_t uart_termios_in_copy(FAR const struct uart_termios_s *tc,
+                            FAR char *dst, FAR const char *src, size_t len);
+
+/****************************************************************************
+ * Name: uart_termios_out_copy
+ *
+ * Description:
+ *   Copy src to dst with output processing until dst is full.  *consumed
+ *   returns the src bytes used.  Returns the number of bytes written.
+ *
+ ****************************************************************************/
+
+size_t uart_termios_out_copy(FAR const struct uart_termios_s *tc,
+                             FAR char *dst, size_t dstlen,
+                             FAR const char *src, size_t srclen,
+                             FAR size_t *consumed);
+
+/****************************************************************************
+ * Name: uart_termios_isig_find
+ *
+ * Description:
+ *   Locate the first INTR (SIGINT) or SUSP (SIGTSTP) character in src when
+ *   ISIG is set.  A character set to _POSIX_VDISABLE is not looked for.
+ *   Returns its address and sets *signo, or NULL if none.
+ *
+ ****************************************************************************/
+
+FAR const char *
+uart_termios_isig_find(FAR const struct uart_termios_s *tc,
+                       FAR const char *src, size_t len, FAR int *signo);
+
 #if defined(__cplusplus)
 }
 #endif

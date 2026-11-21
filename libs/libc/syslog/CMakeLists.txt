@@ -20,10 +20,16 @@
 #
 # ##############################################################################
 
+target_sources(c PRIVATE lib_openlog.c)
+
 if(CONFIG_SYSLOG)
   target_sources(c PRIVATE lib_setlogmask.c lib_syslog.c)
 endif()
 
 if(CONFIG_SYSLOG_NONE)
   target_sources(c PRIVATE lib_syslog_none.c)
+endif()
+
+if(CONFIG_SYSLOG_TO_SCHED_NOTE)
+  target_sources(c PRIVATE lib_syslog_note.c)
 endif()

@@ -71,6 +71,7 @@
 #include "icmpv6/icmpv6.h"
 #include "nat/nat.h"
 #include "netdev/netdev.h"
+#include "socket/socket.h"
 #include "utils/utils.h"
 
 /****************************************************************************
@@ -109,11 +110,14 @@ static dq_queue_t g_active_tcp_connections;
  *   Primary uses: (1) to determine if a port number is available, (2) to
  *   To identify the socket that will accept new connections on a local port.
  *
+ *   reuse: the new socket has SO_REUSEADDR.  A connection that has it too
+ *   does not count, a listener always does (as Linux).
+ *
  ****************************************************************************/
 
-static FAR struct tcp_conn_s *
-  tcp_listener(uint8_t domain, FAR const union ip_addr_u *ipaddr,
-               uint16_t portno)
+static FAR struct tcp_conn_s *tcp_listener(uint8_t domain,
+                                           FAR const union ip_addr_u *ipaddr,
+                                           uint16_t portno, bool reuse)
 {
   FAR struct tcp_conn_s *conn = NULL;
 
@@ -121,6 +125,13 @@ static FAR struct tcp_conn_s *
 
   while ((conn = tcp_nextconn(conn)) != NULL)
     {
+#ifdef CONFIG_NET_SOCKOPTS
+      if (reuse && _SO_GETOPT(conn->sconn.s_options, SO_REUSEADDR))
+        {
+          continue;
+        }
+#endif
+
       /* Check if this connection is open and the local port assignment
        * matches the requested port number.
        */
@@ -148,6 +159,42 @@ static FAR struct tcp_conn_s *
 #else
   return tcp_findlistener((FAR union ip_binding_u *)ipaddr, portno);
 #endif
+}
+
+/****************************************************************************
+ * Name: tcp_bindport
+ *
+ * Description:
+ *   Verify or select the local port of bind().  If both sockets have
+ *   SO_REUSEADDR, a connection on the port (for example in TIME_WAIT)
+ *   does not conflict.  Otherwise as tcp_selectport().
+ *
+ ****************************************************************************/
+
+static int tcp_bindport(FAR struct tcp_conn_s *conn, uint8_t domain,
+                        FAR const union ip_addr_u *ipaddr, uint16_t portno)
+{
+#ifdef CONFIG_NET_SOCKOPTS
+  int ret = portno;
+
+  if (portno != 0 && _SO_GETOPT(conn->sconn.s_options, SO_REUSEADDR))
+    {
+      tcp_conn_list_lock();
+      if (tcp_listener(domain, ipaddr, portno, true)
+#  ifdef CONFIG_NET_NAT
+          || nat_port_inuse(domain, IP_PROTO_TCP, ipaddr, portno)
+#  endif
+         )
+        {
+          ret = -EADDRINUSE;
+        }
+
+      tcp_conn_list_unlock();
+      return ret;
+    }
+#endif
+
+  return tcp_selectport(domain, ipaddr, portno);
 }
 
 /****************************************************************************
@@ -210,7 +257,7 @@ static inline FAR struct tcp_conn_s *
 
       /* Look at the next active connection */
 
-      conn = (FAR struct tcp_conn_s *)conn->sconn.node.flink;
+      conn = (FAR struct tcp_conn_s *)conn->sconn.s_node.flink;
     }
 
   return conn;
@@ -277,7 +324,7 @@ static inline FAR struct tcp_conn_s *
 
       /* Look at the next active connection */
 
-      conn = (FAR struct tcp_conn_s *)conn->sconn.node.flink;
+      conn = (FAR struct tcp_conn_s *)conn->sconn.s_node.flink;
     }
 
   return conn;
@@ -341,12 +388,12 @@ static inline int tcp_ipv4_bind(FAR struct tcp_conn_s *conn,
 
   /* Verify or select a local port (network byte order) */
 
-  port = tcp_selectport(PF_INET,
-                       (FAR const union ip_addr_u *)&addr->sin_addr.s_addr,
-                       addr->sin_port);
+  port = tcp_bindport(conn, PF_INET,
+                      (FAR const union ip_addr_u *)&addr->sin_addr.s_addr,
+                      addr->sin_port);
   if (port < 0)
     {
-      nerr("ERROR: tcp_selectport failed: %d\n", port);
+      nerr("ERROR: tcp_bindport failed: %d\n", port);
       return port;
     }
 
@@ -437,12 +484,12 @@ static inline int tcp_ipv6_bind(FAR struct tcp_conn_s *conn,
 
   /* The port number must be unique for this address binding */
 
-  port = tcp_selectport(PF_INET6,
+  port = tcp_bindport(conn, PF_INET6,
                 (FAR const union ip_addr_u *)addr->sin6_addr.in6_u.u6_addr16,
                 addr->sin6_port);
   if (port < 0)
     {
-      nerr("ERROR: tcp_selectport failed: %d\n", port);
+      nerr("ERROR: tcp_bindport failed: %d\n", port);
       return port;
     }
 
@@ -510,7 +557,7 @@ int tcp_selectport(uint8_t domain,
 
   /* Generate port base dynamically */
 
-  if (g_last_tcp_port == 0)
+  if (portno == 0 && g_last_tcp_port == 0)
     {
       NET_PORT_RANDOM_INIT(g_last_tcp_port);
     }
@@ -539,7 +586,7 @@ int tcp_selectport(uint8_t domain,
               return -EADDRINUSE;
             }
         }
-      while (tcp_listener(domain, ipaddr, portno)
+      while (tcp_listener(domain, ipaddr, portno, false)
 #ifdef CONFIG_NET_NAT
              || nat_port_inuse(domain, IP_PROTO_TCP, ipaddr, portno)
 #endif
@@ -551,7 +598,7 @@ int tcp_selectport(uint8_t domain,
        * connection is using this local port.
        */
 
-      if (tcp_listener(domain, ipaddr, portno)
+      if (tcp_listener(domain, ipaddr, portno, false)
 #ifdef CONFIG_NET_NAT
           || nat_port_inuse(domain, IP_PROTO_TCP, ipaddr, portno)
 #endif
@@ -596,7 +643,6 @@ FAR struct tcp_conn_s *tcp_alloc(uint8_t domain)
 
   conn = NET_BUFPOOL_TRYALLOC(g_tcp_connections);
 
-#ifndef CONFIG_NET_SOLINGER
   /* Is the free list empty? */
 
   if (!conn)
@@ -636,7 +682,7 @@ FAR struct tcp_conn_s *tcp_alloc(uint8_t domain)
 
           /* Look at the next active connection */
 
-          tmp = (FAR struct tcp_conn_s *)tmp->sconn.node.flink;
+          tmp = (FAR struct tcp_conn_s *)tmp->sconn.s_node.flink;
         }
 
       /* Did we find a connection that we can reuse? */
@@ -649,13 +695,9 @@ FAR struct tcp_conn_s *tcp_alloc(uint8_t domain)
            * of active connections and release all resources held by the
            * connection.
            *
-           * REVISIT:  Could there be any higher level, socket interface
-           * that needs to be informed that we did this to them?
-           *
-           * Actually yes. When CONFIG_NET_SOLINGER is enabled there is a
-           * pending callback in netclose_disconnect waiting for getting
-           * woken up.  Otherwise there's the callback too, but no one is
-           * waiting for it.
+           * No socket refers to it any more (crefs == 0) and close()
+           * does not wait for the close callback, also not with
+           * SO_LINGER, so nobody needs to be informed.
            */
 
           tcp_free(conn);
@@ -670,7 +712,6 @@ FAR struct tcp_conn_s *tcp_alloc(uint8_t domain)
           conn = NET_BUFPOOL_TRYALLOC(g_tcp_connections);
         }
     }
-#endif
 
   tcp_conn_list_unlock();
 
@@ -697,7 +738,9 @@ FAR struct tcp_conn_s *tcp_alloc(uint8_t domain)
 
       nxsem_init(&conn->snd_sem, 0, 0);
 #endif
-      nxrmutex_init(&conn->sconn.s_lock);
+      /* Use conn_init to initialize the connection structure */
+
+      conn_init(&conn->sconn);
 
       /* Set the default value of mss to max, this field will changed when
        * receive SYN.
@@ -795,7 +838,7 @@ void tcp_free(FAR struct tcp_conn_s *conn)
    * callback for CONFIG_NET_TCP_WRITE_BUFFERS is left.
    */
 
-  for (cb = conn->sconn.list; cb; cb = next)
+  for (cb = conn->sconn.s_list; cb; cb = next)
     {
       next = cb->nxtconn;
       tcp_callback_free(conn, cb);
@@ -812,7 +855,7 @@ void tcp_free(FAR struct tcp_conn_s *conn)
       /* Remove the connection from the active list */
 
       tcp_conn_list_lock();
-      dq_rem(&conn->sconn.node, &g_active_tcp_connections);
+      dq_rem(&conn->sconn.s_node, &g_active_tcp_connections);
       tcp_conn_list_unlock();
     }
 
@@ -820,7 +863,6 @@ void tcp_free(FAR struct tcp_conn_s *conn)
 
   tcp_stop_timer(conn);
 
-  nxrmutex_destroy(&conn->sconn.s_lock);
   tcp_free_rx_buffers(conn);
 
 #ifdef CONFIG_NET_TCP_WRITE_BUFFERS
@@ -850,7 +892,13 @@ void tcp_free(FAR struct tcp_conn_s *conn)
   nxsem_destroy(&conn->snd_sem);
 #endif
 
+  /* Use conn_uninit to release all connection resources */
+
+  conn_uninit(&conn->sconn);
+
 #ifdef CONFIG_NET_TCPBACKLOG
+  tcp_conn_list_lock();
+
   /* Remove any backlog attached to this connection */
 
   if (conn->backlog)
@@ -858,15 +906,10 @@ void tcp_free(FAR struct tcp_conn_s *conn)
       tcp_backlogdestroy(conn);
     }
 
-  /* If this connection is, itself, backlogged, then remove it from the
-   * parent connection's backlog list.
-   */
-
-  if (conn->blparent)
-    {
-      tcp_backlogdelete(conn->blparent, conn);
-    }
+  tcp_conn_list_unlock();
 #endif
+
+  nxrmutex_destroy(&conn->sconn.s_lock);
 
   /* Mark the connection available. */
 
@@ -995,7 +1038,7 @@ FAR struct tcp_conn_s *tcp_nextconn(FAR struct tcp_conn_s *conn)
     }
   else
     {
-      return (FAR struct tcp_conn_s *)conn->sconn.node.flink;
+      return (FAR struct tcp_conn_s *)conn->sconn.s_node.flink;
     }
 }
 
@@ -1024,6 +1067,7 @@ FAR struct tcp_conn_s *tcp_alloc_accept(FAR struct net_driver_s *dev,
 
 #if defined(CONFIG_NET_IPv4) && defined(CONFIG_NET_IPv6)
   bool ipv6 = IFF_IS_IPv6(dev->d_flags);
+
   domain = ipv6 ? PF_INET6 : PF_INET;
 #elif defined(CONFIG_NET_IPv4)
   domain = PF_INET;
@@ -1111,13 +1155,15 @@ FAR struct tcp_conn_s *tcp_alloc_accept(FAR struct net_driver_s *dev,
           return NULL;
         }
 
-      /* Inherits the necessary fields from listener conn for
-       * the new connection.
-       */
+      /* The new connection inherits all socket options of the listener. */
 
 #ifdef CONFIG_NET_SOCKOPTS
+      conn->sconn.s_options  = listener->sconn.s_options;
       conn->sconn.s_rcvtimeo = listener->sconn.s_rcvtimeo;
       conn->sconn.s_sndtimeo = listener->sconn.s_sndtimeo;
+#  ifdef CONFIG_NET_SOLINGER
+      conn->sconn.s_linger   = listener->sconn.s_linger;
+#  endif
 #  ifdef CONFIG_NET_BINDTODEVICE
       conn->sconn.s_boundto  = listener->sconn.s_boundto;
 #  endif
@@ -1132,6 +1178,16 @@ FAR struct tcp_conn_s *tcp_alloc_accept(FAR struct net_driver_s *dev,
       conn->snd_bufs         = listener->snd_bufs;
 #endif
       conn->mss              = listener->mss;
+#ifdef CONFIG_NET_TCPPROTO_OPTIONS
+      conn->user_mss         = listener->user_mss;
+#endif
+#ifdef CONFIG_NET_TCP_KEEPALIVE
+      conn->keepalive        = listener->keepalive;
+      conn->keepidle         = listener->keepidle;
+      conn->keepintvl        = listener->keepintvl;
+      conn->keepcnt          = listener->keepcnt;
+      conn->keeptimer        = conn->keepalive ? conn->keepidle : 0;
+#endif
 
       /* Fill in the necessary fields for the new connection. */
 
@@ -1180,9 +1236,7 @@ FAR struct tcp_conn_s *tcp_alloc_accept(FAR struct net_driver_s *dev,
        * Interrupts should already be disabled in this context.
        */
 
-      tcp_conn_list_lock();
-      dq_addlast(&conn->sconn.node, &g_active_tcp_connections);
-      tcp_conn_list_unlock();
+      tcp_add_active_conn(conn);
 
       tcp_update_retrantimer(conn, TCP_RTO);
     }
@@ -1377,6 +1431,7 @@ int tcp_connect(FAR struct tcp_conn_s *conn, FAR const struct sockaddr *addr)
       if (net_ipv6addr_cmp(addr, g_ipv6_unspecaddr))
         {
           struct in6_addr loopback_sin6_addr = IN6ADDR_LOOPBACK_INIT;
+
           net_ipv6addr_copy(conn->u.ipv6.raddr,
                             loopback_sin6_addr.s6_addr16);
         }
@@ -1435,7 +1490,7 @@ int tcp_connect(FAR struct tcp_conn_s *conn, FAR const struct sockaddr *addr)
 
   if (ret < 0)
     {
-      return -ENETUNREACH;
+      return ret;
     }
 #endif /* CONFIG_NET_ARP_SEND || CONFIG_NET_ICMPv6_NEIGHBOR */
 
@@ -1486,13 +1541,6 @@ int tcp_connect(FAR struct tcp_conn_s *conn, FAR const struct sockaddr *addr)
   sq_init(&conn->write_q);
   sq_init(&conn->unacked_q);
 #endif
-
-  /* And, finally, put the connection structure into the active list. */
-
-  tcp_conn_list_lock();
-  dq_addlast(&conn->sconn.node, &g_active_tcp_connections);
-  tcp_conn_list_unlock();
-
   return OK;
 }
 
@@ -1523,6 +1571,24 @@ void tcp_conn_list_unlock(void)
 }
 
 /****************************************************************************
+ * Name: tcp_add_active_conn
+ *
+ * Description:
+ *   Add the connection to the list of active TCP connections
+ *
+ * Assumptions:
+ *   This function is called from normal user level code.
+ *
+ ****************************************************************************/
+
+void tcp_add_active_conn(FAR struct tcp_conn_s *conn)
+{
+  tcp_conn_list_lock();
+  dq_addlast(&conn->sconn.s_node, &g_active_tcp_connections);
+  tcp_conn_list_unlock();
+}
+
+/****************************************************************************
  * Name: tcp_removeconn
  *
  * Description:
@@ -1535,7 +1601,7 @@ void tcp_conn_list_unlock(void)
 
 void tcp_removeconn(FAR struct tcp_conn_s *conn)
 {
-  dq_rem(&conn->sconn.node, &g_active_tcp_connections);
+  dq_rem(&conn->sconn.s_node, &g_active_tcp_connections);
 }
 
 /****************************************************************************
@@ -1560,7 +1626,7 @@ void tcp_remove_syn_backlog(FAR struct tcp_conn_s *listener)
   while (next)
     {
       conn = next;
-      next = (FAR struct tcp_conn_s *)conn->sconn.node.flink;
+      next = (FAR struct tcp_conn_s *)conn->sconn.s_node.flink;
       if (conn->tcpstateflags == TCP_SYN_RCVD &&
 #if defined(CONFIG_NET_IPv4) && defined(CONFIG_NET_IPv6)
           tcp_conn_cmp(listener->domain,

@@ -31,7 +31,6 @@
 
 #include <nuttx/compiler.h>
 #include <nuttx/fs/ioctl.h>
-#include <nuttx/fs/uio.h>
 
 #include <sys/uio.h>
 #include <sys/types.h>
@@ -44,6 +43,7 @@
 
 #include <nuttx/atomic.h>
 #include <nuttx/mutex.h>
+#include <nuttx/poll.h>
 #include <nuttx/semaphore.h>
 #include <nuttx/mm/map.h>
 #include <nuttx/spawn.h>
@@ -102,17 +102,11 @@
 #  define _NX_GETERRVAL(r)     (-errno)
 #endif
 
-/* Stream flags for the fs_flags field of in struct file_struct */
-
-#define __FS_FLAG_EOF   (1 << 0) /* EOF detected by a read operation */
-#define __FS_FLAG_ERROR (1 << 1) /* Error detected by any operation */
-#define __FS_FLAG_LBF   (1 << 2) /* Line buffered */
-#define __FS_FLAG_UBF   (1 << 3) /* Buffer allocated by caller of setvbuf */
-
 /* Inode i_flags values:
  *
  *   Bit 0-3: Inode type (Bit 3 indicates internal OS types)
  *   Bit 4:   Set if inode has been unlinked and is pending removal.
+ *   Bit 5:   Set if a mount point was mounted with MS_NOEXEC.
  */
 
 #define FSNODEFLAG_TYPE_MASK         0x0000000f /* Isolates type field      */
@@ -129,6 +123,7 @@
 #define   FSNODEFLAG_TYPE_PIPE       0x0000000a /*   Pipe                   */
 #define   FSNODEFLAG_TYPE_NAMEDEVENT 0x0000000b /*   Named event group      */
 #define   FSNODEFLAG_TYPE_HARDLINK   0x0000000c /*   Hard link              */
+#define FSNODEFLAG_NOEXEC            0x00000020 /* Mounted with MS_NOEXEC   */
 
 #define INODE_IS_TYPE(i,t) \
   (((i)->i_flags & FSNODEFLAG_TYPE_MASK) == (t))
@@ -168,6 +163,12 @@
 #define INODE_SET_NAMEDEVENT(i) INODE_SET_TYPE(i,FSNODEFLAG_TYPE_NAMEDEVENT)
 #define INODE_SET_HARDLINK(i)   INODE_SET_TYPE(i,FSNODEFLAG_TYPE_HARDLINK)
 
+#define INODE_IS_NOEXEC(i)      (((i)->i_flags & FSNODEFLAG_NOEXEC) != 0)
+
+/* A pipe, a FIFO or a socket has no file position (POSIX: ESPIPE) */
+
+#define INODE_IS_NOSEEK(i)      (INODE_IS_PIPE(i) || INODE_IS_SOCKET(i))
+
 /* The status change flags.
  * These should be or-ed together to figure out what want to change.
  */
@@ -177,7 +178,14 @@
 #define CH_STAT_GID        (1 << 2)
 #define CH_STAT_ATIME      (1 << 3)
 #define CH_STAT_MTIME      (1 << 4)
+#define CH_STAT_CTIME      (1 << 5)
 #define CH_STAT_SIZE       (1 << 7)
+#define CH_STAT_NOFOLLOW   (1 << 8)  /* Do not follow a final symbolic link */
+
+/* Actions passed to the notify method of struct mountpt_operations */
+
+#define NOTIFY_WATCH_ADD   0  /* First watch created on a path */
+#define NOTIFY_WATCH_RM    1  /* Last watch on a path removed  */
 
 /****************************************************************************
  * Public Type Definitions
@@ -189,7 +197,7 @@ struct file;
 struct inode;
 struct stat;
 struct statfs;
-struct pollfd;
+struct pollfd_s;
 struct mtd_dev_s;
 struct uio;
 
@@ -240,7 +248,7 @@ struct file_operations
                        FAR struct mm_map_entry_s *map);
   CODE int     (*truncate)(FAR struct file *filep, off_t length);
 
-  CODE int     (*poll)(FAR struct file *filep, FAR struct pollfd *fds,
+  CODE int     (*poll)(FAR struct file *filep, FAR struct pollfd_s *fds,
                        bool setup);
   CODE ssize_t (*readv)(FAR struct file *filep, FAR struct uio *uio);
   CODE ssize_t (*writev)(FAR struct file *filep, FAR struct uio *uio);
@@ -311,7 +319,7 @@ struct mountpt_operations
   CODE int     (*mmap)(FAR struct file *filep,
                        FAR struct mm_map_entry_s *map);
   CODE int     (*truncate)(FAR struct file *filep, off_t length);
-  CODE int     (*poll)(FAR struct file *filep, FAR struct pollfd *fds,
+  CODE int     (*poll)(FAR struct file *filep, FAR struct pollfd_s *fds,
                        bool setup);
   CODE ssize_t (*readv)(FAR struct file *filep, FAR struct uio *uio);
   CODE ssize_t (*writev)(FAR struct file *filep, FAR struct uio *uio);
@@ -355,6 +363,11 @@ struct mountpt_operations
   CODE int     (*mkdir)(FAR struct inode *mountpt, FAR const char *relpath,
                         mode_t mode);
   CODE int     (*rmdir)(FAR struct inode *mountpt, FAR const char *relpath);
+
+  /* rename() replaces an existing newrelpath in one step, or fails (for
+   * example with -EEXIST).  The VFS then removes newrelpath and retries.
+   */
+
   CODE int     (*rename)(FAR struct inode *mountpt,
                          FAR const char *oldrelpath,
                          FAR const char *newrelpath);
@@ -415,6 +428,22 @@ struct mountpt_operations
   CODE int     (*lstat)(FAR struct inode *mountpt,
                         FAR const char *relpath,
                         FAR struct stat *buf);
+#endif
+
+#ifdef CONFIG_FS_NOTIFY
+  /* Optional method, appended at the end so that the leading block
+   * stays union-compatible with struct file_operations.
+   * NOTIFY_WATCH_ADD returns a file system watch handle (or a negated
+   * errno) for the path; NOTIFY_WATCH_RM receives that handle back in
+   * wd.  Called whenever a watch on the path is added or removed, so
+   * the implementation must ignore a repeated add for a path it is
+   * already watching.  May block; called from inotify contexts, so it
+   * must not call back into the inotify engine synchronously.
+   */
+
+  CODE int     (*notify)(FAR struct inode *mountpt, int wd,
+                         FAR const char *relpath,
+                         int action, uint32_t mask);
 #endif
 };
 #endif /* CONFIG_DISABLE_MOUNTPOINT */
@@ -478,33 +507,6 @@ struct inode
 
 #define FSNODE_SIZE(n) (sizeof(struct inode) + (n))
 
-/* Definitions for custom stream operations with fopencookie. The
- * implementation is as defined in Standard C library (libc). The only
- * difference is that we use off_t instead of off64_t. This means
- * off_t is int64_t if CONFIG_FS_LARGEFILE is defined and int32_t if not.
- *
- * These callbacks can either lead to custom functions if fopencookie is used
- * or to standard file system functions if not.
- */
-
-typedef CODE ssize_t cookie_read_function_t(FAR void *cookie, FAR char *buf,
-                                            size_t size);
-typedef CODE ssize_t cookie_write_function_t(FAR void *cookie,
-                                             FAR const char *buf,
-                                             size_t size);
-typedef CODE off_t cookie_seek_function_t(FAR void *cookie,
-                                          FAR off_t *offset,
-                                          int whence);
-typedef CODE int cookie_close_function_t(FAR void *cookie);
-
-typedef struct cookie_io_functions_t
-{
-  FAR cookie_read_function_t *read;
-  FAR cookie_write_function_t *write;
-  FAR cookie_seek_function_t *seek;
-  FAR cookie_close_function_t *close;
-} cookie_io_functions_t;
-
 /* This is the underlying representation of an open file.  A file
  * descriptor is an index into an array of such types. The type associates
  * the file descriptor to the file state and to a set of inode operations.
@@ -560,85 +562,13 @@ struct fdlist
   struct fd         fl_prefds[CONFIG_NFILE_DESCRIPTORS_PER_BLOCK];
 };
 
-/* The following structure defines the list of files used for standard C I/O.
- * Note that NuttX can support the standard C APIs with or without buffering
- *
- * When buffering is used, the following describes the usage of the I/O
- * buffer.
- * The buffer can be used for reading or writing -- but not both at the same
- * time.
- * An fflush is implied between each change in direction of access.
- *
- * The field fs_bufread determines whether the buffer is being used for
- * reading or for writing as follows:
- *
- *              BUFFER
- *     +----------------------+ <- fs_bufstart Points to the beginning of
- *     |                      |    the buffer.
- *     | WR: Buffered data    |                WR: Start of buffered write
- *     |                      |                    data.
- *     | RD: Already read     |                RD: Start of already read
- *     |                      |                    data.
- *     +----------------------+
- *     | WR: Available buffer | <- fs_bufpos   Points to next byte:
- *     | RD: Read-ahead data  |                WR: End+1 of buffered write
- *     |                      |                    data.
- *     |                      |                RD: Points to next char to
- *     |                      |                    return
- *     +----------------------+
- *     | WR: Available        | <- fs_bufread  Top+1 of buffered read data
- *     | RD: Available        |                WR: bufstart buffer used for
- *     |                      |                    writing.
- *     |                      |                RD: Pointer to last buffered
- *     |                      |                    read char+1
- *     +----------------------+
- *                              <- fs_bufend   Points to the end of the
- *                                             buffer+1
- */
-
-#ifdef CONFIG_FILE_STREAM
-struct file_struct
-{
-  sq_entry_t              fs_entry;     /* Entry of file stream */
-  rmutex_t                fs_lock;      /* Recursive lock */
-  cookie_io_functions_t   fs_iofunc;    /* Callbacks to user / system functions */
-  FAR void               *fs_cookie;    /* Pointer to file descriptor / cookie struct */
-#ifndef CONFIG_STDIO_DISABLE_BUFFERING
-  FAR char               *fs_bufstart;  /* Pointer to start of buffer */
-  FAR char               *fs_bufend;    /* Pointer to 1 past end of buffer */
-  FAR char               *fs_bufpos;    /* Current position in buffer */
-  FAR char               *fs_bufread;   /* Pointer to 1 past last buffered read char. */
-#  if CONFIG_STDIO_BUFFER_SIZE > 0
-  char                    fs_buffer[CONFIG_STDIO_BUFFER_SIZE];
-#  endif
-#endif
-  uint16_t                fs_oflags;    /* Open mode flags */
-  uint8_t                 fs_flags;     /* Stream flags */
-#if CONFIG_NUNGET_CHARS > 0
-  uint8_t                 fs_nungotten; /* The number of characters buffered for ungetc */
-  char                    fs_ungotten[CONFIG_NUNGET_CHARS];
-#endif
-};
-
-struct streamlist
-{
-  mutex_t                 sl_lock;   /* For thread safety */
-  struct file_struct      sl_std[3];
-  sq_queue_t              sl_queue;
-};
-#endif /* CONFIG_FILE_STREAM */
-
 /****************************************************************************
  * Public Function Prototypes
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -678,6 +608,25 @@ void fs_initialize(void);
 int register_driver(FAR const char *path,
                     FAR const struct file_operations *fops, mode_t mode,
                     FAR void *priv);
+
+/****************************************************************************
+ * Name: register_pseudodir
+ *
+ * Description:
+ *   Create an empty directory in the pseudo file system, for a driver or a
+ *   file system that creates its nodes below it later.
+ *
+ * Input Parameters:
+ *   path - The path of the directory
+ *   mode - The permissions of the directory
+ *
+ * Returned Value:
+ *   Zero on success; a negated errno value on failure, e.g. -EEXIST if
+ *   'path' exists already.
+ *
+ ****************************************************************************/
+
+int register_pseudodir(FAR const char *path, mode_t mode);
 
 /****************************************************************************
  * Name: register_driver_with_size
@@ -965,6 +914,25 @@ int nx_umount2(FAR const char *target, unsigned int flags);
 #endif
 
 /****************************************************************************
+ * Name: notify_event
+ *
+ * Description:
+ *   Inject a file change notification that originated outside the local
+ *   VFS.  Must be called from thread context.
+ *
+ * Input Parameters:
+ *   mountpt - Mountpoint inode, or NULL if relpath is absolute
+ *   relpath - Path of the affected object relative to the mountpoint
+ *   mask    - inotify event mask
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_FS_NOTIFY
+void notify_event(FAR struct inode *mountpt, FAR const char *relpath,
+                  uint32_t mask);
+#endif
+
+/****************************************************************************
  * Name: fdlist_init
  *
  * Description:
@@ -982,7 +950,7 @@ void fdlist_init(FAR struct fdlist *list);
  *
  ****************************************************************************/
 
-#ifdef CONFIG_SCHED_DUMP_ON_EXIT
+#ifdef CONFIG_SCHED_DUMP_FDLIST
 void fdlist_dump(FAR struct fdlist *list);
 #else
 #  define fdlist_dump(l)
@@ -1031,7 +999,7 @@ int fdlist_count(FAR struct fdlist *list);
 
 int fdlist_copy(FAR struct fdlist *plist, FAR struct fdlist *clist,
                 FAR const posix_spawn_file_actions_t *actions,
-                bool cloexec);
+                bool exec);
 
 /****************************************************************************
  * Name: fdlist_get2
@@ -1684,7 +1652,7 @@ ssize_t file_pwrite(FAR struct file *filep, FAR const void *buf,
  * Name: file_sendfile
  *
  * Description:
- *   Equivalent to the standard sendfile function except that is accepts a
+ *   Equivalent to the standard sendfile function except that it accepts a
  *   struct file instance instead of a file descriptor.
  *
  ****************************************************************************/
@@ -1839,7 +1807,7 @@ int file_fcntl(FAR struct file *filep, int cmd, ...);
  *
  ****************************************************************************/
 
-int file_poll(FAR struct file *filep, FAR struct pollfd *fds, bool setup);
+int file_poll(FAR struct file *filep, FAR struct pollfd_s *fds, bool setup);
 
 /****************************************************************************
  * Name: file_fstat
@@ -2029,7 +1997,6 @@ int map_anonymous(FAR struct mm_map_entry_s *entry, bool kernel);
 #  define map_anonymous(entry, kernel) (-ENOSYS)
 #endif /* CONFIG_FS_ANONMAP */
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

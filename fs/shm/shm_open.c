@@ -25,6 +25,7 @@
  ****************************************************************************/
 
 #include <nuttx/config.h>
+#include <nuttx/fs/fs.h>
 
 #include <stdio.h>
 #include <fcntl.h>
@@ -42,6 +43,7 @@
 static int file_shm_open(FAR struct file *shm, FAR const char *name,
                          int oflags, mode_t mode)
 {
+  FAR struct shmfs_object_s *object;
   FAR struct inode *inode;
   struct inode_search_s desc;
   char fullpath[sizeof(CONFIG_FS_SHMFS_VFS_PATH) + CONFIG_NAME_MAX + 2];
@@ -82,15 +84,17 @@ static int file_shm_open(FAR struct file *shm, FAR const char *name,
 
   /* Get the inode for this shm object */
 
-  SETUP_SEARCH(&desc, fullpath, false);
+  ret = inode_search_setup(&desc, fullpath, false);
+  if (ret < 0)
+    {
+      return ret;
+    }
 
   inode_lock();
-  ret = inode_find(&desc);
+  ret = inode_find(&desc, &inode);
   if (ret >= 0)
     {
       /* Something exists at this path.  Get the search results */
-
-      inode = desc.node;
 
       /* Verify that the inode is an shm object */
 
@@ -98,7 +102,7 @@ static int file_shm_open(FAR struct file *shm, FAR const char *name,
         {
           ret = -EINVAL;
           inode_release(inode);
-          goto errout_with_sem;
+          goto errout_with_lock;
         }
 
       /* It exists and is an shm object.  Check if the caller wanted to
@@ -109,7 +113,7 @@ static int file_shm_open(FAR struct file *shm, FAR const char *name,
         {
           ret = -EEXIST;
           inode_release(inode);
-          goto errout_with_sem;
+          goto errout_with_lock;
         }
 
 #ifdef CONFIG_FS_PERMISSION
@@ -117,7 +121,7 @@ static int file_shm_open(FAR struct file *shm, FAR const char *name,
       if (ret < 0)
         {
           inode_release(inode);
-          goto errout_with_sem;
+          goto errout_with_lock;
         }
 #endif
 
@@ -127,8 +131,10 @@ static int file_shm_open(FAR struct file *shm, FAR const char *name,
 
       if ((oflags & O_TRUNC) == O_TRUNC && inode->i_private != NULL)
         {
-          shmfs_free_object(inode->i_private);
-          inode->i_private = NULL;
+          object = inode->i_private;
+          nxmutex_lock(&object->lock);
+          shmfs_free_buffer(object);
+          nxmutex_unlock(&object->lock);
           inode->i_size = 0;
         }
     }
@@ -141,7 +147,19 @@ static int file_shm_open(FAR struct file *shm, FAR const char *name,
           /* The shm does not exist and O_CREAT is not set */
 
           ret = -ENOENT;
-          goto errout_with_sem;
+          goto errout_with_lock;
+        }
+
+      /* The object lives from shm_open() until the last reference after
+       * unlink, so the file operations always find it.  ftruncate()
+       * allocates its backing store.
+       */
+
+      object = shmfs_alloc_object(0);
+      if (object == NULL)
+        {
+          ret = -ENOMEM;
+          goto errout_with_lock;
         }
 
       /* Create an inode in the pseudo-filesystem at this path */
@@ -149,13 +167,14 @@ static int file_shm_open(FAR struct file *shm, FAR const char *name,
       ret = inode_reserve(fullpath, mode, &inode);
       if (ret < 0)
         {
-          goto errout_with_sem;
+          shmfs_free_object(object);
+          goto errout_with_lock;
         }
 
       INODE_SET_SHM(inode);
       inode->u.i_ops = &g_shmfs_operations;
-      inode->i_private = NULL;
-      atomic_add(&inode->i_crefs, 1);
+      inode->i_private = object;
+      inode_addref(inode);
     }
 
   /* Associate the inode with a file structure */
@@ -163,9 +182,9 @@ static int file_shm_open(FAR struct file *shm, FAR const char *name,
   shm->f_oflags = oflags | O_NOFOLLOW;
   shm->f_inode = inode;
 
-errout_with_sem:
+errout_with_lock:
   inode_unlock();
-  RELEASE_SEARCH(&desc);
+  inode_search_release(&desc);
 #ifdef CONFIG_FS_NOTIFY
   if (ret >= 0)
     {

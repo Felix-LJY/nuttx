@@ -29,7 +29,7 @@
 
 #include <nuttx/config.h>
 
-#include <stdbool.h>
+#include <stdint.h>
 #include <sys/types.h>
 
 /****************************************************************************
@@ -115,7 +115,12 @@
 #define _PTPBASE        (0x4700) /* PTP ioctl commands */
 #define _DSHOTIOCBASE   (0x4800) /* Dshot device ioctl commands */
 #define _PULSECOUNTBASE (0x4900) /* Pulse count driver ioctl commands */
+#define _NPZEROIOCBASE  (0x4a00) /* nPZero power-saving IC ioctl commands */
+#define _OCUIOCBASE     (0x4b00) /* OCU (Output Compare Unit) ioctl commands */
+#define _RPTUNBASE      (0x5000) /* Remote processor tunneling ioctl commands */
+#define _VIRTIOBASE     (0x5100) /* VirtIO ioctl commands */
 #define _WLIOCBASE      (0x8b00) /* Wireless modules ioctl network commands */
+#define _DMABUFBASE     (0x8d00) /* DMA-Buf modules ioctl commands */
 
 /* boardctl() commands share the same number space */
 
@@ -559,6 +564,12 @@
                                                * IN: None
                                                * OUT: int */
 
+#define PIPEIOC_ATOMICWRITE _PIPEIOC(0x0007)  /* Set atomic writev mode
+                                               * IN: unsigned long (0 to
+                                               *     disable, non-zero to
+                                               *     enable)
+                                               * OUT: None */
+
 /* RTC driver ioctl definitions *********************************************/
 
 /* (see nuttx/include/rtc.h */
@@ -852,15 +863,48 @@
 #define _PULSECOUNTIOCVALID(c) (_IOC_TYPE(c)==_PULSECOUNTBASE)
 #define _PULSECOUNTIOC(nr)     _IOC(_PULSECOUNTBASE,nr)
 
+/* nPZero power-saving IC driver ioctl definitions **************************/
+
+/* see include/nuttx/power/npzero.h */
+
+#define _NPZEROIOCVALID(c)     (_IOC_TYPE(c)==_NPZEROIOCBASE)
+#define _NPZEROIOC(nr)         _IOC(_NPZEROIOCBASE,nr)
+
+/* OCU (Output Compare Unit) ioctl definitions ******************************/
+
+/* see nuttx/include/nuttx/timers/ocu.h */
+
+#define _OCUIOCVALID(c)       (_IOC_TYPE(c)==_OCUIOCBASE)
+#define _OCUIOC(nr)           _IOC(_OCUIOCBASE,nr)
+
+/* Rptun drivers ************************************************************/
+
+#define _RPTUNIOCVALID(c)     (_IOC_TYPE(c)==_RPTUNBASE)
+#define _RPTUNIOC(nr)         _IOC(_RPTUNBASE,nr)
+
+/* VirtIO driver ioctl definitions ******************************************/
+
+/* see nuttx/include/nuttx/virtio/virtio.h */
+
+#define _VIRTIOIOCVALID(c)    (_IOC_TYPE(c)==_VIRTIOBASE)
+#define _VIRTIOIOC(nr)        _IOC(_VIRTIOBASE,nr)
+
+/* DMA-Buf driver ioctl definitions *****************************************/
+
+/* see nuttx/include/nuttx/dma-buf.h */
+
+#define _DMABUFIOCVALID(c)    (_IOC_TYPE(c)==_DMABUFBASE)
+#define _DMABUFIOC(nr)        _IOC(_DMABUFBASE,nr)
+
 /****************************************************************************
  * Public Type Definitions
  ****************************************************************************/
 
 struct geometry
 {
-  bool      geo_available;    /* true: The device is available */
-  bool      geo_mediachanged; /* true: The media has changed since last query */
-  bool      geo_writeenabled; /* true: It is okay to write to this device */
+  uint8_t   geo_available;    /* true: The device is available */
+  uint8_t   geo_mediachanged; /* true: The media has changed since last query */
+  uint8_t   geo_writeenabled; /* true: It is okay to write to this device */
   blkcnt_t  geo_nsectors;     /* Number of sectors on the device */
   blksize_t geo_sectorsize;   /* Size of one sector */
 
@@ -895,18 +939,14 @@ struct pipe_peek_s
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
  * Public Function Prototypes
  ****************************************************************************/
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

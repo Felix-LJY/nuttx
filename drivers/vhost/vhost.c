@@ -26,12 +26,30 @@
 
 #include <nuttx/debug.h>
 
+#include <string.h>
+#include <strings.h>
+#include <syslog.h>
+
+#include <nuttx/fs/fs.h>
 #include <nuttx/kmalloc.h>
 #include <nuttx/mutex.h>
+#include <nuttx/nuttx.h>
+#include <nuttx/queue.h>
 #include <nuttx/wqueue.h>
 #include <nuttx/vhost/vhost.h>
 
+#ifdef CONFIG_DRIVERS_VHOST_NET
+#  include "vhost-net.h"
+#endif
+
+#include "vhost-blk.h"
+#include "vhost-can.h"
+#include "vhost-gpio.h"
+#include "vhost-i2c.h"
+#include "vhost-spi.h"
+#include "vhost-serial.h"
 #include "vhost-rng.h"
+#include "vhost-rpmb.h"
 #include "vhost-rpmsg.h"
 
 /****************************************************************************
@@ -46,16 +64,16 @@
 
 struct vhost_bus_s
 {
-  mutex_t          lock;           /* Lock for the list */
-  struct list_node device;         /* Wait match vhost device list */
-  struct list_node defered_device; /* Deferred vhost device list */
-  struct list_node driver;         /* Vhost driver list */
-  struct work_s    defered_work;   /* Deferred probe work */
+  mutex_t           lock;           /* Lock for the list */
+  struct dq_queue_s device;         /* Wait match vhost device list */
+  struct dq_queue_s defered_device; /* Deferred vhost device list */
+  struct dq_queue_s driver;         /* Vhost driver list */
+  struct work_s     defered_work;   /* Deferred probe work */
 };
 
 struct vhost_device_item_s
 {
-  struct list_node     node;    /* List node */
+  struct dq_entry_s    node;    /* List node */
   struct vhost_device *device;  /* Pointer to the vhost device */
   struct vhost_driver *driver;  /* Pointer to the vhost driver that
                                  * matched with current vhost device
@@ -63,20 +81,138 @@ struct vhost_device_item_s
 };
 
 /****************************************************************************
+ * Private Function Prototypes
+ ****************************************************************************/
+
+static int vhost_dev_ioctl(FAR struct file *filep, int cmd,
+                           unsigned long arg);
+
+/****************************************************************************
  * Private Data
  ****************************************************************************/
 
+static const struct file_operations g_vhost_dev_ops =
+{
+  NULL,             /* open */
+  NULL,             /* close */
+  NULL,             /* read */
+  NULL,             /* write */
+  NULL,             /* seek */
+  vhost_dev_ioctl,  /* ioctl */
+};
+
 static struct vhost_bus_s g_vhost_bus =
 {
-  NXMUTEX_INITIALIZER,
-  LIST_INITIAL_VALUE(g_vhost_bus.device),
-  LIST_INITIAL_VALUE(g_vhost_bus.defered_device),
-  LIST_INITIAL_VALUE(g_vhost_bus.driver),
+  .lock = NXMUTEX_INITIALIZER,
 };
 
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
+
+/****************************************************************************
+ * Name: vhost_dump_device
+ ****************************************************************************/
+
+static int vhost_dump_device(FAR struct vhost_device_item_s *item,
+                             FAR const char *name)
+{
+  FAR struct vhost_device *hdev = item->device;
+  FAR const char *dev_name;
+  unsigned int i;
+
+  dev_name = virtio_dev_name(hdev->id.device);
+  dev_name = dev_name == NULL ? "unknown" : dev_name;
+
+  /* Apply type filter if specified, "all" means no filter */
+
+  if (strcasecmp(name, "all") != 0 && strcasecmp(dev_name, name) != 0)
+    {
+      return 0;
+    }
+
+  syslog(LOG_EMERG, "  [%s] id=%" PRIu32 " hdev=%p driver=%p priv=%p\n",
+         dev_name, hdev->id.device, hdev, item->driver, hdev->priv);
+
+  /* Call driver-specific dump if available */
+
+  if (item->driver && item->driver->dump)
+    {
+      item->driver->dump(hdev);
+    }
+
+  /* Dump virtqueue information */
+
+  for (i = 0; i < hdev->vrings_num; i++)
+    {
+      virtqueue_dump(hdev->vrings_info[i].vq);
+    }
+
+  return 1;
+}
+
+/****************************************************************************
+ * Name: vhost_dump
+ ****************************************************************************/
+
+static void vhost_dump(FAR const char *name)
+{
+  FAR struct vhost_device_item_s *item;
+  int count = 0;
+  int ret;
+
+  syslog(LOG_EMERG, "VHost devices:\n");
+
+  name = name == NULL ? "all" : name;
+  ret = nxmutex_lock(&g_vhost_bus.lock);
+  if (ret < 0)
+    {
+      syslog(LOG_EMERG, "  Failed to acquire lock\n");
+      return;
+    }
+
+  dq_for_every_entry(&g_vhost_bus.device, item,
+                     struct vhost_device_item_s, node)
+    {
+      count += vhost_dump_device(item, name);
+    }
+
+  dq_for_every_entry(&g_vhost_bus.defered_device, item,
+                     struct vhost_device_item_s, node)
+    {
+      count += vhost_dump_device(item, name);
+    }
+
+  if (count == 0)
+    {
+      syslog(LOG_EMERG, "  No devices of type '%s' found\n", name);
+    }
+
+  nxmutex_unlock(&g_vhost_bus.lock);
+}
+
+/****************************************************************************
+ * Name: vhost_dev_ioctl
+ ****************************************************************************/
+
+static int vhost_dev_ioctl(FAR struct file *filep, int cmd,
+                           unsigned long arg)
+{
+  int ret = -ENOTTY;
+
+  switch (cmd)
+    {
+      case VHOSTIOC_DUMP:
+        vhost_dump((FAR const char *)(uintptr_t)arg);
+        ret = OK;
+        break;
+
+      default:
+        break;
+    }
+
+  return ret;
+}
 
 /****************************************************************************
  * Name: vhost_status_driver_ok
@@ -120,8 +256,8 @@ static void vhost_defered_probe_work(FAR void *arg)
 
   nxmutex_lock(&g_vhost_bus.lock);
 
-  list_for_every_entry_safe(&g_vhost_bus.defered_device, item, tmp,
-                            struct vhost_device_item_s, node)
+  dq_for_every_entry_safe(&g_vhost_bus.defered_device, item, tmp,
+                          struct vhost_device_item_s, node)
     {
       if (!vhost_status_driver_ok(item->device))
         {
@@ -133,10 +269,10 @@ static void vhost_defered_probe_work(FAR void *arg)
        * normal device list
        */
 
-      list_delete(&item->node);
-      list_add_tail(&g_vhost_bus.device, &item->node);
-      list_for_every_entry(&g_vhost_bus.driver, driver,
-                           struct vhost_driver, node)
+      dq_rem(&item->node, &g_vhost_bus.defered_device);
+      dq_addlast(&item->node, &g_vhost_bus.device);
+      dq_for_every_entry(&g_vhost_bus.driver, driver,
+                         struct vhost_driver, node)
         {
           if (item->device->id.device == driver->device)
             {
@@ -151,7 +287,7 @@ static void vhost_defered_probe_work(FAR void *arg)
         }
     }
 
-  if (!list_is_empty(&g_vhost_bus.defered_device))
+  if (!dq_empty(&g_vhost_bus.defered_device))
     {
       work_queue(LPWORK, &g_vhost_bus.defered_work, vhost_defered_probe_work,
                  NULL, VHOST_DEFERED_PROBE_PERIOD);
@@ -211,6 +347,77 @@ int vhost_get_vq_buffers(FAR struct virtqueue *vq,
 }
 
 /****************************************************************************
+ * Name: vhost_get_vq_buffers_pa
+ *
+ * Description:
+ *   Like vhost_get_vq_buffers(), but returns the untranslated 64-bit
+ *   descriptor addresses instead of CPU pointers.  Needed when the peer
+ *   driver posts buffers beyond the CPU's directly addressable range
+ *   (the pointer-based API would silently truncate the address).
+ *
+ *   The caller completes the chain with virtqueue_add_consumed_buffer()
+ *   using the returned head index, exactly as with the pointer API.
+ *
+ ****************************************************************************/
+
+int vhost_get_vq_buffers_pa(FAR struct virtqueue *vq,
+                            FAR struct vhost_buf_s *vb, size_t vbsize,
+                            FAR size_t *vbcnt)
+{
+  uint16_t head;
+  uint16_t idx;
+  size_t i = 0;
+
+  DEBUGASSERT(vb != NULL && vbsize >= 1 && vbcnt != NULL);
+
+  atomic_thread_fence(memory_order_acquire);
+
+  /* The avail ring is written by the peer driver.  On systems without
+   * hardware coherency between the two sides the vring memory must be
+   * mapped non-cacheable (or otherwise synchronized) for these reads to
+   * observe the peer's updates.
+   */
+
+  if (vq->vq_available_idx == vq->vq_ring.avail->idx)
+    {
+      return -ENOMEM;
+    }
+
+  head = vq->vq_ring.avail->ring[vq->vq_available_idx++ &
+                                 (vq->vq_nentries - 1)];
+
+  for (idx = head; ; )
+    {
+      if (i >= vbsize || i >= vq->vq_nentries)
+        {
+          /* Chain longer than the caller's array (or malformed and
+           * looping): complete it untouched so the ring slot returns to
+           * the peer rather than leaking, and report the drop.
+           */
+
+          vhosterr("descriptor chain exceeds vbsize %zu, dropped\n",
+                   vbsize);
+          virtqueue_add_consumed_buffer(vq, head, 0);
+          return -EINVAL;
+        }
+
+      vb[i].addr = vq->vq_ring.desc[idx].addr;
+      vb[i].len  = vq->vq_ring.desc[idx].len;
+      i++;
+
+      if (!(vq->vq_ring.desc[idx].flags & VRING_DESC_F_NEXT))
+        {
+          break;
+        }
+
+      idx = vq->vq_ring.desc[idx].next;
+    }
+
+  *vbcnt = i;
+  return head;
+}
+
+/****************************************************************************
  * Name: vhost_register_driver
  ****************************************************************************/
 
@@ -230,12 +437,12 @@ int vhost_register_driver(FAR struct vhost_driver *driver)
 
   /* Add the driver to the vhost_bus driver list */
 
-  list_add_tail(&g_vhost_bus.driver, &driver->node);
+  dq_addlast(&driver->node, &g_vhost_bus.driver);
 
   /* Match all the devices has registered in the vhost_bus */
 
-  list_for_every_entry(&g_vhost_bus.device, item, struct vhost_device_item_s,
-                       node)
+  dq_for_every_entry(&g_vhost_bus.device, item, struct vhost_device_item_s,
+                     node)
     {
       if (item->driver == NULL && driver->device == item->device->id.device)
         {
@@ -275,8 +482,8 @@ int vhost_unregister_driver(FAR struct vhost_driver *driver)
 
   /* Find all the devices matched with driver in device list */
 
-  list_for_every_entry(&g_vhost_bus.device, item, struct vhost_device_item_s,
-                       node)
+  dq_for_every_entry(&g_vhost_bus.device, item, struct vhost_device_item_s,
+                     node)
     {
       if (item->driver == driver)
         {
@@ -291,7 +498,7 @@ int vhost_unregister_driver(FAR struct vhost_driver *driver)
 
   /* Remove the driver from the driver list */
 
-  list_delete(&driver->node);
+  dq_rem(&driver->node, &g_vhost_bus.driver);
 
   nxmutex_unlock(&g_vhost_bus.lock);
   return ret;
@@ -329,8 +536,8 @@ int vhost_register_device(FAR struct vhost_device *device)
 
   if (!vhost_status_driver_ok(device))
     {
-      list_add_tail(&g_vhost_bus.defered_device, &item->node);
-      if (list_is_singular(&g_vhost_bus.defered_device))
+      dq_addlast(&item->node, &g_vhost_bus.defered_device);
+      if (dq_is_singular(&g_vhost_bus.defered_device))
         {
           work_queue(LPWORK, &g_vhost_bus.defered_work,
                       vhost_defered_probe_work, NULL,
@@ -339,12 +546,12 @@ int vhost_register_device(FAR struct vhost_device *device)
     }
   else
     {
-      list_add_tail(&g_vhost_bus.device, &item->node);
+      dq_addlast(&item->node, &g_vhost_bus.device);
 
       /* Match the driver has registered in the vhost_bus */
 
-      list_for_every_entry(&g_vhost_bus.driver, driver, struct vhost_driver,
-                           node)
+      dq_for_every_entry(&g_vhost_bus.driver, driver, struct vhost_driver,
+                         node)
         {
           if (driver->device == device->id.device)
             {
@@ -385,8 +592,8 @@ int vhost_unregister_device(FAR struct vhost_device *device)
 
   /* Find the device in device list */
 
-  list_for_every_entry(&g_vhost_bus.device, item,
-                       struct vhost_device_item_s, node)
+  dq_for_every_entry(&g_vhost_bus.device, item, struct vhost_device_item_s,
+                     node)
     {
       if (item->device == device)
         {
@@ -399,18 +606,18 @@ int vhost_unregister_device(FAR struct vhost_device *device)
 
           /* Remove the device from the device list and free memory */
 
-          list_delete(&item->node);
+          dq_rem(&item->node, &g_vhost_bus.device);
           kmm_free(item);
           goto out;
         }
     }
 
-  list_for_every_entry(&g_vhost_bus.defered_device, item,
-                       struct vhost_device_item_s, node)
+  dq_for_every_entry(&g_vhost_bus.defered_device, item,
+                     struct vhost_device_item_s, node)
     {
       if (item->device == device)
         {
-          list_delete(&item->node);
+          dq_rem(&item->node, &g_vhost_bus.defered_device);
           kmm_free(item);
           goto out;
         }
@@ -436,6 +643,70 @@ void vhost_register_drivers(void)
       vhosterr("metal_init failed, ret=%d\n", ret);
     }
 
+#ifdef CONFIG_DRIVERS_VHOST_NET
+  ret = vhost_register_net_driver();
+  if (ret < 0)
+    {
+      vhosterr("vhost_register_net_driver failed, ret=%d\n", ret);
+    }
+#endif
+
+  /* Register vhost character device */
+
+  ret = register_driver("/dev/vhost", &g_vhost_dev_ops, 0200, NULL);
+  if (ret < 0)
+    {
+      vhosterr("register_driver /dev/vhost failed, ret=%d\n", ret);
+    }
+
+#ifdef CONFIG_DRIVERS_VHOST_BLK
+  ret = vhost_register_blk_driver();
+  if (ret < 0)
+    {
+      vhosterr("vhost_register_blk_driver failed, ret=%d\n", ret);
+    }
+#endif
+
+#ifdef CONFIG_DRIVERS_VHOST_CAN
+  ret = vhost_register_can_driver();
+  if (ret < 0)
+    {
+      vhosterr("vhost_register_can_driver failed, ret=%d\n", ret);
+    }
+#endif
+
+#ifdef CONFIG_DRIVERS_VHOST_I2C
+  ret = vhost_register_i2c_driver();
+  if (ret < 0)
+    {
+      vhosterr("vhost_register_i2c_driver failed, ret=%d\n", ret);
+    }
+#endif
+
+#ifdef CONFIG_DRIVERS_VHOST_SPI
+  ret = vhost_register_spi_driver();
+  if (ret < 0)
+    {
+      vhosterr("vhost_register_spi_driver failed, ret=%d\n", ret);
+    }
+#endif
+
+#ifdef CONFIG_DRIVERS_VHOST_GPIO
+  ret = vhost_register_gpio_driver();
+  if (ret < 0)
+    {
+      vhosterr("vhost_register_gpio_driver failed, ret=%d\n", ret);
+    }
+#endif
+
+#ifdef CONFIG_DRIVERS_VHOST_RPMB
+  ret = vhost_register_rpmb_driver();
+  if (ret < 0)
+    {
+      vhosterr("vhost_register_rpmb_driver failed, ret=%d\n", ret);
+    }
+#endif
+
 #ifdef CONFIG_DRIVERS_VHOST_RNG
   ret = vhost_register_rng_driver();
   if (ret < 0)
@@ -449,6 +720,14 @@ void vhost_register_drivers(void)
   if (ret < 0)
     {
       vhosterr("vhost_register_rpmsg_driver failed, ret=%d\n", ret);
+    }
+#endif
+
+#ifdef CONFIG_DRIVERS_VHOST_SERIAL
+  ret = vhost_register_serial_driver();
+  if (ret < 0)
+    {
+      vhosterr("vhost_register_serial_driver failed, ret=%d\n", ret);
     }
 #endif
 

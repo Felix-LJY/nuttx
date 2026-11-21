@@ -118,9 +118,11 @@ static void psock_insert_segment(FAR struct tcp_wrbuffer_s *wrb,
   FAR sq_entry_t *insert = NULL;
 
   FAR sq_entry_t *itr;
+
   for (itr = sq_peek(q); itr; itr = sq_next(itr))
     {
       FAR struct tcp_wrbuffer_s *wrb0 = (FAR struct tcp_wrbuffer_s *)itr;
+
       if (TCP_WBSEQNO(wrb0) < TCP_WBSEQNO(wrb))
         {
           insert = itr;
@@ -214,15 +216,6 @@ static void retransmit_segment(FAR struct tcp_conn_s *conn,
             wrb, TCP_WBSENT(wrb), conn->tx_unacked, conn->sent);
 
       /* Reset the number of bytes sent sent from the write buffer */
-
-      if (conn->tx_unacked > sent)
-        {
-          conn->tx_unacked -= sent;
-        }
-      else
-        {
-          conn->tx_unacked = 0;
-        }
 
       if (conn->sent > sent)
         {
@@ -588,11 +581,16 @@ static uint32_t psock_send_eventhandler(FAR struct net_driver_s *dev,
                         wrb, TCP_WBSEQNO(wrb), TCP_WBPKTLEN(wrb));
                 }
             }
-          else if (ackno == TCP_WBSEQNO(wrb))
+          else if (ackno == TCP_WBSEQNO(wrb) && (flags & TCP_NEWDATA) == 0)
             {
+              /* A duplicate ACK carries no data (RFC 5681, section 2): a
+               * segment with data that repeats the ACK number was sent
+               * before the peer received the segment.
+               */
+
 #ifdef CONFIG_NET_TCP_CC_NEWRENO
               if (conn->dupacks >= TCP_FAST_RETRANSMISSION_THRESH)
-#else
+#elif defined(CONFIG_NET_TCP_FAST_RETRANSMIT)
               /* Duplicate ACK? Retransmit data if need */
 
               if (++TCP_WBNACK(wrb) == TCP_FAST_RETRANSMISSION_THRESH)
@@ -600,43 +598,11 @@ static uint32_t psock_send_eventhandler(FAR struct net_driver_s *dev,
                 {
                   /* Fast retransmission has been triggered */
 
-#ifndef CONFIG_NET_TCP_CC_NEWRENO
+#if defined(CONFIG_NET_TCP_FAST_RETRANSMIT) && !defined(CONFIG_NET_TCP_CC_NEWRENO)
                   /* Reset counter */
 
                   TCP_WBNACK(wrb) = 0;
 #endif
-
-                  if ((flags & TCP_NEWDATA) != 0)
-                    {
-                      FAR uint8_t *buf = dev->d_buf;
-                      FAR uint8_t *appdata = dev->d_appdata;
-                      uint16_t len = dev->d_len;
-#ifdef CONFIG_NET_TCPURGDATA
-                      FAR uint8_t *urgdata = dev->d_urgdata;
-                      uint16_t urglen = dev->d_urglen;
-#endif
-                      FAR struct iob_s *iob = dev->d_iob;
-
-                      dev->d_buf = NULL;
-                      dev->d_iob = NULL;
-
-                      /* The current receive data needs to be handled by
-                       * following tcp_recvhandler or tcp_data_event. Notify
-                       * driver to send the message and marked as rexmit
-                       */
-
-                      conn->timeout = true;
-                      netdev_txnotify_dev(conn->dev, TCP_POLL);
-                      netdev_iob_replace(dev, iob);
-                      dev->d_buf = buf;
-                      dev->d_appdata = appdata;
-                      dev->d_len = len;
-#ifdef CONFIG_NET_TCPURGDATA
-                      dev->d_urgdata = urgdata;
-                      dev->d_urglen = urglen;
-#endif
-                      return flags;
-                    }
 
 #ifdef CONFIG_NET_TCP_SELECTIVE_ACK
                   if ((conn->flags & TCP_SACK) &&
@@ -870,16 +836,16 @@ static uint32_t psock_send_eventhandler(FAR struct net_driver_s *dev,
         }
 
 #ifdef CONFIG_NET_TCP_CC_NEWRENO
-          /* After Fast retransmitted, set ssthresh to the maximum of
-           * the unacked and the 2*SMSS, and enter to Fast Recovery.
-           * ssthresh = max (FlightSize / 2, 2*SMSS) referring to rfc5681
-           * cwnd=ssthresh + 3*SMSS  referring to rfc5681
-           */
+      /* After Fast retransmitted, set ssthresh to the maximum of
+       * the unacked and the 2*SMSS, and enter to Fast Recovery.
+       * ssthresh = max (FlightSize / 2, 2*SMSS) referring to rfc5681
+       * cwnd=ssthresh + 3*SMSS  referring to rfc5681
+       */
 
-          if (conn->flags & TCP_INFT)
-            {
-              tcp_cc_update(conn, NULL);
-            }
+      if (conn->flags & TCP_INFT)
+        {
+          tcp_cc_update(conn, NULL);
+        }
 #endif
     }
   else
@@ -953,15 +919,6 @@ static uint32_t psock_send_eventhandler(FAR struct net_driver_s *dev,
               /* Yes.. Reset the number of bytes sent sent from
                * the write buffer
                */
-
-              if (conn->tx_unacked > sent)
-                {
-                  conn->tx_unacked -= sent;
-                }
-              else
-                {
-                  conn->tx_unacked = 0;
-                }
 
               if (conn->sent > sent)
                 {
@@ -1080,10 +1037,12 @@ static uint32_t psock_send_eventhandler(FAR struct net_driver_s *dev,
            * packet gets refused by devif_iob_send(). Detect this situation
            * and send tiny TCP packets until we manage to free up some space.
            * We do not want to exhaust all of the remaining iobs by sending
-           * the maximum size packet that would fit.
+           * the maximum size packet that would fit.  Never send more than
+           * sndlen, which is limited by the MSS and the send window.
            */
 
-          if (sndlen > iob_navail(false) * CONFIG_IOB_BUFSIZE)
+          if (sndlen > iob_navail(false) * CONFIG_IOB_BUFSIZE &&
+              sndlen > CONFIG_IOB_BUFSIZE)
             {
               nwarn("Running low on iobs, limiting packet size\n");
               sndlen = CONFIG_IOB_BUFSIZE;
@@ -1141,18 +1100,18 @@ static uint32_t psock_send_eventhandler(FAR struct net_driver_s *dev,
            * number calculations.
            */
 
-          conn->tx_unacked += sndlen;
-          conn->sent       += sndlen;
+          conn->sent += sndlen;
 
-          /* Below prediction will become true,
-           * unless retransmission occurrence
+          /* Below prediction will become true, unless retransmission
+           * occurrence. tx_unacked does not update during retransmission.
            */
 
           predicted_seqno = tcp_getsequence(conn->sndseq) + sndlen;
 
           if (TCP_SEQ_GT(predicted_seqno, conn->sndseq_max))
             {
-               conn->sndseq_max = predicted_seqno;
+              conn->sndseq_max = predicted_seqno;
+              conn->tx_unacked += sndlen;
             }
 
           ninfo("SEND: wrb=%p nrtx=%u tx_unacked=%" PRIu32
@@ -1235,6 +1194,7 @@ static uint32_t tcp_max_wrb_size(FAR struct tcp_conn_s *conn)
   if (size > mss)
     {
       const uint32_t odd = size % mss;
+
       size -= odd;
     }
 
@@ -1325,7 +1285,8 @@ static unsigned int tcp_send_gettimeout(clock_t start, unsigned int timeout)
  *   ENOTSOCK
  *     The argument s is not a socket.
  *   EPIPE
- *     The local end has been shut down on a connection oriented socket.
+ *     The local end has been shut down on a connection oriented socket, or
+ *     the connection was closed.
  *     In this case the process will also receive a SIGPIPE unless
  *     MSG_NOSIGNAL is set.
  *
@@ -1356,7 +1317,7 @@ ssize_t psock_tcp_send(FAR struct socket *psock, FAR const void *buf,
   if (!_SS_ISCONNECTED(conn->sconn.s_flags))
     {
       nerr("ERROR: Not connected\n");
-      ret = -ENOTCONN;
+      ret = tcp_reset_report(conn, TCP_NOTCONN_ERROR(conn));
       goto errout;
     }
 
@@ -1393,7 +1354,6 @@ ssize_t psock_tcp_send(FAR struct socket *psock, FAR const void *buf,
   if (ret < 0)
     {
       nerr("ERROR: Not reachable\n");
-      ret = -ENETUNREACH;
       goto errout;
     }
 #endif /* CONFIG_NET_ARP_SEND || CONFIG_NET_ICMPv6_NEIGHBOR */
@@ -1424,7 +1384,14 @@ ssize_t psock_tcp_send(FAR struct socket *psock, FAR const void *buf,
       if (!_SS_ISCONNECTED(conn->sconn.s_flags))
         {
           nerr("ERROR: No longer connected\n");
-          ret = -ENOTCONN;
+          ret = TCP_NOTCONN_ERROR(conn);
+          if (result == 0)
+            {
+              /* No byte of this send was queued: it returns the error */
+
+              tcp_reset_report(conn, ret);
+            }
+
           goto errout_with_lock;
         }
 
@@ -1530,10 +1497,8 @@ ssize_t psock_tcp_send(FAR struct socket *psock, FAR const void *buf,
             }
           else
             {
-              conn_dev_unlock(&conn->sconn, conn->dev);
-              wrb = tcp_wrbuffer_timedalloc(tcp_send_gettimeout(start,
-                                                                timeout));
-              conn_dev_lock(&conn->sconn, conn->dev);
+              wrb = tcp_wrbuffer_timedalloc(&conn->sconn, conn->dev,
+                                        tcp_send_gettimeout(start, timeout));
               ninfo("new wrb %p\n", wrb);
             }
 
@@ -1634,14 +1599,15 @@ ssize_t psock_tcp_send(FAR struct socket *psock, FAR const void *buf,
 
           /* Wait for at least one IOB getting available.
            *
-           * Note: net_ioballoc releases the network lock when blocking.
-           * It allows our write_q being drained in the meantime. Otherwise,
-           * we risk a deadlock with other threads competing on IOBs.
+           * Note: conn_dev_iobtimedalloc releases the network lock when
+           * blocking. It allows our write_q being drained in the meantime.
+           * Otherwise, we risk a deadlock with other threads competing on
+           * IOBs.
            */
 
-          conn_dev_unlock(&conn->sconn, conn->dev);
-          iob = net_iobtimedalloc(true, tcp_send_gettimeout(start, timeout));
-          conn_dev_lock(&conn->sconn, conn->dev);
+          iob = conn_dev_iobtimedalloc(true,
+                                       tcp_send_gettimeout(start, timeout),
+                                       &conn->sconn, conn->dev);
           if (iob != NULL)
             {
               iob_free_chain(iob);
@@ -1804,8 +1770,13 @@ void tcp_sendbuffer_notify(FAR struct tcp_conn_s *conn)
 {
   int val = 0;
 
+  /* Post also when no thread waits yet: a sender can be between its check
+   * of the limit and its wait, with the locks released.  A count that no
+   * sender waited for only makes a sender check the limit once more.
+   */
+
   nxsem_get_value(&conn->snd_sem, &val);
-  if (val < 0)
+  if (val <= 0)
     {
       nxsem_post(&conn->snd_sem);
     }

@@ -1,3 +1,24 @@
+############################################################################
+# arch/risc-v/src/eic7700x/Kconfig
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.  The
+# ASF licenses this file to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance with the
+# License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
+############################################################################
 #
 # For a description of the syntax of this configuration file,
 # see the file kconfig-language.txt in the NuttX tools repository.
@@ -48,3 +69,33 @@ config EIC7700X_CPU_FREQ_MHZ
 		so in the log.
 
 endif
+config EIC7700X_RESET
+	bool "CRG reset provider"
+	default y
+	select RESET
+	---help---
+		Register the reset lines of the Clock and Reset Generator (CRG)
+		with the NuttX reset framework.  Registration writes nothing to
+		the hardware: a line only moves when a driver asks it to.
+
+		Lines that carry the interconnect, the DDR path, the U84 cluster
+		or the configuration path back to the CRG are registered so that
+		they can be released and read, but refuse to be asserted, since
+		asserting one of them takes down the system doing the asserting.
+
+config EIC7700X_PINCTRL
+	bool "CLMM pad multiplexing"
+	default y
+	select PINCTRL
+	---help---
+		Describe the pads of the Chip Level Mode Mux (CLMM) to the NuttX
+		pinctrl framework.  Initialisation writes nothing to the hardware:
+		a pad only moves when a driver asks it to.
+
+		Every pad on the SoC shares its ball with something else, so the
+		UARTs beyond the console, the GPIO block and the peripheral buses
+		all need a pad configured here before they reach a pin.
+
+		The board reports the pad count and how many differ from their
+		reset defaults once, at startup.  With DEBUG_PINCTRL_INFO the
+		driver also logs each pad as it is configured.

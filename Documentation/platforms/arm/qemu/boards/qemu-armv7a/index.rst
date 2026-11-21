@@ -1,6 +1,8 @@
-===========
-qemu-armv7a
-===========
+============
+QEMU ARMv7-A
+============
+
+.. tags:: arch:arm, chip:qemu
 
 This board configuration will use QEMU to emulate generic ARM v7-A series
 hardware platform and provides support for these devices:
@@ -59,6 +61,32 @@ This is a configuration of testing the BUILD_KERNEL configuration::
   nsh> /system/bin/hello
   Hello, World!!
   nsh>
+
+citest (Single Core)
+--------------------
+
+Flat build that the CI runs in QEMU with NTFC. It is ``nsh`` with the
+programs that the NTFC test cases use::
+
+  $ ./tools/configure.sh -l qemu-armv7a:citest
+  $ make
+  $ qemu-system-arm -cpu cortex-a7 -nographic \
+    -machine virt,virtualization=off,gic-version=2 \
+    -net none -chardev stdio,id=con,mux=on -serial chardev:con \
+    -mon chardev=con,mode=readline -kernel ./nuttx
+
+citest_knsh (Single Core)
+-------------------------
+
+Kernel build (``CONFIG_BUILD_KERNEL=y``) that the CI runs in QEMU with NTFC.
+It is ``knsh`` with the programs that the NTFC test cases use. Build it as
+``knsh``. The programs are in ``../apps/bin``, which NuttX mounts at
+``/system`` with semihosting::
+
+  $ qemu-system-arm -semihosting -cpu cortex-a7 -nographic \
+    -machine virt,virtualization=off,gic-version=2 \
+    -net none -chardev stdio,id=con,mux=on -serial chardev:con \
+    -mon chardev=con,mode=readline -kernel ./nuttx
 
 Inter-VM share memory Device (ivshmem)
 --------------------------------------

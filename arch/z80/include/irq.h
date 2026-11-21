@@ -49,12 +49,29 @@
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
+
+/* Return program counter */
+
+static inline_function uintptr_t up_getpc(void)
+{
+  uintptr_t pc;
+
+  __asm__ __volatile__
+    (
+      "call 1f\n\t"
+      "1:\n\t"
+      "pop hl\n\t"
+      "ld %0, hl\n\t"
+      : "=r"(pc)
+      :
+      : "hl", "memory"
+    );
+
+  return pc;
+}
 
 /* Return the current value of the stack pointer */
 
@@ -74,7 +91,6 @@ uintptr_t up_getsp(void);
 #define up_getusrsp(regs) \
     ((uintptr_t)((FAR chipreg_t*)(regs))[XCPT_SP])
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

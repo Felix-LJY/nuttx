@@ -75,16 +75,27 @@
 #endif
 
 #define INFINITY   ((double)(_HUGE_ENUF * _HUGE_ENUF))
-#define NAN        ((double)(INFINITY * 0.0F))
 #define HUGE_VAL   INFINITY
 
 #define INFINITY_F ((float)INFINITY)
-#define NAN_F      ((float)(INFINITY * 0.0F))
 #define HUGE_VALF  ((float)INFINITY)
 
 #define INFINITY_L ((long double)INFINITY)
-#define NAN_L      ((long double)(INFINITY * 0.0F))
 #define HUGE_VALL  ((long double)INFINITY)
+
+/* A quiet NaN with the sign bit clear.  INFINITY * 0 gives the default NaN
+ * of the FPU, and on x86 that NaN has the sign bit set.
+ */
+
+#ifdef CONFIG_HAVE_BUILTIN_NAN
+#  define NAN      __builtin_nan("")
+#  define NAN_F    __builtin_nanf("")
+#  define NAN_L    __builtin_nanl("")
+#else
+#  define NAN      ((double)(INFINITY * 0.0F))
+#  define NAN_F    ((float)(INFINITY * 0.0F))
+#  define NAN_L    ((long double)(INFINITY * 0.0F))
+#endif
 
 #define isnan(x)   ((x) != (x))
 #define isnanf(x)  ((x) != (x))
@@ -316,6 +327,15 @@ double      tgamma(double x);
 #endif
 #ifdef CONFIG_HAVE_LONG_DOUBLE
 long double tgammal(long double x);
+#endif
+
+#ifdef CONFIG_HAVE_DOUBLE
+double      j0(double x);
+double      j1(double x);
+double      jn(int n, double x);
+double      y0(double x);
+double      y1(double x);
+double      yn(int n, double x);
 #endif
 
 float       logf  (float x);
@@ -579,12 +599,12 @@ double      remainder(double x, double y);
 long double remainderl(long double x, long double y);
 #endif
 
-float       remquof(float x, float y, int *quo);
+float       remquof(float x, float y, FAR int *quo);
 #ifdef CONFIG_HAVE_DOUBLE
-double      remquo(double x, double y, int *quo);
+double      remquo(double x, double y, FAR int *quo);
 #endif
 #ifdef CONFIG_HAVE_LONG_DOUBLE
-long double remquol(long double x, long double y, int *quo);
+long double remquol(long double x, long double y, FAR int *quo);
 #endif
 
 float       scalblnf(float x, long int n);
@@ -602,6 +622,11 @@ double      scalbn(double x, int n);
 #ifdef CONFIG_HAVE_LONG_DOUBLE
 long double scalbnl(long double x, int n);
 #endif
+
+/* Values of ilogb() for zero and NaN */
+
+#define FP_ILOGBNAN     ((int)(~0u >> 1))
+#define FP_ILOGB0       (-FP_ILOGBNAN)
 
 #define FP_INFINITE     0
 #define FP_NAN          1

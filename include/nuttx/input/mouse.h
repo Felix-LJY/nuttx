@@ -56,9 +56,10 @@
 /* Common mouse IOCTL commands */
 
 #define MSIOC_VENDOR         _MSIOC(0x0001)  /* Vendor-specific commands */
+#define MSIOC_GRAB           _MSIOC(0x0002)  /* Grab/Release mouse events */
 
 #define MSC_FIRST            0x0001          /* First common command */
-#define MSC_NCMDS            1               /* One common commands */
+#define MSC_NCMDS            2               /* Two common commands */
 
 /* Vendor-specific command structure
  *
@@ -180,6 +181,25 @@ struct mouse_lowerhalf_s
    **************************************************************************/
 
   CODE int (*close)(FAR struct mouse_lowerhalf_s *lower);
+
+  /**************************************************************************
+   * Name: write
+   *
+   * Description:
+   *   Users can use this interface to implement custom write.
+   *
+   * Arguments:
+   *   lower   - The instance of lower half of mouse device.
+   *   buffer  - User defined specific buffer.
+   *   buflen  - User defined specific buffer size.
+   *
+   * Return Value:
+   *   Number of bytes written；a negated errno value on failure.
+   *
+   **************************************************************************/
+
+  CODE ssize_t (*write)(FAR struct mouse_lowerhalf_s *lower,
+                        FAR const char *buffer, size_t buflen);
 };
 
 /****************************************************************************
@@ -237,18 +257,14 @@ void mouse_unregister(FAR struct mouse_lowerhalf_s *lower,
                       FAR const char *path);
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
  * Public Function Prototypes
  ****************************************************************************/
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

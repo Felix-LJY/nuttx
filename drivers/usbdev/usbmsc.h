@@ -399,6 +399,12 @@ struct usbmsc_dev_s
   FAR struct usbdev_ep_s  *epbulkin;  /* Bulk IN endpoint structure */
   FAR struct usbdev_ep_s  *epbulkout; /* Bulk OUT endpoint structure */
   FAR struct usbdev_req_s *ctrlreq;   /* Control request (for ep0 setup responses) */
+  uint32_t          bulkinreqlen;     /* Allocated size of each bulk IN request
+                                       * buffer (== alloc expr; used to fill a
+                                       * full request per bulk-IN transfer) */
+  uint32_t          bulkoutreqlen;    /* Allocated size of each bulk OUT request
+                                       * buffer (== alloc expr; upper bound on
+                                       * an enlarged bulk-OUT request) */
 
   /* SCSI command processing */
 
@@ -410,9 +416,9 @@ struct usbmsc_dev_s
   uint8_t           cbwdir:2;         /* Direction from CBW. See USBMSC_FLAGS_DIR* definitions */
   uint8_t           cdblen;           /* Length of cdb[] from CBW */
   uint8_t           cbwlun;           /* LUN from the CBW */
-  uint16_t          nsectbytes;       /* Bytes buffered in iobuffer[] */
-  uint16_t          nreqbytes;        /* Bytes buffered in head write requests */
-  uint16_t          iosize;           /* Size of iobuffer[] */
+  uint32_t          nsectbytes;       /* Bytes buffered in iobuffer[] */
+  uint32_t          nreqbytes;        /* Bytes buffered in head write requests */
+  uint32_t          iosize;           /* Size of iobuffer[] */
   uint32_t          cbwlen;           /* Length of data from CBW */
   uint32_t          cbwtag;           /* Tag from the CBW */
   union
@@ -444,13 +450,9 @@ struct usbmsc_dev_s
  * Public Data
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#  define EXTERN extern "C"
 extern "C"
 {
-#else
-#  define EXTERN extern
 #endif
 
 /* String *******************************************************************/
@@ -458,10 +460,10 @@ extern "C"
 /* Mass storage class vendor/product/serial number strings */
 
 #ifndef CONFIG_USBMSC_COMPOSITE
-EXTERN const char g_mscvendorstr[];
-EXTERN const char g_mscproductstr[];
+extern const char g_mscvendorstr[];
+extern const char g_mscproductstr[];
 #ifndef CONFIG_BOARD_USBDEV_SERIALSTR
-EXTERN const char g_mscserialstr[];
+extern const char g_mscserialstr[];
 #endif
 
 /* If we are using a composite device, then vendor/product/serial number
@@ -469,10 +471,10 @@ EXTERN const char g_mscserialstr[];
  */
 
 #else
-EXTERN const char g_compvendorstr[];
-EXTERN const char g_compproductstr[];
+extern const char g_compvendorstr[];
+extern const char g_compproductstr[];
 #ifndef CONFIG_BOARD_USBDEV_SERIALSTR
-EXTERN const char g_compserialstr[];
+extern const char g_compserialstr[];
 #endif
 
 #define g_mscvendorstr  g_compvendorstr
@@ -486,7 +488,7 @@ EXTERN const char g_compserialstr[];
  * started
  */
 
-EXTERN FAR struct usbmsc_dev_s *g_usbmsc_handoff;
+extern FAR struct usbmsc_dev_s *g_usbmsc_handoff;
 
 /****************************************************************************
  * Public Function Prototypes
@@ -653,7 +655,6 @@ void usbmsc_rdcomplete(FAR struct usbdev_ep_s *ep,
 
 void usbmsc_deferredresponse(FAR struct usbmsc_dev_s *priv, bool failed);
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

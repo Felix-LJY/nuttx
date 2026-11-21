@@ -28,6 +28,7 @@
  ****************************************************************************/
 
 #include <nuttx/config.h>
+#include <stdbool.h>
 #include <nuttx/fs/ioctl.h>
 #include <nuttx/spi/spi.h>
 #include <nuttx/queue.h>
@@ -347,7 +348,7 @@ struct alt1250_dev_s
   uint64_t evtbitmap;
   mutex_t evtmaplock;
   mutex_t pfdlock;
-  FAR struct pollfd *pfd;
+  FAR struct pollfd_s *pfd;
   int rxthread_pid;
   sem_t rxthread_sem;
   FAR struct alt_evtbuffer_s *evtbuff;
@@ -373,11 +374,8 @@ typedef CODE int32_t (*parse_handler_t)(FAR struct alt1250_dev_s *dev,
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -401,7 +399,6 @@ FAR void *alt1250_register(FAR const char *devpath,
                            FAR struct spi_dev_s *dev,
                            FAR const struct alt1250_lower_s *lower);
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

@@ -27,6 +27,13 @@ nuttx_mod_compile_options(-fvisibility=hidden -mlong-calls)
 nuttx_elf_compile_options_ifdef(CONFIG_UNWINDER_ARM -fno-unwind-tables
                                 -fno-asynchronous-unwind-tables)
 
+# With LTO the compiler driver links the module: a linker option needs the -Wl,
+# prefix.  The FDPIC linker links an FDPIC module.
+
+if(NOT CONFIG_FDPIC AND "${CMAKE_LD}" MATCHES "gcc$")
+  set(ELF_LD_OPTION -Wl,)
+endif()
+
 if(CONFIG_FDPIC)
 
   # An FDPIC module is a shared object whose two segments the loader places
@@ -56,9 +63,26 @@ if(CONFIG_FDPIC)
       "${FDPIC_LD}"
       CACHE INTERNAL "Linker for FDPIC modules")
 
-  nuttx_elf_compile_options(-mfdpic -fPIC -Wa,--noexecstack)
+  # GCC before 14 does not pass --fdpic to the assembler for -mfdpic, and the
+  # assembler then rejects the FDPIC relocations, so pass it here.
+  #
+  # With -mlong-calls, GCC turns a call in tail position into a branch to the
+  # function descriptor rather than through it, which faults.  Keep it from
+  # making tail calls.
+
+  set(FDPIC_FLAGS -mfdpic -fPIC -Wa,--noexecstack -Wa,--fdpic
+                  -fno-optimize-sibling-calls)
+
+  nuttx_elf_compile_options(${FDPIC_FLAGS})
 
   nuttx_elf_link_options(-m armelf_linux_fdpiceabi -shared -z now)
+
+  # A shared library is an FDPIC shared object too, as LDMODULEFLAGS makes it in
+  # common/Toolchain.defs
+
+  nuttx_mod_compile_options(${FDPIC_FLAGS})
+
+  nuttx_mod_link_options(-m armelf_linux_fdpiceabi -shared -z now)
 
 elseif(CONFIG_PIC)
 
@@ -67,10 +91,11 @@ elseif(CONFIG_PIC)
   # register".  This mirrors CELFFLAGS in common/Toolchain.defs, which filters
   # --fixed-r9 back out of the inherited CFLAGS for the same reason.
 
-  nuttx_elf_compile_options(-mpic-register=r9)
+  nuttx_elf_compile_options(${PICFLAGS} -mpic-register=r9)
 
-  nuttx_elf_link_options(--unresolved-symbols=ignore-in-object-files
-                         --emit-relocs)
+  nuttx_elf_link_options(
+    ${ELF_LD_OPTION}--unresolved-symbols=ignore-in-object-files
+    ${ELF_LD_OPTION}--emit-relocs)
 
 endif()
 
@@ -81,16 +106,13 @@ if(CONFIG_BINFMT_ELF_RELOCATABLE AND NOT CONFIG_PIC)
   nuttx_elf_link_options(-r)
 endif()
 
-nuttx_mod_link_options(-r)
-
-nuttx_elf_link_options_ifdef(CONFIG_BUILD_KERNEL -Bstatic)
-
-if(CONFIG_DEBUG_OPT_UNUSED_SECTIONS)
-  if("${CMAKE_LD}" MATCHES "gcc$")
-    nuttx_elf_link_options(-Wl,--gc-sections)
-  else()
-    nuttx_elf_link_options(--gc-sections)
-  endif()
+if(NOT CONFIG_FDPIC)
+  nuttx_mod_link_options(-r)
 endif()
+
+nuttx_elf_link_options_ifdef(CONFIG_BUILD_KERNEL ${ELF_LD_OPTION}-Bstatic)
+
+nuttx_elf_link_options_ifdef(CONFIG_DEBUG_OPT_UNUSED_SECTIONS
+                             ${ELF_LD_OPTION}--gc-sections)
 
 nuttx_elf_link_options(-e _start)

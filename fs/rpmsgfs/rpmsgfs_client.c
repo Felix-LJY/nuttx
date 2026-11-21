@@ -26,13 +26,16 @@
 
 #include <nuttx/config.h>
 
+#include <assert.h>
 #include <string.h>
 #include <stdio.h>
 #include <sys/uio.h>
 #include <termios.h>
 #include <fcntl.h>
+#include <unistd.h>
 
 #include <nuttx/kmalloc.h>
+#include <nuttx/nuttx.h>
 #include <nuttx/fs/ioctl.h>
 #include <nuttx/rpmsg/rpmsg.h>
 #include <nuttx/semaphore.h>
@@ -92,6 +95,7 @@ static void rpmsgfs_device_created(struct rpmsg_device *rdev,
                                    FAR void *priv_);
 static void rpmsgfs_device_destroy(struct rpmsg_device *rdev,
                                    FAR void *priv_);
+static void rpmsgfs_ept_release(FAR struct rpmsg_endpoint *ept);
 static int  rpmsgfs_ept_cb(FAR struct rpmsg_endpoint *ept,
                            FAR void *data, size_t len, uint32_t src,
                            FAR void *priv);
@@ -346,6 +350,14 @@ static void rpmsgfs_ns_bound(struct rpmsg_endpoint *ept)
   rpmsg_post(&priv->ept, &priv->wait);
 }
 
+static void rpmsgfs_ept_release(FAR struct rpmsg_endpoint *ept)
+{
+  FAR struct rpmsgfs_s *priv = container_of(ept, struct rpmsgfs_s, ept);
+
+  nxsem_destroy(&priv->wait);
+  fs_heap_free(priv);
+}
+
 static void rpmsgfs_device_created(FAR struct rpmsg_device *rdev,
                                    FAR void *priv_)
 {
@@ -356,7 +368,9 @@ static void rpmsgfs_device_created(FAR struct rpmsg_device *rdev,
     {
       priv->ept.priv = priv;
       priv->ept.ns_bound_cb = rpmsgfs_ns_bound;
+      priv->ept.release_cb = rpmsgfs_ept_release;
       snprintf(buf, sizeof(buf), "%s%p", RPMSGFS_NAME_PREFIX, priv);
+      rpmsg_set_priority(&priv->ept, RPMSG_PRIO_RT);
       rpmsg_create_ept(&priv->ept, rdev, buf,
                        RPMSG_ADDR_ANY, RPMSG_ADDR_ANY,
                        rpmsgfs_ept_cb, NULL);
@@ -538,6 +552,7 @@ ssize_t rpmsgfs_client_read(FAR void *handle, int fd,
   msg.header.cookie  = (uintptr_t)&cookie;
   msg.fd             = fd;
   msg.count          = count;
+  msg.offset         = -1;
 
   ret = rpmsg_send(&priv->ept, &msg, sizeof(msg));
   if (ret < 0)
@@ -601,6 +616,7 @@ ssize_t rpmsgfs_client_write(FAR void *handle, int fd,
       msg->header.result  = -ENXIO;
       msg->fd             = fd;
       msg->count          = space;
+      msg->offset         = -1;
       memcpy(msg->buf, buf + written, space);
 
       ret = rpmsg_send_nocopy(&priv->ept, msg, sizeof(*msg) + space);
@@ -636,8 +652,12 @@ off_t rpmsgfs_client_lseek(FAR void *handle, int fd,
     .whence = whence,
   };
 
-  return rpmsgfs_send_recv(handle, RPMSGFS_LSEEK, true,
-           (struct rpmsgfs_header_s *)&msg, sizeof(msg), NULL);
+  off_t ret;
+
+  ret = rpmsgfs_send_recv(handle, RPMSGFS_LSEEK, true,
+                          (struct rpmsgfs_header_s *)&msg, sizeof(msg),
+                          NULL);
+  return ret < 0 ? ret : msg.offset;
 }
 
 int rpmsgfs_client_ioctl(FAR void *handle, int fd,
@@ -691,14 +711,14 @@ int rpmsgfs_client_ioctl(FAR void *handle, int fd,
   return ret;
 }
 
-void rpmsgfs_client_sync(FAR void *handle, int fd)
+int rpmsgfs_client_sync(FAR void *handle, int fd)
 {
   struct rpmsgfs_sync_s msg =
   {
     .fd = fd,
   };
 
-  rpmsgfs_send_recv(handle, RPMSGFS_SYNC, true,
+  return rpmsgfs_send_recv(handle, RPMSGFS_SYNC, true,
           (struct rpmsgfs_header_s *)&msg, sizeof(msg), NULL);
 }
 
@@ -822,16 +842,23 @@ int rpmsgfs_client_bind(FAR void **handle, FAR const char *cpuname)
 
 int rpmsgfs_client_unbind(FAR void *handle)
 {
-  struct rpmsgfs_s *priv = handle;
+  FAR struct rpmsgfs_s *priv = handle;
 
+  /* rpmsg_unregister_callback() runs device_destroy() once per rpmsg
+   * instance.  The matching one drops the endpoint's last reference and
+   * frees priv through rpmsgfs_ept_release(), while the sweep goes on
+   * reading priv->cpuname for the instances left, so hold a reference
+   * of our own across it.
+   */
+
+  rpmsg_ept_incref(&priv->ept);
   rpmsg_unregister_callback(priv,
                             rpmsgfs_device_created,
                             rpmsgfs_device_destroy,
                             NULL,
                             NULL);
+  rpmsg_ept_decref(&priv->ept);
 
-  nxsem_destroy(&priv->wait);
-  fs_heap_free(priv);
   return 0;
 }
 

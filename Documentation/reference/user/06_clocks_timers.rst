@@ -164,8 +164,12 @@ Clocks and Timers
   bases for per-thread timers. All implementations will support a
   ``clock_id`` of ``CLOCK_REALTIME``.
 
-  :param clockid: Specifies the clock to use as the timing base. Must be
-    ``CLOCK_REALTIME``.
+  :param clockid: Specifies the clock to use as the timing base:
+    ``CLOCK_REALTIME``, ``CLOCK_MONOTONIC`` or ``CLOCK_BOOTTIME``.  With
+    ``CONFIG_SCHED_CRITMONITOR`` also ``CLOCK_PROCESS_CPUTIME_ID``,
+    ``CLOCK_THREAD_CPUTIME_ID`` or a clock from ``clock_getcpuclockid()``
+    or ``pthread_getcpuclockid()``.  A timer on a CPU-time clock expires
+    when the process or the thread has used the CPU time.
   :param ``evp``: Refers to a user allocated sigevent structure that defines
     the asynchronous notification. evp may be NULL (see above).
   :param ``timerid``: The pre-thread timer created by the call to
@@ -325,8 +329,6 @@ Clocks and Timers
   delivered for the timer, or if the *Realtime Signals Extension* is not
   supported, the return value of ``timer_getoverrun()`` is unspecified.
 
-  **NOTE:** This interface is not currently implemented in NuttX.
-
   :param timerid: Specifies pre-thread timer, previously created by the
     call to ``timer_create()``, whose overrun count will be returned.
 
@@ -339,9 +341,7 @@ Clocks and Timers
        ``timer_delete()``.
 
   **POSIX Compatibility:** Comparable to the POSIX interface of the same
-  name. Differences from the full POSIX implementation include:
-
-  -  This interface is not currently implemented by NuttX.
+  name.
 
   **Assumptions/Limitations:**
 

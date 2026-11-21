@@ -2,6 +2,8 @@
 MPS2 AN500 Board
 ================
 
+.. tags:: arch:arm, chip:mps, vendor:arm
+
 This board configuration will use QEMU to emulate generic ARM v7-M series
 hardware platform and provides support for these devices:
 
@@ -19,6 +21,25 @@ Getting Started
 Running with qemu::
 
   $ qemu-system-arm -M mps2-an500 -nographic -kernel nuttx.bin
+
+Configurations
+==============
+
+citest
+------
+
+Flat build that the CI runs in QEMU with NTFC::
+
+  $ qemu-system-arm -M mps2-an500 -nographic -kernel nuttx
+
+citest_protected
+----------------
+
+Protected build (``CONFIG_BUILD_PROTECTED=y``) that the CI runs in QEMU with
+NTFC. QEMU loads the kernel and the user image::
+
+  $ qemu-system-arm -M mps2-an500 -nographic -kernel nuttx \
+      -device loader,file=nuttx_user.elf
 
 Debugging with QEMU
 ===================

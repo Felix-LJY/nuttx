@@ -233,6 +233,7 @@ static void i3c_bus_init_addrslots(FAR struct i3c_bus *bus)
 static void i3c_bus_init(FAR struct i3c_bus *i3cbus)
 {
   FAR struct i3c_master_controller *master;
+
   master = i3c_bus_to_i3c_master(i3cbus);
 
   nxmutex_init(&i3cbus->lock);
@@ -299,9 +300,9 @@ static int i3c_bus_set_mode(FAR struct i3c_bus *i3cbus,
 
   if (i3cbus->scl_rate.i3c > I3C_BUS_MAX_I3C_SCL_RATE ||
       i3cbus->scl_rate.i2c > I3C_BUS_I2C_FM_PLUS_SCL_RATE)
-      {
-        return -EINVAL;
-      }
+    {
+      return -EINVAL;
+    }
 
   return 0;
 }
@@ -660,6 +661,7 @@ static int i3c_master_getpid_locked(FAR struct i3c_master_controller *master,
   for (i = 0; i < sizeof(getpid->pid); i++)
     {
       int sft = (sizeof(getpid->pid) - i - 1) * 8;
+
       info->pid |= (uint64_t)getpid->pid[i] << sft;
     }
 
@@ -891,6 +893,11 @@ static int i3c_master_reattach_i3c_dev(FAR struct i3c_dev_desc *dev,
       i3c_bus_set_addr_slot_status(&master->bus,
                dev->info.dyn_addr,
                I3C_ADDR_SLOT_I3C_DEV);
+      if (old_dyn_addr)
+        {
+          i3c_bus_set_addr_slot_status(&master->bus, old_dyn_addr,
+                      I3C_ADDR_SLOT_FREE);
+        }
     }
 
   if (master->ops->reattach_i3c_dev)
@@ -1025,6 +1032,12 @@ static int i3c_master_bus_init(FAR struct i3c_master_controller *master)
       i3cerr("master_set_info() was not called in ->bus_init()\n");
       ret = -EINVAL;
       goto err_bus_cleanup;
+    }
+
+  if (master->i3c_bus_id < 0)
+    {
+      i3cinfo("i3c_bus_id = %d\n", master->i3c_bus_id);
+      return 0;
     }
 
   /* Reset all dynamic address that may have been assigned before
@@ -1180,10 +1193,9 @@ static void i3c_master_handle_ibi(FAR void *arg)
     }
 
   master->ops->recycle_ibi_slot(dev, slot);
-  atomic_sub(&dev->ibi->pending_ibis, 1);
-  if (!atomic_read(&dev->ibi->pending_ibis))
+  if (atomic_sub(&dev->ibi->pending_ibis, 1) == 1)
     {
-      sem_post(&dev->ibi->all_ibis_handled);
+      nxsem_post(&dev->ibi->all_ibis_handled);
     }
 }
 
@@ -1690,12 +1702,6 @@ int i3c_master_add_i3c_dev_locked(FAR struct i3c_master_controller *master,
       kmm_free(olddev);
     }
 
-  ret = i3c_master_reattach_i3c_dev(newdev, old_dyn_addr);
-  if (ret)
-    {
-      goto err_detach_dev;
-    }
-
   /* Depending on our previous state, the expected dynamic address might
    * differ:
    * - if the device already had a dynamic address assigned, let's try to
@@ -2034,13 +2040,21 @@ int i3c_dev_disable_ibi_locked(FAR struct i3c_dev_desc *dev)
       return ret;
     }
 
-  if (atomic_read(&dev->ibi->pending_ibis))
+  /* Pair the pending check with the worker's completion notification so
+   * that the IBI state cannot be freed before the final post finishes.
+   * Recheck after each wait because earlier IBIs may have left a token.
+   */
+
+  while (atomic_read(&dev->ibi->pending_ibis))
     {
-      sem_wait(&dev->ibi->all_ibis_handled);
+      ret = nxsem_wait_uninterruptible(&dev->ibi->all_ibis_handled);
+      if (ret < 0)
+        {
+          return ret;
+        }
     }
 
   dev->ibi->enabled = false;
-  sem_destroy(&dev->ibi->all_ibis_handled);
 
   return 0;
 }
@@ -2088,7 +2102,7 @@ int i3c_dev_request_ibi_locked(FAR struct i3c_dev_desc *dev,
     }
 
   atomic_set(&ibi->pending_ibis, 0);
-  sem_init(&ibi->all_ibis_handled, 0, 1);
+  nxsem_init(&ibi->all_ibis_handled, 0, 0);
   ibi->handler = req->handler;
   ibi->max_payload_len = req->max_payload_len;
   ibi->num_slots = req->num_slots;
@@ -2097,6 +2111,7 @@ int i3c_dev_request_ibi_locked(FAR struct i3c_dev_desc *dev,
   ret = master->ops->request_ibi(dev, req);
   if (ret)
     {
+      nxsem_destroy(&ibi->all_ibis_handled);
       kmm_free(ibi);
       dev->ibi = NULL;
     }
@@ -2114,6 +2129,7 @@ void i3c_dev_free_ibi_locked(FAR struct i3c_dev_desc *dev)
     }
 
   master->ops->free_ibi(dev);
+  nxsem_destroy(&dev->ibi->all_ibis_handled);
   kmm_free(dev->ibi);
   dev->ibi = NULL;
 }
@@ -2244,6 +2260,11 @@ int i3c_master_register(FAR struct i3c_master_controller *master,
   i3c_master_register_new_i3c_devs(master);
   i3c_bus_normaluse_unlock(&master->bus);
 
+  if (master->i3c_bus_id < 0)
+    {
+      return 0;
+    }
+
   /* Expose I3C driver node by the i3c_driver on our I3C Bus, i3c driver id
    * equal to i3c bus id.
    */
@@ -2282,7 +2303,16 @@ err_cleanup_bus:
 void i3c_master_unregister(FAR struct i3c_master_controller *master)
 {
   i2c_unregister_driver(master);
+
+  /* bus_init() and set_info() ran for every controller, so always clean
+   * up the bus. Only the /dev/i3cN node depends on i3c_bus_id.
+   */
+
   i3c_master_unregister_i3c_devs(master);
   i3c_master_bus_cleanup(master);
-  i3c_unregister_driver(master);
+
+  if (master->i3c_bus_id >= 0)
+    {
+      i3c_unregister_driver(master);
+    }
 }

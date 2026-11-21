@@ -69,17 +69,23 @@ static int     fat_open(FAR struct file *filep, FAR const char *relpath,
 static int     fat_close(FAR struct file *filep);
 static ssize_t fat_read(FAR struct file *filep, FAR char *buffer,
                  size_t buflen);
+#ifndef CONFIG_FS_FAT_READONLY
 static ssize_t fat_write(FAR struct file *filep, FAR const char *buffer,
                  size_t buflen);
+#endif
 static off_t   fat_seek(FAR struct file *filep, off_t offset, int whence);
 static int     fat_ioctl(FAR struct file *filep, int cmd,
                  unsigned long arg);
 
+#ifndef CONFIG_FS_FAT_READONLY
 static int     fat_sync(FAR struct file *filep);
+#endif
 static int     fat_dup(FAR const struct file *oldp, FAR struct file *newp);
 static int     fat_fstat(FAR const struct file *filep,
                  FAR struct stat *buf);
+#ifndef CONFIG_FS_FAT_READONLY
 static int     fat_truncate(FAR struct file *filep, off_t length);
+#endif
 
 static FAR struct fat_shared_s *
                fat_shared_find(FAR struct fat_mountpt_s *fs,
@@ -90,8 +96,10 @@ static void    fat_shared_reset_cursors(FAR struct fat_mountpt_s *fs,
                  FAR struct fat_shared_s *shared);
 static int     fat_shared_release(FAR struct fat_mountpt_s *fs,
                  FAR struct fat_shared_s *shared);
+#ifndef CONFIG_FS_FAT_READONLY
 static int     fat_shrinkshared(FAR struct fat_mountpt_s *fs,
                  FAR struct fat_file_s *ff, off_t length);
+#endif
 
 static int     fat_opendir(FAR struct inode *mountpt,
                  FAR const char *relpath, FAR struct fs_dirent_s **dir);
@@ -110,6 +118,7 @@ static int     fat_unbind(FAR void *handle,
 static int     fat_statfs(FAR struct inode *mountpt,
                  FAR struct statfs *buf);
 
+#ifndef CONFIG_FS_FAT_READONLY
 static int     fat_unlink(FAR struct inode *mountpt,
                  FAR const char *relpath);
 static int     fat_mkdir(FAR struct inode *mountpt, FAR const char *relpath,
@@ -117,14 +126,59 @@ static int     fat_mkdir(FAR struct inode *mountpt, FAR const char *relpath,
 static int     fat_rmdir(FAR struct inode *mountpt, FAR const char *relpath);
 static int     fat_rename(FAR struct inode *mountpt,
                  FAR const char *oldrelpath, FAR const char *newrelpath);
+#endif
 static int     fat_stat_common(FAR struct fat_mountpt_s *fs,
-                 FAR uint8_t *direntry, FAR struct stat *buf);
+                 FAR uint8_t *direntry,
+                 FAR const struct fat_shared_s *shared,
+                 FAR struct stat *buf);
 static int     fat_stat_file(FAR struct fat_mountpt_s *fs,
-                 FAR uint8_t *direntry, FAR struct stat *buf);
+                 FAR uint8_t *direntry,
+                 FAR const struct fat_shared_s *shared,
+                 FAR struct stat *buf);
 static int     fat_stat_root(FAR struct fat_mountpt_s *fs,
                  FAR struct stat *buf);
 static int     fat_stat(struct inode *mountpt, const char *relpath,
                  FAR struct stat *buf);
+
+#ifdef CONFIG_FS_FAT_READONLY
+static int fat_sync(FAR struct file *filep)
+{
+  (void)filep;
+  return OK;
+}
+
+static int fat_unlink(FAR struct inode *mountpt, FAR const char *relpath)
+{
+  (void)mountpt;
+  (void)relpath;
+  return -EROFS;
+}
+
+static int fat_mkdir(FAR struct inode *mountpt, FAR const char *relpath,
+                     mode_t mode)
+{
+  (void)mountpt;
+  (void)relpath;
+  (void)mode;
+  return -EROFS;
+}
+
+static int fat_rmdir(FAR struct inode *mountpt, FAR const char *relpath)
+{
+  (void)mountpt;
+  (void)relpath;
+  return -EROFS;
+}
+
+static int fat_rename(FAR struct inode *mountpt, FAR const char *oldrelpath,
+                      FAR const char *newrelpath)
+{
+  (void)mountpt;
+  (void)oldrelpath;
+  (void)newrelpath;
+  return -EROFS;
+}
+#endif
 
 /****************************************************************************
  * Public Data
@@ -140,11 +194,19 @@ const struct mountpt_operations g_fat_operations =
   fat_open,          /* open */
   fat_close,         /* close */
   fat_read,          /* read */
+#ifdef CONFIG_FS_FAT_READONLY
+  NULL,              /* write */
+#else
   fat_write,         /* write */
+#endif
   fat_seek,          /* seek */
   fat_ioctl,         /* ioctl */
   NULL,              /* mmap */
+#ifdef CONFIG_FS_FAT_READONLY
+  NULL,              /* truncate */
+#else
   fat_truncate,      /* truncate */
+#endif
   NULL,              /* poll */
   NULL,              /* readv */
   NULL,              /* writev */
@@ -266,6 +328,7 @@ static void fat_shared_reset_cursors(FAR struct fat_mountpt_s *fs,
       if (ff->ff_shared == shared)
         {
           ff->ff_currentcluster   = shared->s_startcluster;
+          ff->ff_currentsector    = 0;
           ff->ff_sectorsincluster = fs->fs_fatsecperclus;
           ff->ff_pos              = 0;
         }
@@ -345,14 +408,15 @@ static int fat_shared_release(FAR struct fat_mountpt_s *fs,
  * Name: fat_shrinkshared
  *
  * Description:
- *   Shrink a file described only by its shared (in-memory) state to a
- *   smaller, non-zero length.  Used when the directory entry is gone
- *   (unlinked file) and fat_dirshrink() has no entry to work with.
+ *   Trim the shared cluster chain to a non-zero length.  Used for unlinked
+ *   files and to release clusters allocated by a failed extension without
+ *   changing the directory entry.
  *
  *   The caller holds fs_lock and has already invalidated attached caches.
  *
  ****************************************************************************/
 
+#ifndef CONFIG_FS_FAT_READONLY
 static int fat_shrinkshared(FAR struct fat_mountpt_s *fs,
                             FAR struct fat_file_s *ff, off_t length)
 {
@@ -363,8 +427,7 @@ static int fat_shrinkshared(FAR struct fat_mountpt_s *fs,
   int32_t cluster;
   int ret;
 
-  DEBUGASSERT(shared->s_pending && length > 0 &&
-              length < shared->s_size);
+  DEBUGASSERT(length > 0 && length <= shared->s_size);
 
   lastcluster = shared->s_startcluster;
 
@@ -388,11 +451,11 @@ static int fat_shrinkshared(FAR struct fat_mountpt_s *fs,
 
       if (remaining <= clustersize)
         {
-          /* No.. then nullify next cluster -- removing it from the
-           * chain.
+          /* Keep the retained cluster allocated and terminate its chain.
+           * A zero FAT entry would mark this live cluster as free.
            */
 
-          ret = fat_putcluster(fs, lastcluster, 0);
+          ret = fat_putcluster(fs, lastcluster, FAT_EOF);
           if (ret < 0)
             {
               return ret;
@@ -430,6 +493,7 @@ static int fat_shrinkshared(FAR struct fat_mountpt_s *fs,
 
   return fat_updatefsinfo(fs);
 }
+#endif /* !CONFIG_FS_FAT_READONLY */
 
 /****************************************************************************
  * Name: fat_open
@@ -449,6 +513,18 @@ static int fat_open(FAR struct file *filep, FAR const char *relpath,
   /* Sanity checks */
 
   DEBUGASSERT(filep->f_priv == NULL);
+
+#ifdef CONFIG_FS_FAT_READONLY
+  /* In read-only mode, reject any attempt to open a file for writing or
+   * to create/truncate a file.
+   */
+
+  if ((oflags & O_ACCMODE) != O_RDONLY ||
+      (oflags & (O_CREAT | O_TRUNC | O_APPEND)) != 0)
+    {
+      return -EROFS;
+    }
+#endif
 
   /* Get the mountpoint inode reference from the file structure and the
    * mountpoint private data from the inode structure
@@ -534,7 +610,7 @@ static int fat_open(FAR struct file *filep, FAR const char *relpath,
        * access is ignored.
        */
 
-      if ((oflags & (O_TRUNC | O_WRONLY)) == (O_TRUNC | O_WRONLY))
+      if ((oflags & O_TRUNC) != 0 && (oflags & O_ACCMODE) != O_RDONLY)
         {
           /* Truncate the file to zero length.  If the file is already
            * open elsewhere, the shared state is updated as well so that
@@ -552,6 +628,12 @@ static int fat_open(FAR struct file *filep, FAR const char *relpath,
                 {
                   goto errout_with_lock;
                 }
+
+              /* The directory entry may not describe the live chain yet. */
+
+              DIR_PUTFSTCLUSTHI(direntry, truncshared->s_startcluster >> 16);
+              DIR_PUTFSTCLUSTLO(direntry,
+                               truncshared->s_startcluster & 0xffff);
             }
 
           ret = fat_dirtruncate(fs, direntry);
@@ -1034,10 +1116,10 @@ static int fat_get_sectors(FAR struct file *filep, bool read)
    *          s_size                              f_pos
    */
 
-  /* zero area (1) */
+  /* zero area (1): there is none if s_size is on a cluster boundary */
 
   if (i == num_clu && filep->f_pos > shared->s_size &&
-      shared->s_size != 0)
+      (shared->s_size & (clu_size - 1)) != 0)
     {
       zero_start = ff->ff_shared->s_size & (clu_size - 1);
 
@@ -1065,6 +1147,11 @@ static int fat_get_sectors(FAR struct file *filep, bool read)
     {
       cluster = fat_extendchain(fs, cluster);
 
+      if (cluster == 0)
+        {
+          return -ENOSPC;
+        }
+
       if (cluster < 2 || cluster >= fs->fs_nclusters + 2)
         {
           return -EIO;
@@ -1087,6 +1174,11 @@ static int fat_get_sectors(FAR struct file *filep, bool read)
   if (i == new_num_clu - 1)
     {
       cluster = fat_extendchain(fs, cluster);
+
+      if (cluster == 0)
+        {
+          return -ENOSPC;
+        }
 
       if (cluster < 2 || cluster >= fs->fs_nclusters + 2)
         {
@@ -1355,13 +1447,14 @@ errout_with_lock:
  * Name: fat_write
  ****************************************************************************/
 
+#ifndef CONFIG_FS_FAT_READONLY
 static ssize_t fat_write(FAR struct file *filep, FAR const char *buffer,
                          size_t buflen)
 {
   FAR struct inode *inode;
   FAR struct fat_mountpt_s *fs;
   FAR struct fat_file_s *ff;
-  unsigned int byteswritten;
+  unsigned int byteswritten = 0;
   unsigned int writesize;
   FAR uint8_t *userbuffer = (FAR uint8_t *)buffer;
   int sectorindex;
@@ -1420,12 +1513,18 @@ static ssize_t fat_write(FAR struct file *filep, FAR const char *buffer,
       goto errout_with_lock;
     }
 
+  /* With O_APPEND, each write starts at the end of the file */
+
+  if ((filep->f_oflags & O_APPEND) != 0)
+    {
+      filep->f_pos = ff->ff_shared->s_size;
+    }
+
   /* Loop until either (1) all data has been transferred, or (2) an
    * error occurs.  We assume we start with the current sector in
    * cache (ff_currentsector)
    */
 
-  byteswritten = 0;
   sectorindex = filep->f_pos & SEC_NDXMASK(fs);
 
   while (buflen > 0)
@@ -1596,8 +1695,19 @@ fat_write_restart:
 
 errout_with_lock:
   nxmutex_unlock(&fs->fs_lock);
+
+  /* Return the bytes that were written before the error, if any.  The
+   * next write then reports the error.
+   */
+
+  if (byteswritten > 0)
+    {
+      return byteswritten;
+    }
+
   return ret;
 }
+#endif /* !CONFIG_FS_FAT_READONLY */
 
 /****************************************************************************
  * Name: fat_seek
@@ -2190,6 +2300,7 @@ static int fat_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
  *
  ****************************************************************************/
 
+#ifndef CONFIG_FS_FAT_READONLY
 static int fat_sync(FAR struct file *filep)
 {
   FAR struct inode *inode;
@@ -2323,6 +2434,7 @@ errout_with_lock:
   nxmutex_unlock(&fs->fs_lock);
   return ret;
 }
+#endif /* !CONFIG_FS_FAT_READONLY */
 
 /****************************************************************************
  * Name: fat_dup
@@ -2624,7 +2736,8 @@ static int fat_fstat(FAR const struct file *filep, FAR struct stat *buf)
 
       memset(buf, 0, sizeof(struct stat));
 
-      buf->st_mode = S_IROTH | S_IRGRP | S_IRUSR | S_IFREG;
+      buf->st_mode = S_IROTH | S_IRGRP | S_IRUSR | S_IXOTH | S_IXGRP |
+                     S_IXUSR | S_IFREG;
       if ((fstatshared->s_attr & FATATTR_READONLY) == 0)
         {
           buf->st_mode |= S_IWOTH | S_IWGRP | S_IWUSR;
@@ -2664,7 +2777,7 @@ static int fat_fstat(FAR const struct file *filep, FAR struct stat *buf)
        * to it.
        */
 
-      ret = fat_stat_file(fs, direntry, buf);
+      ret = fat_stat_file(fs, direntry, shared, buf);
     }
 
 errout_with_lock:
@@ -2681,6 +2794,7 @@ errout_with_lock:
  *
  ****************************************************************************/
 
+#ifndef CONFIG_FS_FAT_READONLY
 static int fat_truncate(FAR struct file *filep, off_t length)
 {
   FAR struct inode *inode;
@@ -2804,6 +2918,13 @@ static int fat_truncate(FAR struct file *filep, off_t length)
           ndx      = (shared->s_dirindex & DIRSEC_NDXMASK(fs)) * DIR_SIZE;
           direntry = &fs->fs_buffer[ndx];
 
+          /* The open file may have grown without a directory sync yet.
+           * Truncate the canonical chain rather than a stale on-disk one.
+           */
+
+          DIR_PUTFSTCLUSTHI(direntry, shared->s_startcluster >> 16);
+          DIR_PUTFSTCLUSTLO(direntry, shared->s_startcluster & 0xffff);
+
           /* Handle the simple case where we are shrinking the file to
            * zero length.
            */
@@ -2839,12 +2960,66 @@ static int fat_truncate(FAR struct file *filep, off_t length)
     }
   else
     {
+      off_t savepos;
+
       /* Otherwise we are extending the file.  This is essentially the same
        * as a write except that (1) we write zeros and (2) we don't update
        * the file position.
        */
 
-      ret = fat_dirextend(fs, ff, length);
+      ret = fat_shared_invalidate(fs, ff->ff_shared);
+      if (ret < 0)
+        {
+          goto errout_with_lock;
+        }
+
+      /* Position the traversal cursor at EOF. The caller's file offset
+       * can be anywhere, and a newly opened handle starts at the first
+       * cluster of the file.
+       */
+
+      ff->ff_bflags |= FFBUFF_MODIFIED;
+
+      savepos      = filep->f_pos;
+      filep->f_pos = oldsize;
+      ret          = fat_get_sectors(filep, false);
+      filep->f_pos = savepos;
+      if (ret >= 0)
+        {
+          ret = fat_dirextend(fs, ff, length);
+        }
+
+      if (ret < 0)
+        {
+          int errcode = ret;
+
+          /* All pre-existing data was flushed before extension.  Discard
+           * cached zeros before releasing their clusters.
+           */
+
+          ff->ff_bflags     &= ~(FFBUFF_DIRTY | FFBUFF_VALID);
+          ff->ff_cachesector = 0;
+
+          if (oldsize == 0)
+            {
+              ret = fat_removechain(fs, ff->ff_shared->s_startcluster);
+              if (ret >= 0)
+                {
+                  ff->ff_shared->s_startcluster = 0;
+                }
+            }
+          else
+            {
+              ret = fat_shrinkshared(fs, ff, oldsize);
+            }
+
+          if (ret >= 0)
+            {
+              ret = errcode;
+            }
+        }
+
+      fat_shared_reset_cursors(fs, ff->ff_shared);
       if (ret >= 0)
         {
           /* The truncation has completed without error.  Update the file
@@ -2856,10 +3031,16 @@ static int fat_truncate(FAR struct file *filep, off_t length)
         }
     }
 
+  if (ret == OK && oldsize != length)
+    {
+      ff->ff_bflags |= FFBUFF_MODIFIED;
+    }
+
 errout_with_lock:
   nxmutex_unlock(&fs->fs_lock);
   return ret;
 }
+#endif /* !CONFIG_FS_FAT_READONLY */
 
 /****************************************************************************
  * Name: fat_readdir
@@ -3149,7 +3330,11 @@ static int fat_bind(FAR struct inode *blkdriver, FAR const void *data,
    * by this block driver.
    */
 
+#ifdef CONFIG_FS_FAT_READONLY
+  ret = fat_mount(fs, false);
+#else
   ret = fat_mount(fs, true);
+#endif
   if (ret != 0)
     {
       nxmutex_destroy(&fs->fs_lock);
@@ -3333,6 +3518,7 @@ errout_with_lock:
  *
  ****************************************************************************/
 
+#ifndef CONFIG_FS_FAT_READONLY
 static int fat_unlink(FAR struct inode *mountpt, FAR const char *relpath)
 {
   FAR struct fat_mountpt_s *fs;
@@ -3368,6 +3554,7 @@ static int fat_unlink(FAR struct inode *mountpt, FAR const char *relpath)
   nxmutex_unlock(&fs->fs_lock);
   return ret;
 }
+#endif /* !CONFIG_FS_FAT_READONLY */
 
 /****************************************************************************
  * Name: fat_mkdir
@@ -3376,6 +3563,7 @@ static int fat_unlink(FAR struct inode *mountpt, FAR const char *relpath)
  *
  ****************************************************************************/
 
+#ifndef CONFIG_FS_FAT_READONLY
 static int fat_mkdir(FAR struct inode *mountpt, FAR const char *relpath,
                      mode_t mode)
 {
@@ -3594,6 +3782,7 @@ errout_with_lock:
   nxmutex_unlock(&fs->fs_lock);
   return ret;
 }
+#endif /* !CONFIG_FS_FAT_READONLY */
 
 /****************************************************************************
  * Name: fat_rmdir
@@ -3602,6 +3791,7 @@ errout_with_lock:
  *
  ****************************************************************************/
 
+#ifndef CONFIG_FS_FAT_READONLY
 static int fat_rmdir(FAR struct inode *mountpt, FAR const char *relpath)
 {
   FAR struct fat_mountpt_s *fs;
@@ -3639,6 +3829,7 @@ static int fat_rmdir(FAR struct inode *mountpt, FAR const char *relpath)
   nxmutex_unlock(&fs->fs_lock);
   return ret;
 }
+#endif /* !CONFIG_FS_FAT_READONLY */
 
 /****************************************************************************
  * Name: fat_rename
@@ -3647,6 +3838,7 @@ static int fat_rmdir(FAR struct inode *mountpt, FAR const char *relpath)
  *
  ****************************************************************************/
 
+#ifndef CONFIG_FS_FAT_READONLY
 static int fat_rename(FAR struct inode *mountpt, FAR const char *oldrelpath,
                       FAR const char *newrelpath)
 {
@@ -3829,6 +4021,7 @@ errout_with_lock:
   nxmutex_unlock(&fs->fs_lock);
   return ret;
 }
+#endif /* !CONFIG_FS_FAT_READONLY */
 
 /****************************************************************************
  * Name: fat_stat_common
@@ -3839,7 +4032,9 @@ errout_with_lock:
  ****************************************************************************/
 
 static int fat_stat_common(FAR struct fat_mountpt_s *fs,
-                           FAR uint8_t *direntry, FAR struct stat *buf)
+                           FAR uint8_t *direntry,
+                           FAR const struct fat_shared_s *shared,
+                           FAR struct stat *buf)
 {
   uint16_t fatdate;
   uint16_t date2;
@@ -3865,9 +4060,12 @@ static int fat_stat_common(FAR struct fat_mountpt_s *fs,
   fattime           = DIR_GETCRTIME(direntry);
   buf->st_ctime     = fat_fattime2systime(fattime, fatdate);
 
-  /* File/directory size, access block size */
+  /* File/directory size, access block size.  The size of an open file is
+   * in its shared state: the directory entry has it only after a sync.
+   */
 
-  buf->st_size      = DIR_GETFILESIZE(direntry);
+  buf->st_size      = shared != NULL ? shared->s_size :
+                      DIR_GETFILESIZE(direntry);
   buf->st_blksize   = fs->fs_fatsecperclus * fs->fs_hwsectorsize;
   buf->st_blocks    = (buf->st_size + buf->st_blksize - 1) / buf->st_blksize;
 
@@ -3884,7 +4082,9 @@ static int fat_stat_common(FAR struct fat_mountpt_s *fs,
  ****************************************************************************/
 
 static int fat_stat_file(FAR struct fat_mountpt_s *fs,
-                         FAR uint8_t *direntry, FAR struct stat *buf)
+                         FAR uint8_t *direntry,
+                         FAR const struct fat_shared_s *shared,
+                         FAR struct stat *buf)
 {
   uint8_t  attribute;
 
@@ -3900,11 +4100,12 @@ static int fat_stat_file(FAR struct fat_mountpt_s *fs,
       return -ENOENT;
     }
 
-  /* Set the access permissions.  The file/directory is always readable
-   * by everyone but may be writeable by no-one.
+  /* Set the access permissions.  FAT has no execute permission.  The
+   * file/directory is always readable and executable by everyone, as on
+   * other systems, but may be writeable by no-one.
    */
 
-  buf->st_mode = S_IROTH | S_IRGRP | S_IRUSR;
+  buf->st_mode = S_IROTH | S_IRGRP | S_IRUSR | S_IXOTH | S_IXGRP | S_IXUSR;
   if ((attribute & FATATTR_READONLY) == 0)
     {
       buf->st_mode |= S_IWOTH | S_IWGRP | S_IWUSR;
@@ -3921,7 +4122,7 @@ static int fat_stat_file(FAR struct fat_mountpt_s *fs,
       buf->st_mode |= S_IFREG;
     }
 
-  return fat_stat_common(fs, direntry, buf);
+  return fat_stat_common(fs, direntry, shared, buf);
 }
 
 /****************************************************************************
@@ -3940,8 +4141,7 @@ static int fat_stat_root(FAR struct fat_mountpt_s *fs, FAR struct stat *buf)
 
   /* It's directory name of the mount point */
 
-  buf->st_mode = S_IFDIR | S_IROTH | S_IRGRP | S_IRUSR | S_IWOTH |
-                 S_IWGRP | S_IWUSR;
+  buf->st_mode = S_IFDIR | S_IRWXO | S_IRWXG | S_IRWXU;
 
   return OK;
 }
@@ -3957,6 +4157,7 @@ static int fat_stat(FAR struct inode *mountpt, FAR const char *relpath,
                     FAR struct stat *buf)
 {
   FAR struct fat_mountpt_s *fs;
+  FAR struct fat_shared_s *shared;
   struct fat_dirinfo_s dirinfo;
   FAR uint8_t *direntry;
   int ret;
@@ -4006,11 +4207,16 @@ static int fat_stat(FAR struct inode *mountpt, FAR const char *relpath,
 
       direntry = &fs->fs_buffer[dirinfo.fd_seq.ds_offset];
 
+      /* The shared state of the file, if the file is open */
+
+      shared = fat_shared_find(fs, fs->fs_currentsector,
+                               dirinfo.dir.fd_index);
+
       /* Call fat_stat_file() to create the buf and to save information to
        * the stat buffer.
        */
 
-      ret = fat_stat_file(fs, direntry, buf);
+      ret = fat_stat_file(fs, direntry, shared, buf);
     }
 
 errout_with_lock:

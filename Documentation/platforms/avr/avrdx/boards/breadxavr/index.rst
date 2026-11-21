@@ -4,6 +4,8 @@
 AVR128DA28 on breadboard
 ========================
 
+.. tags:: arch:avr, chip:avrdx, vendor:microchip
+
 This is a AVR128DA28 stuck into a breadboard for the purpose
 of developing this port for NuttX. It can also be used as a reference
 for making ports for other boards.
@@ -22,6 +24,17 @@ nsh
 Basic testing configuration. When :menuselection:`Library Routines --> Support Builtin Applications`
 and :menuselection:`Application Configuration --> NSH Library --> Enable built-in applications`
 are both set, allows adding and execution of other applications.
+
+ws2812
+------
+
+Testing configuration with NSH and also ws2812 example from NuttX apps enabled and configured
+to have LEDs connected to serial port ``USART2`` and console to ``USART0``.
+
+This configuration uses software interrupt emulation - see :doc:`../../docs/software_interrupt`.
+I/O port C pin 3 is used - it is switched to output automatically and must not be connected
+to any voltage driving circuitry. If needed, another pin can be chosen instead.
+
 
 Peripheral usage
 ================

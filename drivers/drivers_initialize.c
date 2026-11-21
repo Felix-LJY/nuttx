@@ -30,6 +30,7 @@
 #include <nuttx/drivers/drivers.h>
 #include <nuttx/drivers/rpmsgdev.h>
 #include <nuttx/drivers/rpmsgblk.h>
+#include <nuttx/dma-heap.h>
 #include <nuttx/fs/loop.h>
 #include <nuttx/fs/smart.h>
 #include <nuttx/fs/loopmtd.h>
@@ -44,8 +45,10 @@
 #include <nuttx/power/pm.h>
 #include <nuttx/power/regulator.h>
 #include <nuttx/reset/reset-controller.h>
-#include <nuttx/segger/rtt.h>
+#include <nuttx/rpmsg/rpmsg.h>
+#include <nuttx/rtt.h>
 #include <nuttx/sensors/sensor.h>
+#include <nuttx/serial/netdev_console.h>
 #include <nuttx/serial/pty.h>
 #include <nuttx/serial/uart_hostfs.h>
 #include <nuttx/serial/uart_ram.h>
@@ -53,6 +56,7 @@
 #include <nuttx/syslog/syslog_console.h>
 #include <nuttx/thermal.h>
 #include <nuttx/timers/ptp_clock_dummy.h>
+#include <nuttx/timers/ptp_pps.h>
 #include <nuttx/timers/capture.h>
 #include <nuttx/trace.h>
 #include <nuttx/usrsock/usrsock_rpmsg.h>
@@ -162,6 +166,10 @@ void drivers_initialize(void)
   note_initialize();    /* Non-standard /dev/note */
 #endif
 
+#if defined(CONFIG_RPMSG)
+  rpmsg_initialize();
+#endif
+
 #if defined(CONFIG_CLK_RPMSG)
   clk_rpmsg_server_initialize();
 #endif
@@ -196,6 +204,8 @@ void drivers_initialize(void)
   lwlconsole_init();
 #elif defined(CONFIG_CONSOLE_SYSLOG)
   syslog_console_init();
+#elif defined(CONFIG_CONSOLE_NETDEV)
+  netdev_console_init();
 #endif
 
 #ifdef CONFIG_UART_HOSTFS
@@ -214,6 +224,10 @@ void drivers_initialize(void)
   up_cryptoinitialize();
 #endif
 
+#ifdef CONFIG_CRYPTO_BACKENDS
+  crypto_backends_init();
+#endif
+
 #ifdef CONFIG_CRYPTO_CRYPTODEV
   devcrypto_register();
 #endif
@@ -228,6 +242,10 @@ void drivers_initialize(void)
 
 #ifdef CONFIG_UINPUT_KEYBOARD
   uinput_keyboard_initialize();
+#endif
+
+#ifdef CONFIG_UINPUT_MOUSE
+  uinput_mouse_initialize();
 #endif
 
 #ifdef CONFIG_NET_LOOPBACK
@@ -322,6 +340,16 @@ void drivers_initialize(void)
 
 #ifdef CONFIG_FAKE_CAPTURE
   fake_capture_initialize(2);
+#endif
+
+#ifdef CONFIG_PTP_PPS_FAKE
+  ptp_pps_register(fake_capture_create(1, 10),
+                   CONFIG_FAKE_CAPTURE_COUNTER_FREQ,
+                   CONFIG_PTP_PPS_FAKE_DEVNO);
+#endif
+
+#ifdef CONFIG_DMABUF_HEAPS
+  dmabuf_system_heap_create();
 #endif
 
   drivers_trace_end();

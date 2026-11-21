@@ -32,7 +32,20 @@
 #include <nuttx/tls.h>
 #include <nuttx/sched.h>
 
-#ifndef up_tls_info
+#include "libc.h"
+
+/****************************************************************************
+ * Public Data
+ ****************************************************************************/
+
+/* tls_emutls.c sets them on its first use, so exit() and the loader do not
+ * link it.
+ */
+
+#ifdef CONFIG_TLS_EMUTLS
+CODE void (*g_tls_emutls_destruct)(void);
+CODE void (*g_tls_emutls_release)(FAR const void *start, size_t size);
+#endif
 
 /****************************************************************************
  * Public Functions
@@ -43,8 +56,9 @@
  *
  * Description:
  *   Return a reference to the tls_info_s structure.  This is used as part
- *   of the internal implementation of tls_get/set_elem() and ONLY for the
- *   where CONFIG_TLS_ALIGNED is *not* defined or __KERNEL__ is defined.
+ *   of the internal implementation of tls_get/set_elem() when neither
+ *   up_tls_info() nor CONFIG_TLS_ALIGNED gives it, and in the kernel,
+ *   where up_tls_info() may not be used.
  *
  * Input Parameters:
  *   None.
@@ -75,4 +89,3 @@ FAR struct tls_info_s *tls_get_info(void)
   return info;
 }
 
-#endif /* !defined(up_tls_info) */

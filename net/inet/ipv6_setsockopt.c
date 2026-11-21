@@ -42,8 +42,6 @@
 #include "udp/udp.h"
 #include "utils/utils.h"
 
-#if defined(CONFIG_NET_IPv6) && defined(CONFIG_NET_SOCKOPTS)
-
 /****************************************************************************
  * Public Functions
  ****************************************************************************/
@@ -99,6 +97,40 @@ int ipv6_setsockopt(FAR struct socket *psock, int option,
         ret = mld_leavegroup(value);
         break;
 
+      case MCAST_JOIN_GROUP:      /* Join a multicast group (RFC 3678) */
+      case MCAST_LEAVE_GROUP:     /* Leave a multicast group (RFC 3678) */
+        {
+          FAR const struct group_req *greq =
+            (FAR const struct group_req *)value;
+          struct ipv6_mreq mrec;
+
+          if (value_len < sizeof(struct group_req))
+            {
+              ret = -EINVAL;
+              break;
+            }
+
+          if (greq->gr_group.ss_family != AF_INET6)
+            {
+              ret = -EADDRNOTAVAIL;
+              break;
+            }
+
+          mrec.ipv6mr_multiaddr = ((FAR const struct sockaddr_in6 *)
+                                   &greq->gr_group)->sin6_addr;
+          mrec.ipv6mr_interface = greq->gr_interface;
+
+          if (option == MCAST_JOIN_GROUP)
+            {
+              ret = mld_joingroup(&mrec);
+            }
+          else
+            {
+              ret = mld_leavegroup(&mrec);
+            }
+        }
+        break;
+
       case IPV6_MULTICAST_HOPS:   /* Multicast hop limit */
         {
           FAR struct socket_conn_s *conn = psock->s_conn;
@@ -112,44 +144,77 @@ int ipv6_setsockopt(FAR struct socket *psock, int option,
       case IPV6_MULTICAST_IF:     /* Interface to use for outgoing multicast
                                    * packets */
 #ifdef NET_UDP_HAVE_STACK
-      {
-        FAR struct net_driver_s *dev;
-        FAR struct udp_conn_s *conn = psock->s_conn;
-        int ifindex = *(FAR int *)value;
+        {
+          FAR struct net_driver_s *dev;
+          FAR struct udp_conn_s *conn = psock->s_conn;
+          int ifindex = *(FAR int *)value;
 
-        if (ifindex > 0)
-          {
-            dev = netdev_findbyindex(ifindex);
-            if (dev == NULL)
-              {
-                ret = -ENODEV;
-                break;
-              }
+          if (ifindex > 0)
+            {
+              dev = netdev_findbyindex(ifindex);
+              if (dev == NULL)
+                {
+                  ret = -ENODEV;
+                  break;
+                }
 
 #ifdef CONFIG_NET_BINDTODEVICE
-            if (conn->sconn.s_boundto &&
-                ifindex != conn->sconn.s_boundto)
-              {
-                ret = -EINVAL;
-                break;
-              }
+              if (conn->sconn.s_boundto &&
+                  ifindex != conn->sconn.s_boundto)
+                {
+                  ret = -EINVAL;
+                  break;
+                }
 #endif
-          }
+            }
 
-        conn->mreq.imr_ifindex = ifindex;
+          conn->mreq.imr_ifindex = ifindex;
 
-        ret = OK;
-        break;
-      }
+          ret = OK;
+          break;
+        }
 #endif /* NET_UDP_HAVE_STACK */
-#endif /* CONFIG_NET_MLD */
 
       /* The following IPv6 socket options are defined, but not implemented */
 
-      case IPV6_V6ONLY:           /* Restrict AF_INET6 socket to IPv6
-                                   * communications only */
+      case MCAST_BLOCK_SOURCE:
+      case MCAST_UNBLOCK_SOURCE:
+      case MCAST_JOIN_SOURCE_GROUP:
+      case MCAST_LEAVE_SOURCE_GROUP:
         nwarn("WARNING: Unimplemented IPv6 option: %d\n", option);
         ret = -ENOSYS;
+        break;
+#endif /* CONFIG_NET_MLD */
+
+      case IPV6_V6ONLY:           /* Restrict AF_INET6 socket to IPv6
+                                   * communications only */
+        {
+          FAR struct socket_conn_s *conn = psock->s_conn;
+          FAR const int *enable = value;
+
+          /* As Linux: an int, set before bind().  Only UDP takes IPv4
+           * traffic; a TCP socket is always IPv6-only.
+           */
+
+          if (value_len < sizeof(int) || _SS_ISBOUND(conn->s_flags))
+            {
+              ret = -EINVAL;
+            }
+          else if (*enable)
+            {
+              _SO_SETOPT(conn->s_options, option);
+              ret = OK;
+            }
+          else if (psock->s_type != SOCK_STREAM)
+            {
+              _SO_CLROPT(conn->s_options, option);
+              ret = OK;
+            }
+          else
+            {
+              ret = -ENOPROTOOPT;
+            }
+        }
         break;
 
       case IPV6_UNICAST_HOPS:     /* Unicast hop limit */
@@ -235,5 +300,3 @@ int ipv6_setsockopt(FAR struct socket *psock, int option,
   conn_unlock(psock->s_conn);
   return ret;
 }
-
-#endif /* CONFIG_NET_IPv6 */

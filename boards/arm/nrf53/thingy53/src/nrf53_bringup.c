@@ -211,6 +211,7 @@ int nrf53_bringup(void)
 
 #if defined(CONFIG_RNDIS) && !defined(CONFIG_RNDIS_COMPOSITE)
   uint8_t mac[6];
+
   mac[0] = 0xa0; /* TODO */
   mac[1] = (CONFIG_NETINIT_MACADDR_2 >> (8 * 0)) & 0xff;
   mac[2] = (CONFIG_NETINIT_MACADDR_1 >> (8 * 3)) & 0xff;
@@ -245,6 +246,28 @@ int nrf53_bringup(void)
   if (ret < 0)
     {
       syslog(LOG_ERR, "ERROR: nrf53_rgbled_init failed: %d\n", ret);
+    }
+#endif
+
+#ifdef CONFIG_ADC
+  /* Configure ADC driver */
+
+  ret = nrf53_adc_setup();
+  if (ret < 0)
+    {
+      syslog(LOG_ERR,
+             "ERROR: Failed to initialize ADC driver: %d\n",
+             ret);
+    }
+#endif
+
+#ifdef CONFIG_NPM1100
+  /* Register the nPM1100 PMIC charge-status driver */
+
+  ret = nrf53_npm1100_init();
+  if (ret < 0)
+    {
+      syslog(LOG_ERR, "ERROR: nrf53_npm1100_init failed: %d\n", ret);
     }
 #endif
 

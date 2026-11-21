@@ -109,6 +109,9 @@ static void mac802154_sfevent(FAR const struct ieee802154_radiocb_s *radiocb,
                               enum ieee802154_sfevent_e sfevent);
 
 static void mac802154_purge_worker(FAR void *arg);
+static int mac802154_fcmhrlen(uint16_t fc);
+static uint8_t
+mac802154_txcmdid(FAR const struct ieee802154_txdesc_s *txdesc);
 
 static void mac802154_rxdatareq(FAR struct ieee802154_privmac_s *priv,
                                 FAR struct ieee802154_data_ind_s *ind);
@@ -359,9 +362,9 @@ void mac802154_createdatareq(FAR struct ieee802154_privmac_s *priv,
 
   memcpy(&txdesc->destaddr, coordaddr, sizeof(struct ieee802154_addr_s));
 
-  /* Save a reference of the tx descriptor */
+  /* The tx descriptor is freed on tx done, keep the address */
 
-  priv->cmd_desc = txdesc;
+  memcpy(&priv->cmd_destaddr, coordaddr, sizeof(struct ieee802154_addr_s));
 }
 
 /****************************************************************************
@@ -445,7 +448,6 @@ static void mac802154_notify_worker(FAR void *arg)
 
           if (dispose)
             {
-              iob_free(primitive->u.dataind.frame);
               ieee802154_primitive_free(primitive);
             }
         }
@@ -776,11 +778,8 @@ static void mac802154_purge_worker(FAR void *arg)
 
           sq_remfirst(&priv->indirect_queue);
 
-          /* Free the IOB, the notification, and the tx descriptor */
+          /* Free the tx descriptor with the frame and the confirm */
 
-          iob_free(txdesc->frame);
-          ieee802154_primitive_free((FAR struct ieee802154_primitive_s *)
-                                    txdesc->conf);
           mac802154_txdesc_free(priv, txdesc);
           priv->beaconupdate = true;
 
@@ -895,6 +894,22 @@ static void mac802154_txdone(FAR const struct ieee802154_radiocb_s *radiocb,
 }
 
 /****************************************************************************
+ * Name: mac802154_txcmdid
+ *
+ * Description:
+ *   Command identifier of a command frame built by the MAC.
+ *
+ ****************************************************************************/
+
+static uint8_t
+mac802154_txcmdid(FAR const struct ieee802154_txdesc_s *txdesc)
+{
+  FAR const uint8_t *frame = txdesc->frame->io_data;
+
+  return frame[mac802154_fcmhrlen(frame[0] | (frame[1] << 8))];
+}
+
+/****************************************************************************
  * Name: mac802154_txdone_worker
  *
  * Description:
@@ -927,12 +942,6 @@ static void mac802154_txdone_worker(FAR void *arg)
           break;
         }
 
-      /* Cast the data_conf to a notification. We get both the private and
-       * public notification structure to make it easier to use.
-       */
-
-      primitive = (FAR struct ieee802154_primitive_s *)txdesc->conf;
-
       wlinfo("Tx status: %s\n",
              g_ieee802154_status_string[txdesc->conf->status]);
 
@@ -940,6 +949,9 @@ static void mac802154_txdone_worker(FAR void *arg)
         {
           case IEEE802154_FRAME_DATA:
             {
+              /* The data confirm goes to the next layer */
+
+              primitive = mac802154_txdesc_takeconf(txdesc);
               primitive->type = IEEE802154_PRIMITIVE_CONF_DATA;
               mac802154_notify(priv, primitive);
             }
@@ -947,16 +959,12 @@ static void mac802154_txdone_worker(FAR void *arg)
 
           case IEEE802154_FRAME_COMMAND:
             {
-              switch (priv->curr_cmd)
+              /* Route by the command that was sent */
+
+              switch (mac802154_txcmdid(txdesc))
                 {
                   case IEEE802154_CMD_ASSOC_REQ:
                     mac802154_txdone_assocreq(priv, txdesc);
-                    break;
-
-                  case IEEE802154_CMD_ASSOC_RESP:
-                    break;
-
-                  case IEEE802154_CMD_DISASSOC_NOT:
                     break;
 
                   case IEEE802154_CMD_DATA_REQ:
@@ -988,38 +996,20 @@ static void mac802154_txdone_worker(FAR void *arg)
                       }
                     break;
 
-                  case IEEE802154_CMD_PANID_CONF_NOT:
-                    break;
-
-                  case IEEE802154_CMD_ORPHAN_NOT:
-                    break;
-
-                  case IEEE802154_CMD_BEACON_REQ:
-                    break;
-
-                  case IEEE802154_CMD_COORD_REALIGN:
-                    break;
-
-                  case IEEE802154_CMD_GTS_REQ:
-                    break;
+                  /* No operation waits for the other commands */
 
                   default:
-                    ieee802154_primitive_free(primitive);
                     break;
                 }
             }
             break;
 
           default:
-            {
-              ieee802154_primitive_free(primitive);
-            }
             break;
         }
 
-      /* Free the IOB and the tx descriptor */
+      /* Free the tx descriptor with the frame and an unused confirm */
 
-      iob_free(txdesc->frame);
       mac802154_txdesc_free(priv, txdesc);
     }
 
@@ -1074,6 +1064,57 @@ static void mac802154_rxframe(FAR const struct ieee802154_radiocb_s *radiocb,
 }
 
 /****************************************************************************
+ * Name: mac802154_fcmhrlen
+ *
+ * Description:
+ *   MAC header length described by a frame control field.
+ *
+ ****************************************************************************/
+
+static int mac802154_fcmhrlen(uint16_t fc)
+{
+  return mac802154_mhrlen((fc & IEEE802154_FRAMECTRL_DADDR) >>
+                          IEEE802154_FRAMECTRL_SHIFT_DADDR,
+                          (fc & IEEE802154_FRAMECTRL_SADDR) >>
+                          IEEE802154_FRAMECTRL_SHIFT_SADDR,
+                          (fc & IEEE802154_FRAMECTRL_PANIDCOMP) != 0);
+}
+
+/****************************************************************************
+ * Name: mac802154_mhrvalid
+ *
+ * Description:
+ *   Check that a received frame holds the whole MAC header described by its
+ *   frame control field, and the command identifier of a command frame.
+ *
+ ****************************************************************************/
+
+static bool mac802154_mhrvalid(FAR struct iob_s *iob)
+{
+  uint16_t fc;
+  int      len;
+  int      mhrlen;
+
+  len = iob->io_len - iob->io_offset;
+  if (len < 3)
+    {
+      return false;
+    }
+
+  fc     = iob->io_data[iob->io_offset] |
+           (iob->io_data[iob->io_offset + 1] << 8);
+  mhrlen = mac802154_fcmhrlen(fc);
+
+  if (((fc & IEEE802154_FRAMECTRL_FTYPE) >>
+       IEEE802154_FRAMECTRL_SHIFT_FTYPE) == IEEE802154_FRAME_COMMAND)
+    {
+      mhrlen++;
+    }
+
+  return len >= mhrlen;
+}
+
+/****************************************************************************
  * Name: mac802154_rxframe_worker
  *
  * Description:
@@ -1123,6 +1164,16 @@ static void mac802154_rxframe_worker(FAR void *arg)
       /* Get a local copy of the frame to make it easier to access */
 
       iob = ind->frame;
+
+      /* Drop a frame shorter than its MAC header */
+
+      if (!mac802154_mhrvalid(iob))
+        {
+          wlwarn("WARNING: dropping malformed frame\n");
+          ieee802154_primitive_free((FAR struct ieee802154_primitive_s *)
+                                    ind);
+          continue;
+        }
 
       /* Set a local pointer to the frame control then move the offset past
        * the frame control field
@@ -1292,6 +1343,14 @@ static void mac802154_rxframe_worker(FAR void *arg)
                                         ind);
             }
             break;
+
+          default:
+            {
+              wlinfo("Reserved frame type %u dropped\n", ftype);
+              ieee802154_primitive_free((FAR struct ieee802154_primitive_s *)
+                                        ind);
+            }
+            break;
         }
     }
 }
@@ -1374,7 +1433,7 @@ static void mac802154_rxdataframe(FAR struct ieee802154_privmac_s *priv,
        * to NONE, we process it as our extracted frame
        */
 
-      if (ind->src.mode != priv->cmd_desc->destaddr.mode)
+      if (ind->src.mode != priv->cmd_destaddr.mode)
         {
           mac802154_notify(priv, (FAR struct ieee802154_primitive_s *)
                                  ind);
@@ -1382,14 +1441,14 @@ static void mac802154_rxdataframe(FAR struct ieee802154_privmac_s *priv,
 
       if (ind->src.mode == IEEE802154_ADDRMODE_SHORT &&
           !IEEE802154_SADDRCMP(ind->src.saddr,
-                               priv->cmd_desc->destaddr.saddr))
+                               priv->cmd_destaddr.saddr))
         {
           mac802154_notify(priv, (FAR struct ieee802154_primitive_s *)
                                   ind);
         }
       else if (ind->src.mode == IEEE802154_ADDRMODE_EXTENDED &&
                !IEEE802154_EADDRCMP(ind->src.eaddr,
-                                    priv->cmd_desc->destaddr.eaddr))
+                                    priv->cmd_destaddr.eaddr))
         {
           mac802154_notify(priv, (FAR struct ieee802154_primitive_s *)
                                  ind);
@@ -1432,10 +1491,11 @@ static void mac802154_rxdataframe(FAR struct ieee802154_privmac_s *priv,
           primitive->u.assocconf.status = IEEE802154_STATUS_NO_DATA;
         }
 
-      /* We are no longer performing the association operation */
+      mac802154_oprxdisable(priv);
+
+      /* We are no longer performing the operation */
 
       priv->curr_op = MAC802154_OP_NONE;
-      priv->cmd_desc = NULL;
       nxsem_post(&priv->opsem);
 
       /* Release the MAC and notify the next highest layer */
@@ -1518,9 +1578,9 @@ static void mac802154_rxdatareq(FAR struct ieee802154_privmac_s *priv,
 
                   /* The addresses match, send the transaction immediately */
 
-                  priv->radio->txdelayed(priv->radio, txdesc, 0);
                   priv->beaconupdate = true;
                   nxmutex_unlock(&priv->lock);
+                  priv->radio->txdelayed(priv->radio, txdesc, 0);
                   return;
                 }
             }
@@ -1535,9 +1595,9 @@ static void mac802154_rxdatareq(FAR struct ieee802154_privmac_s *priv,
 
                   /* The addresses match, send the transaction immediately */
 
-                  priv->radio->txdelayed(priv->radio, txdesc, 0);
                   priv->beaconupdate = true;
                   nxmutex_unlock(&priv->lock);
+                  priv->radio->txdelayed(priv->radio, txdesc, 0);
                   return;
                 }
             }
@@ -1666,6 +1726,7 @@ mac802154_edresult(FAR const struct ieee802154_radiocb_s *radiocb,
   FAR struct mac802154_radiocb_s *cb =
     (FAR struct mac802154_radiocb_s *)radiocb;
   FAR struct ieee802154_privmac_s *priv;
+  bool next = false;
 
   DEBUGASSERT(cb != NULL && cb->priv != NULL);
   priv = cb->priv;
@@ -1680,12 +1741,21 @@ mac802154_edresult(FAR const struct ieee802154_radiocb_s *radiocb,
 
   if (priv->curr_op == MAC802154_OP_SCAN)
     {
-      mac802154_edscan_onresult(priv, edval);
+      next = mac802154_edscan_onresult(priv, edval);
     }
 
   /* Relinquish control of the private structure */
 
   nxmutex_unlock(&priv->lock);
+
+  /* energydetect() can take the radio lock, which the radio holds while it
+   * calls the MAC, so the next channel starts after the MAC is released
+   */
+
+  if (next)
+    {
+      priv->radio->energydetect(priv->radio, priv->scansymdur);
+    }
 }
 
 static void mac802154_sfevent(FAR const struct ieee802154_radiocb_s *radiocb,
@@ -2002,7 +2072,6 @@ static void mac802154_rxbeaconframe(FAR struct ieee802154_privmac_s *priv,
 
       if (priv->curr_op == MAC802154_OP_ASSOC && pending_eaddr)
         {
-          priv->curr_cmd = IEEE802154_CMD_DATA_REQ;
           mac802154_txdesc_alloc(priv, &respdesc);
           mac802154_createdatareq(priv, &priv->pandesc.coordaddr,
                                  IEEE802154_ADDRMODE_EXTENDED, respdesc);
@@ -2040,22 +2109,14 @@ static void mac802154_rxbeaconframe(FAR struct ieee802154_privmac_s *priv,
                 {
                   mac802154_txdesc_alloc(priv, &respdesc);
 
-                  if (priv->curr_op == MAC802154_OP_POLL)
-                    {
-                      priv->curr_cmd = IEEE802154_CMD_DATA_REQ;
-                    }
-                  else if (priv->curr_op == MAC802154_OP_ASSOC)
-                    {
-                      priv->curr_cmd = IEEE802154_CMD_DATA_REQ;
-                    }
-                  else if (priv->curr_op == MAC802154_OP_NONE)
+                  if (priv->curr_op == MAC802154_OP_NONE)
                     {
                       int sval;
+
                       DEBUGASSERT(nxsem_get_value(&priv->opsem, &sval) == 0
                                   && sval == 1);
                       nxsem_wait_uninterruptible(&priv->opsem);
                       priv->curr_op = MAC802154_OP_AUTOEXTRACT;
-                      priv->curr_cmd = IEEE802154_CMD_DATA_REQ;
                     }
 
                   if (pending_saddr)

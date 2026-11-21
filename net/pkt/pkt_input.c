@@ -52,6 +52,7 @@
  * Input Parameters:
  *   dev    - Device instance only the input packet in d_buf, length = d_len;
  *   conn   - A pointer to the PKT connection structure
+ *   iobq   - A pointer to the buffer queue
  *
  * Returned Value:
  *   The number of bytes actually buffered is returned.  This will be either
@@ -60,7 +61,8 @@
  ****************************************************************************/
 
 static uint16_t pkt_datahandler(FAR struct net_driver_s *dev,
-                                FAR struct pkt_conn_s *conn)
+                                FAR struct pkt_conn_s *conn,
+                                FAR struct iob_queue_s *iobq)
 {
   FAR struct iob_s *iob = iob_tryalloc(true);
   int ret;
@@ -69,22 +71,6 @@ static uint16_t pkt_datahandler(FAR struct net_driver_s *dev,
     {
       return 0;
     }
-
-#ifdef CONFIG_NET_TIMESTAMP
-  if (_SO_GETOPT(conn->sconn.s_options, SO_TIMESTAMP) ||
-      _SO_GETOPT(conn->sconn.s_options, SO_TIMESTAMPNS))
-    {
-      ret = iob_trycopyin(iob, (FAR const uint8_t *)&dev->d_rxtime,
-                          sizeof(struct timespec), 0, true);
-      if (ret != sizeof(struct timespec))
-        {
-          nerr("ERROR: Failed to write timestamp: %d\n", ret);
-          goto errout;
-        }
-
-      iob_reserve(iob, sizeof(struct timespec));
-    }
-#endif
 
   /* Clone an I/O buffer chain of the L2 data, use throttled IOB to avoid
    * overconsumption.
@@ -104,7 +90,7 @@ static uint16_t pkt_datahandler(FAR struct net_driver_s *dev,
    */
 
   conn_lock(&conn->sconn);
-  ret = iob_tryadd_queue(iob, &conn->readahead);
+  ret = iob_tryadd_queue(iob, iobq);
   conn_unlock(&conn->sconn);
 
   if (ret < 0)
@@ -124,7 +110,7 @@ errout:
 }
 
 /****************************************************************************
- * Name: pkt_in
+ * Name: pkt_in_
  *
  * Description:
  *   Handle incoming packet input
@@ -136,6 +122,131 @@ errout:
  *   greatly improve performance
  *   this function will uses d_iob as packets input which used by some
  *   NICs such as celluler net driver.
+ *
+ * Input Parameters:
+ *   dev - The device driver structure containing the received packet
+ *   loopback - Indicate whether it is a loopback packet
+ *
+ * Returned Value:
+ *   OK     The packet has been processed  and can be deleted
+ *  -EAGAIN There is a matching connection, but could not dispatch the packet
+ *          yet.  Useful when a packet arrives before a recv call is in
+ *          place.
+ *
+ * Assumptions:
+ *   The network is locked.
+ *
+ ****************************************************************************/
+
+static int pkt_in_(FAR struct net_driver_s *dev, bool loopback)
+{
+  FAR struct pkt_conn_s *conn = NULL;
+  uint16_t flags;
+  int ret = OK;
+
+  /* Setup for the application callback */
+
+  dev->d_appdata = dev->d_buf;
+  dev->d_sndlen  = 0;
+
+  pkt_conn_list_lock();
+
+  while ((conn = pkt_active(dev, conn, loopback)) != NULL)
+    {
+      if (loopback && conn->pendiob == dev->d_iob)
+        {
+          /* Do not read back the packet sent by oneself.  pendiob is
+           * released by devif_poll_pkt_connections() once this tap run
+           * completes, so it is always a live reference here.
+           */
+
+          continue;
+        }
+
+#ifdef CONFIG_NET_TIMESTAMP
+
+      /* Handle hardware timestamp */
+
+      if (dev->d_iob->io_conn == &conn->sconn)
+        {
+          if (pkt_datahandler(dev, conn, &conn->errahead) > 0)
+            {
+              pkt_callback(dev, conn, PKT_NEWDATA);
+            }
+
+          pkt_conn_list_unlock();
+          return OK;
+        }
+
+      if (dev->d_iob->io_conn != NULL)
+        {
+          /* Skip no related pkt conn */
+
+          pkt_conn_list_unlock();
+          return OK;
+        }
+#endif
+
+#ifdef CONFIG_NET_TIMESTAMP
+      /* Storing reception timestamp provided by realtime
+       * if timestamp no provided by hardware.
+       */
+
+      if ((dev->d_features & NETDEV_RX_STAMP) == 0)
+        {
+          /* Storing reception timestamp provided by realtime
+           * if timestamp no provided by hardware.
+           */
+
+          clock_gettime(CLOCK_REALTIME, &dev->d_iob->io_time);
+        }
+#endif /* CONFIG_NET_TIMESTAMP */
+
+      /* Perform the application callback */
+
+      flags = pkt_callback(dev, conn, PKT_NEWDATA);
+
+      /* If the operation was successful, the PKT_NEWDATA flag is removed
+       * and thus the packet can be deleted (OK will be returned).
+       */
+
+      if ((flags & PKT_NEWDATA) != 0)
+        {
+          /* Add the PKT to the socket read-ahead buffer. */
+
+#if CONFIG_NET_RECV_BUFSIZE > 0
+          if ((iob_get_queue_size(&conn->readahead) + dev->d_len) >
+              conn->rcvbufs)
+            {
+              nwarn("WARNING: Full read-ahead buffer, dropping packet\n");
+              continue;
+            }
+#endif
+
+          if (pkt_datahandler(dev, conn, &conn->readahead) == 0)
+            {
+              /* No.. the packet was not processed now.  Return -EAGAIN so
+               * that the driver may retry again later.
+               */
+
+              nwarn("WARNING: Packet not processed\n");
+              ret = -EAGAIN;
+              break;
+            }
+        }
+    }
+
+  pkt_conn_list_unlock();
+
+  return ret;
+}
+
+/****************************************************************************
+ * Name: pkt_in
+ *
+ * Description:
+ *   To be compatible with the old framework, keep this function.
+ *   For more detailed information, please refer to __pkt_input
  *
  * Input Parameters:
  *   dev - The device driver structure containing the received packet
@@ -153,71 +264,7 @@ errout:
 
 static int pkt_in(FAR struct net_driver_s *dev)
 {
-  FAR struct pkt_conn_s *conn;
-  int ret = OK;
-
-  pkt_conn_list_lock();
-  conn = pkt_active(dev);
-  if (conn)
-    {
-      uint32_t flags;
-
-      if (conn->pendiob == dev->d_iob)
-        {
-          /* Do not read back the packet sent by oneself.  pendiob is
-           * released by devif_poll_pkt_connections() once this tap run
-           * completes, so it is always a live reference here.
-           */
-
-          pkt_conn_list_unlock();
-          return OK;
-        }
-
-#if defined(CONFIG_NET_TIMESTAMP) && !defined(CONFIG_ARCH_HAVE_NETDEV_TIMESTAMP)
-      /* Get system as timestamp if no hardware timestamp */
-
-      if (_SO_GETOPT(conn->sconn.s_options, SO_TIMESTAMP) ||
-          _SO_GETOPT(conn->sconn.s_options, SO_TIMESTAMPNS))
-        {
-          clock_gettime(CLOCK_REALTIME, &dev->d_rxtime);
-        }
-#endif /* CONFIG_NET_TIMESTAMP */
-
-      /* Setup for the application callback */
-
-      dev->d_appdata = dev->d_buf;
-      dev->d_sndlen  = 0;
-
-      /* Perform the application callback */
-
-      flags = pkt_callback(dev, conn, PKT_NEWDATA);
-
-      /* If the operation was successful, the PKT_NEWDATA flag is removed
-       * and thus the packet can be deleted (OK will be returned).
-       */
-
-      if ((flags & PKT_NEWDATA) != 0)
-        {
-          /* Add the PKT to the socket read-ahead buffer. */
-
-          if (pkt_datahandler(dev, conn) == 0)
-            {
-              /* No.. the packet was not processed now.  Return -EAGAIN so
-               * that the driver may retry again later.
-               */
-
-              nwarn("WARNING: Packet not processed\n");
-              ret = -EAGAIN;
-            }
-        }
-    }
-  else
-    {
-      ninfo("No PKT listener\n");
-    }
-
-  pkt_conn_list_unlock();
-  return ret;
+  return pkt_in_(dev, false);
 }
 
 /****************************************************************************
@@ -235,9 +282,9 @@ static int pkt_in(FAR struct net_driver_s *dev)
  *
  * Returned Value:
  *   OK     The packet has been processed  and can be deleted
- *  -EAGAIN There is a matching connection, but could not dispatch the packet
- *          yet.  Useful when a packet arrives before a recv call is in
- *          place.
+ *  -EAGAIN There is a matching connection, but could not dispatch the
+ *          packet yet.  Useful when a packet arrives before a recv call
+ *          is in place.
  *
  * Assumptions:
  *   The network is locked.
@@ -268,6 +315,50 @@ int pkt_input(FAR struct net_driver_s *dev)
 
   ret = netdev_input(dev, pkt_in, false);
   netdev_unlock(dev);
+  return ret;
+}
+
+/****************************************************************************
+ * Name: pkt_loopback
+ *
+ * Description:
+ *   Handle loopback packet input.
+ *   This function is quite similar to pkt_inpt, and we made a distinction
+ *   to ensure compatibility with old code
+ *
+ * Input Parameters:
+ *   dev - The device driver structure containing the received packet
+ *
+ * Returned Value:
+ *   OK     The packet has been processed  and can be deleted
+ *  -EAGAIN There is a matching connection, but could not dispatch the
+ *          packet yet.  Useful when a packet arrives before a recv call
+ *          is in place.
+ *
+ * Assumptions:
+ *   The network is locked.
+ *
+ ****************************************************************************/
+
+int pkt_loopback(FAR struct net_driver_s *dev)
+{
+  FAR uint8_t *buf;
+  int ret;
+
+  netdev_lock(dev);
+
+  buf = dev->d_buf;
+
+  /* Set the device buffer to l2 */
+
+  dev->d_buf = NETLLBUF;
+
+  ret = pkt_in_(dev, true);
+
+  dev->d_buf = buf;
+
+  netdev_unlock(dev);
+
   return ret;
 }
 

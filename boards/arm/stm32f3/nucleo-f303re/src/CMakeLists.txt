@@ -36,14 +36,6 @@ if(CONFIG_ADC)
   list(APPEND SRCS stm32_adc.c)
 endif()
 
-if(CONFIG_STM32_CAN_CHARDRIVER)
-  list(APPEND SRCS stm32_can.c)
-endif()
-
-if(CONFIG_DAC)
-  list(APPEND SRCS stm32_dac.c)
-endif()
-
 if(CONFIG_PWM)
   list(APPEND SRCS stm32_pwm.c)
 endif()
@@ -54,10 +46,6 @@ endif()
 
 if(CONFIG_LCD_SSD1351)
   list(APPEND SRCS stm32_ssd1351.c)
-endif()
-
-if(CONFIG_TIMER)
-  list(APPEND SRCS stm32_timer.c)
 endif()
 
 if(CONFIG_BOARDCTL_UNIQUEID)

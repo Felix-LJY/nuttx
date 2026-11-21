@@ -22,12 +22,17 @@
 
 # Add the internal C files to the build
 
-CSRCS += lib_bitmap.c lib_circbuf.c lib_creat.c lib_mknod.c lib_umask.c
+CSRCS += lib_bitmap.c lib_circbuf.c lib_creat.c lib_mknod.c
 CSRCS += lib_utsname.c lib_getrandom.c lib_xorshift128.c lib_tea_encrypt.c
-CSRCS += lib_tea_decrypt.c lib_cxx_initialize.c lib_impure.c lib_memfd.c
+CSRCS += lib_tea_decrypt.c lib_impure.c lib_memfd.c lib_posix_madvise.c
 CSRCS += lib_mutex.c lib_fchmodat.c lib_fstatat.c lib_getfullpath.c
 CSRCS += lib_openat.c lib_mkdirat.c lib_utimensat.c lib_mallopt.c
-CSRCS += lib_idr.c lib_getnprocs.c
+CSRCS += lib_idr.c lib_getnprocs.c lib_getstacksize.c lib_mntent.c
+CSRCS += lib_can_isotp.c
+
+ifeq ($(CONFIG_HAVE_CXXINITIALIZE),y)
+CSRCS += lib_cxx_initialize.c
+endif
 
 ifeq ($(CONFIG_LIBC_TEMPBUFFER),y)
 CSRCS += lib_tempbuffer.c
@@ -50,7 +55,8 @@ CSRCS += lib_crc8.c lib_crc8ccitt.c lib_crc8table.c lib_crc8rohc.c
 CSRCS += lib_crc8h1d.c lib_crc8h2f.c lib_crc16h1021.c lib_crc16h8005.c
 CSRCS += lib_crc32h04c11db7.c lib_crc32hf4acfb13.c lib_crc64emac.c
 CSRCS += lib_backtrace.c lib_ftok.c lib_err.c lib_instrument.c lib_glob.c
-CSRCS += lib_crc16ibm.c lib_crc16xmodem.c
+CSRCS += lib_crc16xmodem.c lib_xorsum16.c
+CSRCS += lib_fdcheck.c lib_tag.c
 
 # Keyboard driver encoder/decoder
 
@@ -62,6 +68,12 @@ endif
 
 ifeq ($(CONFIG_LIBC_SLCDCODEC),y)
 CSRCS += lib_slcdencode.c lib_slcddecode.c
+endif
+
+# The NXFLAT module ABI marker
+
+ifeq ($(CONFIG_NXFLAT),y)
+CSRCS += lib_nxflat.c
 endif
 
 # Environment search path support

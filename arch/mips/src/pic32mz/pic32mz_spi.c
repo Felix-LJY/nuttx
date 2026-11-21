@@ -52,9 +52,15 @@
  * Pre-processor Definitions
  ****************************************************************************/
 
-/* All SPI peripherals are clocked by PBCLK2 */
+/* Peripheral bus clock feeding the SPI baud rate generators: PBCLK2 on
+ * PIC32MZ EC/EF, PBCLK3 on PIC32MZ-W1 (DS70005425 Table 11-1).
+ */
 
-#define BOARD_PBCLOCK BOARD_PBCLK2
+#ifdef CONFIG_ARCH_CHIP_PIC32MZW1
+#  define BOARD_PBCLOCK BOARD_PBCLK3
+#else
+#  define BOARD_PBCLOCK BOARD_PBCLK2
+#endif
 
 #ifdef CONFIG_PIC32MZ_SPI_DMA
 
@@ -120,7 +126,8 @@ struct pic32mz_config_s
 #endif
   uint8_t          sdipps;     /* SDI peripheral pin selection */
   uint8_t          sdopps;     /* SDO peripheral pin selection */
-  uintptr_t        sdoreg;     /* SDO peripheral pin configuration register */
+  uintptr_t        sdoreg;     /* SDO peripheral pin configuration register
+                                * (0: dedicated pins, no PPS) */
 };
 
 /* This structure describes the state of the SPI driver */
@@ -215,11 +222,11 @@ static uint32_t spi_setfrequency(struct spi_dev_s *dev,
 static void     spi_setmode(struct spi_dev_s *dev, enum spi_mode_e mode);
 static void     spi_setbits(struct spi_dev_s *dev, int nbits);
 static uint32_t spi_send(struct spi_dev_s *dev, uint32_t wd);
-static void     spi_exchange(struct spi_dev_s *dev,
+static int      spi_exchange(struct spi_dev_s *dev,
                              const void *txbuffer, void *rxbuffer,
                              size_t nwords);
 #ifdef CONFIG_PIC32MZ_SPI_DMA
-static void     spi_exchange_nodma(struct spi_dev_s *dev,
+static int      spi_exchange_nodma(struct spi_dev_s *dev,
                                    const void *txbuffer,
                                    void *rxbuffer,
                                    size_t nwords);
@@ -274,9 +281,11 @@ static const struct pic32mz_config_s g_spi1config =
   .rxirq             = PIC32MZ_IRQ_SPI1RX,
   .txirq             = PIC32MZ_IRQ_SPI1TX,
 #endif
+#if defined(BOARD_SDI1_PPS) || !defined(CONFIG_ARCH_CHIP_PIC32MZW1)
   .sdipps            = BOARD_SDI1_PPS,
   .sdopps            = PPS_OUTPUT_REGVAL(BOARD_SDO1_PPS),
   .sdoreg            = PPS_OUTPUT_REGADDR(BOARD_SDO1_PPS)
+#endif
 };
 
 static struct pic32mz_dev_s g_spi1dev =
@@ -950,6 +959,7 @@ static void spi_dmarxcallback(DMA_HANDLE handle, uint8_t status, void *arg)
 static void spi_dmatxcallback(DMA_HANDLE handle, uint8_t status, void *arg)
 {
   struct pic32mz_dev_s *priv = (struct pic32mz_dev_s *)arg;
+
   DEBUGASSERT(priv != NULL);
 
   /* Cancel the watchdog timeout */
@@ -1007,6 +1017,7 @@ static void spi_dmatxcallback(DMA_HANDLE handle, uint8_t status, void *arg)
 static void spi_dmatimeout(wdparm_t arg)
 {
   struct pic32mz_dev_s *priv = (struct pic32mz_dev_s *)arg;
+
   DEBUGASSERT(priv != NULL);
 
   /* Sample DMA registers at the time of the timeout */
@@ -1250,9 +1261,13 @@ static uint32_t spi_setfrequency(struct spi_dev_s *dev,
    *
    * frequency = BOARD_PBCLOCK / (2 * divisor), or
    * divisor  = (BOARD_PBCLOCK / 2) / frequency
+   *
+   * Round up so that the actual frequency never exceeds the requested one.
+   * This also keeps the divisor >= 1 when the request is above
+   * BOARD_PBCLOCK / 2.
    */
 
-  divisor = (BOARD_PBCLOCK / 2) / frequency;
+  divisor = (BOARD_PBCLOCK / 2 + frequency - 1) / frequency;
 
   /* The a BRG register value is that divisor minus one
    *
@@ -1260,11 +1275,7 @@ static uint32_t spi_setfrequency(struct spi_dev_s *dev,
    * BRG       = (BOARD_PBCLOCK / 2) / frequency - 1
    */
 
-  regval = divisor;
-  if (regval > 0)
-    {
-      regval--;
-    }
+  regval = divisor - 1;
 
   /* Save the new BRG value */
 
@@ -1339,29 +1350,29 @@ static void spi_setmode(struct spi_dev_s *dev, enum spi_mode_e mode)
 
       switch (mode)
         {
-        case SPIDEV_MODE0: /* CPOL=0; CPHA=0 => CKP=0; CKE=1 */
-          spi_putreg(priv, PIC32MZ_SPI_CONCLR_OFFSET, SPI_CON_CKP);
-          spi_putreg(priv, PIC32MZ_SPI_CONSET_OFFSET, SPI_CON_CKE);
-          break;
+          case SPIDEV_MODE0: /* CPOL=0; CPHA=0 => CKP=0; CKE=1 */
+            spi_putreg(priv, PIC32MZ_SPI_CONCLR_OFFSET, SPI_CON_CKP);
+            spi_putreg(priv, PIC32MZ_SPI_CONSET_OFFSET, SPI_CON_CKE);
+            break;
 
-        case SPIDEV_MODE1: /* CPOL=0; CPHA=1 => CKP=0; CKE=0 */
-          spi_putreg(priv, PIC32MZ_SPI_CONCLR_OFFSET, SPI_CON_CKP);
-          spi_putreg(priv, PIC32MZ_SPI_CONCLR_OFFSET, SPI_CON_CKE);
-          break;
+          case SPIDEV_MODE1: /* CPOL=0; CPHA=1 => CKP=0; CKE=0 */
+            spi_putreg(priv, PIC32MZ_SPI_CONCLR_OFFSET, SPI_CON_CKP);
+            spi_putreg(priv, PIC32MZ_SPI_CONCLR_OFFSET, SPI_CON_CKE);
+            break;
 
-        case SPIDEV_MODE2: /* CPOL=1; CPHA=0 => CKP=1; CKE=1 */
-          spi_putreg(priv, PIC32MZ_SPI_CONSET_OFFSET, SPI_CON_CKP);
-          spi_putreg(priv, PIC32MZ_SPI_CONSET_OFFSET, SPI_CON_CKE);
-          break;
+          case SPIDEV_MODE2: /* CPOL=1; CPHA=0 => CKP=1; CKE=1 */
+            spi_putreg(priv, PIC32MZ_SPI_CONSET_OFFSET, SPI_CON_CKP);
+            spi_putreg(priv, PIC32MZ_SPI_CONSET_OFFSET, SPI_CON_CKE);
+            break;
 
-        case SPIDEV_MODE3: /* CPOL=1; CPHA=1 => CKP=1; CKE=0 */
-          spi_putreg(priv, PIC32MZ_SPI_CONSET_OFFSET, SPI_CON_CKP);
-          spi_putreg(priv, PIC32MZ_SPI_CONCLR_OFFSET, SPI_CON_CKE);
-          break;
+          case SPIDEV_MODE3: /* CPOL=1; CPHA=1 => CKP=1; CKE=0 */
+            spi_putreg(priv, PIC32MZ_SPI_CONSET_OFFSET, SPI_CON_CKP);
+            spi_putreg(priv, PIC32MZ_SPI_CONCLR_OFFSET, SPI_CON_CKE);
+            break;
 
-        default:
-          DEBUGASSERT(FALSE);
-          return;
+          default:
+            DEBUGASSERT(FALSE);
+            return;
         }
 
       /* Save the mode so that subsequent re-configurations will be faster */
@@ -1510,16 +1521,16 @@ static uint32_t spi_send(struct spi_dev_s *dev, uint32_t wd)
  *              into uint32_t's.
  *
  * Returned Value:
- *   None
+ *   Returns zero (OK) on success; a negated errno value on failure.
  *
  ****************************************************************************/
 
 #ifdef CONFIG_PIC32MZ_SPI_DMA
-static void spi_exchange_nodma(struct spi_dev_s *dev,
+static int  spi_exchange_nodma(struct spi_dev_s *dev,
                                const void *txbuffer,
                                void *rxbuffer, size_t nwords)
 #else
-static void spi_exchange(struct spi_dev_s *dev, const void *txbuffer,
+static int  spi_exchange(struct spi_dev_s *dev, const void *txbuffer,
                          void *rxbuffer, size_t nwords)
 #endif
 {
@@ -1545,10 +1556,12 @@ static void spi_exchange(struct spi_dev_s *dev, const void *txbuffer,
       spi_exchange8(priv, (const uint8_t *)txbuffer,
                     (uint8_t *)rxbuffer, nwords);
     }
+
+  return OK;
 }
 
 #ifdef CONFIG_PIC32MZ_SPI_DMA
-static void spi_exchange(struct spi_dev_s *dev, const void *txbuffer,
+static int  spi_exchange(struct spi_dev_s *dev, const void *txbuffer,
                          void *rxbuffer, size_t nwords)
 {
   struct pic32mz_dev_s *priv = (struct pic32mz_dev_s *)dev;
@@ -1568,8 +1581,7 @@ static void spi_exchange(struct spi_dev_s *dev, const void *txbuffer,
        nwords <= CONFIG_PIC32MZ_SPI_DMATHRESHOLD)
     {
       spiinfo("Non DMA transfer will be performed\n");
-      spi_exchange_nodma(dev, txbuffer, rxbuffer, nwords);
-      return;
+      return spi_exchange_nodma(dev, txbuffer, rxbuffer, nwords);
     }
 
   spiinfo("txbuffer=%p rxbuffer=%p nwords=%d\n", txbuffer, rxbuffer, nwords);
@@ -1707,14 +1719,14 @@ static void spi_exchange(struct spi_dev_s *dev, const void *txbuffer,
   if (ret < 0)
     {
       spierr("ERROR: RX transfer config failed: %d\n", ret);
-      return;
+      return ret;
     }
 
   ret = pic32mz_dma_chcfg(priv->txdma, &txcfg);
   if (ret < 0)
     {
       spierr("ERROR: RX transfer config failed: %d\n", ret);
-      return;
+      return ret;
     }
 
   /* Then setup the transfers */
@@ -1723,7 +1735,7 @@ static void spi_exchange(struct spi_dev_s *dev, const void *txbuffer,
   if (ret < 0)
     {
       spierr("ERROR: RX transfer setup failed: %d\n", ret);
-      return;
+      return ret;
     }
 
   spi_rxdma_sample(priv, DMA_AFTER_SETUP);
@@ -1732,7 +1744,7 @@ static void spi_exchange(struct spi_dev_s *dev, const void *txbuffer,
   if (ret < 0)
     {
       spierr("ERROR: TX transfer setup failed: %d\n", ret);
-      return;
+      return ret;
     }
 
   spi_txdma_sample(priv, DMA_AFTER_SETUP);
@@ -1758,7 +1770,7 @@ static void spi_exchange(struct spi_dev_s *dev, const void *txbuffer,
   if (ret < 0)
     {
       spierr("ERROR: RX DMA start failed: %d\n", ret);
-      return;
+      return ret;
     }
 
   spi_rxdma_sample(priv, DMA_AFTER_START);
@@ -1767,7 +1779,7 @@ static void spi_exchange(struct spi_dev_s *dev, const void *txbuffer,
   if (ret < 0)
     {
       spierr("ERROR: TX DMA start failed: %d\n", ret);
-      return;
+      return ret;
     }
 
   spi_txdma_sample(priv, DMA_AFTER_START);
@@ -1805,7 +1817,7 @@ static void spi_exchange(struct spi_dev_s *dev, const void *txbuffer,
       if (ret < 0 && ret != -EINTR)
         {
           DEBUGPANIC();
-          return;
+          return ret;
         }
 
       /* We might be awakened before the wait is over due to
@@ -1851,6 +1863,8 @@ static void spi_exchange(struct spi_dev_s *dev, const void *txbuffer,
       up_invalidate_dcache((uintptr_t)dummy, (uintptr_t)dummy +
                            CONFIG_PIC32MZ_SPI_DMABUFFSIZE);
     }
+
+  return OK;
 }
 #endif /* CONFIG_PIC32MZ_SPI_DMA */
 
@@ -2021,11 +2035,17 @@ struct spi_dev_s *pic32mz_spibus_initialize(int port)
   regval = spi_getreg(priv, PIC32MZ_SPI_BUF_OFFSET);
 
   /* Configure SPI SDI (input) and SDO (output) pins. SS (output) pins are
-   * managed as GPIOs; CLK (output) pins are not selectable.
+   * managed as GPIOs; CLK (output) pins are not selectable.  On PIC32MZ-W1,
+   * SPI1 may instead use its dedicated pins (DEVCFG1.HSSPIEN), which do not
+   * go through PPS.
    */
 
-  spi_putaddr(priv, regaddr, (uint32_t)priv->config->sdipps);
-  spi_putaddr(priv, priv->config->sdoreg, (uint32_t)priv->config->sdopps);
+  if (priv->config->sdoreg != 0)
+    {
+      spi_putaddr(priv, regaddr, (uint32_t)priv->config->sdipps);
+      spi_putaddr(priv, priv->config->sdoreg,
+                  (uint32_t)priv->config->sdopps);
+    }
 
 #ifdef CONFIG_PIC32MZ_SPI_DMA
   /* Allocate the RX and TX DMA channels, configuration will be done later. */

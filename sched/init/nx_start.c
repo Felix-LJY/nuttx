@@ -51,6 +51,7 @@
 
 #include "task/task.h"
 #include "sched/sched.h"
+#include "wqueue/wqueue.h"
 #include "signal/signal.h"
 #include "semaphore/semaphore.h"
 #include "mqueue/mqueue.h"
@@ -81,8 +82,8 @@
  * and by a series of task lists.  All of these tasks lists are declared
  * below. Although it is not always necessary, most of these lists are
  * prioritized so that common list handling logic can be used (only the
- * g_readytorun, the g_pendingtasks, and the g_waitingforsemaphore lists
- * need to be prioritized).
+ * g_readytorun and g_pendingtasks lists, and the wait lists in each
+ * semaphore, event and message queue, need to be prioritized).
  */
 
 /* This is the list of all tasks that are ready to run.  This is a
@@ -151,8 +152,10 @@ dq_queue_t g_waitingforfill;
 dq_queue_t g_stoppedtasks;
 #endif
 
-/* This list of all tasks that have been initialized, but not yet
- * activated. NOTE:  This is the only list that is not prioritized.
+/* Task list for TSTATE_TASK_INACTIVE.  Initialized but not yet activated
+ * tasks are never linked into it, so it stays empty and removing such a
+ * TCB (whose links are NULL) through the generic task list helpers is a
+ * no-op.
  */
 
 dq_queue_t g_inactivetasks;
@@ -178,7 +181,83 @@ volatile int g_npidhash;
  * ordered list or not.
  */
 
-struct tasklist_s g_tasklisttable[NUM_TASK_STATES];
+const struct tasklist_s g_tasklisttable[NUM_TASK_STATES] =
+{
+  [TSTATE_TASK_INVALID] =
+    {
+      NULL, 0
+    },
+
+#ifdef CONFIG_SMP
+  [TSTATE_TASK_READYTORUN] =
+    {
+      list_readytorun(), TLIST_ATTR_PRIORITIZED
+    },
+#else
+  [TSTATE_TASK_PENDING] =
+    {
+      list_pendingtasks(), TLIST_ATTR_PRIORITIZED
+    },
+  [TSTATE_TASK_READYTORUN] =
+    {
+      list_readytorun(), TLIST_ATTR_PRIORITIZED | TLIST_ATTR_RUNNABLE
+    },
+  [TSTATE_TASK_RUNNING] =
+    {
+      list_readytorun(), TLIST_ATTR_PRIORITIZED | TLIST_ATTR_RUNNABLE
+    },
+#endif
+
+  [TSTATE_TASK_INACTIVE] =
+    {
+      list_inactivetasks(), 0
+    },
+  [TSTATE_WAIT_SEM] =
+    {
+      (FAR void *)offsetof(sem_t, waitlist),
+      TLIST_ATTR_PRIORITIZED | TLIST_ATTR_OFFSET
+    },
+
+#ifdef CONFIG_SCHED_EVENTS
+  [TSTATE_WAIT_EVENT] =
+    {
+      (FAR void *)offsetof(nxevent_t, waitlist),
+      TLIST_ATTR_PRIORITIZED | TLIST_ATTR_OFFSET
+    },
+#endif
+
+  [TSTATE_WAIT_SIG] =
+    {
+      list_waitingforsignal(), 0
+    },
+
+#ifndef CONFIG_DISABLE_MQUEUE
+  [TSTATE_WAIT_MQNOTEMPTY] =
+    {
+      (FAR void *)offsetof(struct mqueue_inode_s, cmn.waitfornotempty),
+      TLIST_ATTR_PRIORITIZED | TLIST_ATTR_OFFSET
+    },
+  [TSTATE_WAIT_MQNOTFULL] =
+    {
+      (FAR void *)offsetof(struct mqueue_inode_s, cmn.waitfornotfull),
+      TLIST_ATTR_PRIORITIZED | TLIST_ATTR_OFFSET
+    },
+#endif
+
+#ifdef CONFIG_LEGACY_PAGING
+  [TSTATE_WAIT_PAGEFILL] =
+    {
+      list_waitingforfill(), TLIST_ATTR_PRIORITIZED
+    },
+#endif
+
+#ifdef CONFIG_SIG_SIGSTOP_ACTION
+  [TSTATE_TASK_STOPPED] =
+    {
+      list_stoppedtasks(), 0
+    },
+#endif
+};
 
 /* This is the current initialization state.  The level of initialization
  * is only important early in the start-up sequence when certain OS or
@@ -206,116 +285,6 @@ struct tcb_s g_idletcb[CONFIG_SMP_NCPUS];
 #if CONFIG_TASK_NAME_SIZE > 0 && !defined(CONFIG_SMP)
 static const char g_idlename[] = "Idle_Task";
 #endif
-
-/****************************************************************************
- * Private Functions
- ****************************************************************************/
-
-/****************************************************************************
- * Name: tasklist_initialize
- *
- * Description:
- *   Initialization of table of task lists.This table is indexed by the
- *   task state enumeration type (tstate_t) and provides a pointer to
- *   the associated static task list (if there is one) as well as a set
- *   of attribute flags indicating properties of the list, for example,
- *   if the list is an ordered list or not.
- *
- ****************************************************************************/
-
-static void tasklist_initialize(void)
-{
-  FAR struct tasklist_s *tlist = (FAR void *)&g_tasklisttable;
-
-  /* TSTATE_TASK_INVALID */
-
-  tlist[TSTATE_TASK_INVALID].list = NULL;
-  tlist[TSTATE_TASK_INVALID].attr = 0;
-
-#ifdef CONFIG_SMP
-
-  /* TSTATE_TASK_READYTORUN */
-
-  tlist[TSTATE_TASK_READYTORUN].list = list_readytorun();
-  tlist[TSTATE_TASK_READYTORUN].attr = TLIST_ATTR_PRIORITIZED;
-
-#else
-
-  /* TSTATE_TASK_PENDING */
-
-  tlist[TSTATE_TASK_PENDING].list = list_pendingtasks();
-  tlist[TSTATE_TASK_PENDING].attr = TLIST_ATTR_PRIORITIZED;
-
-  /* TSTATE_TASK_READYTORUN */
-
-  tlist[TSTATE_TASK_READYTORUN].list = list_readytorun();
-  tlist[TSTATE_TASK_READYTORUN].attr = TLIST_ATTR_PRIORITIZED |
-                                       TLIST_ATTR_RUNNABLE;
-
-  /* TSTATE_TASK_RUNNING */
-
-  tlist[TSTATE_TASK_RUNNING].list = list_readytorun();
-  tlist[TSTATE_TASK_RUNNING].attr = TLIST_ATTR_PRIORITIZED |
-                                    TLIST_ATTR_RUNNABLE;
-#endif
-
-  /* TSTATE_TASK_INACTIVE */
-
-  tlist[TSTATE_TASK_INACTIVE].list = list_inactivetasks();
-  tlist[TSTATE_TASK_INACTIVE].attr = 0;
-
-  /* TSTATE_WAIT_SEM */
-
-  tlist[TSTATE_WAIT_SEM].list = (FAR void *)offsetof(sem_t, waitlist);
-  tlist[TSTATE_WAIT_SEM].attr = TLIST_ATTR_PRIORITIZED |
-                                TLIST_ATTR_OFFSET;
-
-#ifdef CONFIG_SCHED_EVENTS
-  /* TSTATE_WAIT_EVENT */
-
-  tlist[TSTATE_WAIT_EVENT].list = (FAR void *)offsetof(nxevent_t, waitlist);
-  tlist[TSTATE_WAIT_EVENT].attr = TLIST_ATTR_PRIORITIZED |
-                                  TLIST_ATTR_OFFSET;
-#endif
-  /* TSTATE_WAIT_SIG */
-
-  tlist[TSTATE_WAIT_SIG].list = list_waitingforsignal();
-  tlist[TSTATE_WAIT_SIG].attr = 0;
-
-#ifndef CONFIG_DISABLE_MQUEUE
-
-  /* TSTATE_WAIT_MQNOTEMPTY */
-
-  tlist[TSTATE_WAIT_MQNOTEMPTY].list =
-    (FAR void *)offsetof(struct mqueue_inode_s, cmn.waitfornotempty);
-  tlist[TSTATE_WAIT_MQNOTEMPTY].attr = TLIST_ATTR_PRIORITIZED |
-                                       TLIST_ATTR_OFFSET;
-
-  /* TSTATE_WAIT_MQNOTFULL */
-
-  tlist[TSTATE_WAIT_MQNOTFULL].list =
-    (FAR void *)offsetof(struct mqueue_inode_s, cmn.waitfornotfull);
-  tlist[TSTATE_WAIT_MQNOTFULL].attr = TLIST_ATTR_PRIORITIZED |
-                                      TLIST_ATTR_OFFSET;
-#endif
-
-#ifdef CONFIG_LEGACY_PAGING
-
-  /* TSTATE_WAIT_PAGEFILL */
-
-  tlist[TSTATE_WAIT_PAGEFILL].list = list_waitingforfill();
-  tlist[TSTATE_WAIT_PAGEFILL].attr = TLIST_ATTR_PRIORITIZED;
-#endif
-
-#ifdef CONFIG_SIG_SIGSTOP_ACTION
-
-  /* TSTATE_TASK_STOPPED */
-
-  tlist[TSTATE_TASK_STOPPED].list = list_stoppedtasks();
-  tlist[TSTATE_TASK_STOPPED].attr = 0;
-
-#endif
-}
 
 /****************************************************************************
  * Name: idle_task_initialize
@@ -476,6 +445,9 @@ static void idle_group_initialize(void)
 
       group_initialize(tcb);
       tcb->group->tg_flags = GROUP_FLAG_NOCLDWAIT | GROUP_FLAG_PRIVILEGED;
+#ifdef CONFIG_SCHED_CAPABILITIES
+      tcb->group->tg_caps  = PR_CAP_ALL;
+#endif
     }
 }
 
@@ -510,9 +482,9 @@ void nx_start(void)
   g_nx_initstate = OSINIT_BOOT;
   sched_trace_mark("BOOT");
 
-  /* Initialize task list table *********************************************/
-
-  tasklist_initialize();
+#ifdef CONFIG_SCHED_WORKQUEUE
+  work_initialize();
+#endif
 
   /* Initialize the IDLE task TCB *******************************************/
 
@@ -541,38 +513,38 @@ void nx_start(void)
     defined(CONFIG_MM_PGALLOC)
   /* Initialize the memory manager */
 
-    {
-      FAR void *heap_start;
-      size_t heap_size;
+  {
+    FAR void *heap_start;
+    size_t heap_size;
 
 #ifdef MM_KERNEL_USRHEAP_INIT
-      /* Get the user-mode heap from the platform specific code and configure
-       * the user-mode memory allocator.
-       */
+    /* Get the user-mode heap from the platform specific code and configure
+     * the user-mode memory allocator.
+     */
 
-      up_allocate_heap(&heap_start, &heap_size);
-      kumm_initialize(heap_start, heap_size);
+    up_allocate_heap(&heap_start, &heap_size);
+    kumm_initialize(heap_start, heap_size);
 #endif
 
 #ifdef CONFIG_MM_KERNEL_HEAP
-      /* Get the kernel-mode heap from the platform specific code and
-       * configure the kernel-mode memory allocator.
-       */
+    /* Get the kernel-mode heap from the platform specific code and
+     * configure the kernel-mode memory allocator.
+     */
 
-      up_allocate_kheap(&heap_start, &heap_size);
-      kmm_initialize(heap_start, heap_size);
+    up_allocate_kheap(&heap_start, &heap_size);
+    kmm_initialize(heap_start, heap_size);
 #endif
 
 #ifdef CONFIG_MM_PGALLOC
-      /* If there is a page allocator in the configuration, then get the page
-       * heap information from the platform-specific code and configure the
-       * page allocator.
-       */
+    /* If there is a page allocator in the configuration, then get the page
+     * heap information from the platform-specific code and configure the
+     * page allocator.
+     */
 
-      up_allocate_pgheap(&heap_start, &heap_size);
-      mm_pginitialize(heap_start, heap_size);
+    up_allocate_pgheap(&heap_start, &heap_size);
+    mm_pginitialize(heap_start, heap_size);
 #endif
-    }
+  }
 #endif
 
 #ifdef CONFIG_MM_KMAP
@@ -596,10 +568,12 @@ void nx_start(void)
   /* Initialize the logic that determine unique process IDs. */
 
   i = 1 << LOG2_CEIL(CONFIG_PID_INITIAL_COUNT);
+#if CONFIG_SMP_NCPUS >= CONFIG_PID_INITIAL_COUNT
   while (i <= CONFIG_SMP_NCPUS)
     {
       i <<= 1;
     }
+#endif
 
   g_pidhash = kmm_zalloc(sizeof(*g_pidhash) * i);
   DEBUGASSERT(g_pidhash);
@@ -744,7 +718,7 @@ void nx_start(void)
 
   /* Create initial tasks and bring-up the system */
 
-  DEBUGVERIFY(nx_bringup());
+  nx_bringup();
 
   /* Enter to idleloop */
 

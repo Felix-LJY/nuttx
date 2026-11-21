@@ -105,6 +105,32 @@
  * Pre-processor Definitions
  ****************************************************************************/
 
+/* Internal channels of the STM32G4 ADCs
+ *
+ * The temperature sensor, the VBAT/3 divider and the VREFINT are connected
+ * to fixed channels of some of the ADCs and have to be enabled in the common
+ * control register (ADC_CCR) of the block before they can be converted:
+ *
+ *          VTS (TSEN)   VBAT/3 (VBATEN)   VREFINT (VREFEN)
+ *   ADC1   16           17                18
+ *   ADC2   -            -                 -
+ *   ADC3   -            17                18
+ *   ADC4   -            -                 18
+ *
+ * The other internal channels are OPAMP outputs and need no ADC_CCR bit.
+ * Start-up time after enabling: 12 us for VREFINT, 120 us for the
+ * temperature sensor.
+ */
+
+#if defined(HAVE_IP_ADC_V2) && defined(CONFIG_STM32_STM32G4XXX)
+#  define HAVE_ADC_INTERNAL_CH
+#  define ADC_INTERNAL_CHAN_VTS       16
+#  define ADC_INTERNAL_CHAN_VBAT      17
+#  define ADC_INTERNAL_CHAN_VREFINT   18
+#  define ADC_VREFINT_STARTUP_US      12
+#  define ADC_VTS_STARTUP_US          120
+#endif
+
 /* RCC reset ****************************************************************/
 
 #if defined(HAVE_IP_ADC_V1)
@@ -371,6 +397,23 @@
 #define ANIOC_TRIGGER_REGULAR  (1 << 0)
 #define ANIOC_TRIGGER_INJECTED (1 << 1)
 
+/* ADC differential mode selection configuration */
+
+#ifdef HAVE_IP_ADC_V2
+#  define ADC_DIFSEL_DEFAULT      0
+#  define ADC_DIFSEL_ALL_SINGLE   0x0
+#  define ADC_DIFSEL_ALL_DIFF     0x7ffff
+#endif
+
+#if defined(HAVE_IP_ADC_V2) && \
+    (defined(CONFIG_STM32_ADC1_OVERSAMPLE) || \
+     defined(CONFIG_STM32_ADC2_OVERSAMPLE) || \
+     defined(CONFIG_STM32_ADC3_OVERSAMPLE) || \
+     defined(CONFIG_STM32_ADC4_OVERSAMPLE) || \
+     defined(CONFIG_STM32_ADC5_OVERSAMPLE))
+#  define ADC_HAVE_OVERSAMPLE
+#endif
+
 /****************************************************************************
  * Private Types
  ****************************************************************************/
@@ -446,6 +489,9 @@ struct stm32_dev_s
 #endif
 #ifdef ADC_HAVE_JEXTCFG
   uint32_t jextcfg;          /* External event configuration for injected group */
+#endif
+#ifdef HAVE_IP_ADC_V2
+  uint32_t difsel;           /* ADCx_DIFSEL (Differential Mode) value */
 #endif
 #ifdef ADC_HAVE_TIMER
   uint32_t tbase;            /* Base address of timer used by this ADC block */
@@ -596,7 +642,6 @@ static int adc_extcfg_set(struct stm32_dev_s *priv, uint32_t extcfg);
 #ifdef ADC_HAVE_JEXTCFG
 static int adc_jextcfg_set(struct stm32_dev_s *priv, uint32_t jextcfg);
 #endif
-
 static void adc_dumpregs(struct stm32_dev_s *priv);
 
 #ifdef CONFIG_STM32_ADC_LL_OPS
@@ -636,6 +681,9 @@ static void adc_sampletime_write(struct stm32_adc_dev_s *dev);
 static void adc_llops_dumpregs(struct stm32_adc_dev_s *dev);
 static int  adc_llops_multicfg(struct stm32_adc_dev_s *dev, uint8_t mode);
 static void adc_llops_enable(struct stm32_adc_dev_s *dev, bool enable);
+#  ifdef HAVE_IP_ADC_V2
+static int  adc_llops_calibrate(struct stm32_adc_dev_s *dev);
+#  endif
 #endif
 
 /****************************************************************************
@@ -691,7 +739,10 @@ static const struct stm32_adc_ops_s g_adc_llops =
 #  endif
   .dump_regs     = adc_llops_dumpregs,
   .multi_cfg     = adc_llops_multicfg,
-  .enable        = adc_llops_enable
+  .enable        = adc_llops_enable,
+#  ifdef HAVE_IP_ADC_V2
+  .calibrate     = adc_llops_calibrate
+#  endif
 };
 #endif
 
@@ -787,6 +838,13 @@ static struct stm32_dev_s g_adcpriv1 =
 #ifdef ADC1_HAVE_JEXTCFG
   .jextcfg     = ADC1_JEXTCFG_VALUE,
 #endif
+#ifdef HAVE_IP_ADC_V2
+#  ifdef BOARD_ADC1_DIFSEL
+  .difsel      = BOARD_ADC1_DIFSEL,
+#  else
+  .difsel      = ADC_DIFSEL_DEFAULT,
+#  endif
+#endif
 #ifdef ADC1_HAVE_TIMER
   .trigger     = CONFIG_STM32_ADC1_TIMTRIG,
   .tbase       = ADC1_TIMER_BASE,
@@ -854,6 +912,13 @@ static struct stm32_dev_s g_adcpriv2 =
 #endif
 #ifdef ADC2_HAVE_JEXTCFG
   .jextcfg     = ADC2_JEXTCFG_VALUE,
+#endif
+#ifdef HAVE_IP_ADC_V2
+#  ifdef BOARD_ADC2_DIFSEL
+  .difsel      = BOARD_ADC2_DIFSEL,
+#  else
+  .difsel      = ADC_DIFSEL_DEFAULT,
+#  endif
 #endif
 #ifdef ADC2_HAVE_TIMER
   .trigger     = CONFIG_STM32_ADC2_TIMTRIG,
@@ -923,6 +988,13 @@ static struct stm32_dev_s g_adcpriv3 =
 #ifdef ADC3_HAVE_JEXTCFG
   .jextcfg     = ADC3_JEXTCFG_VALUE,
 #endif
+#ifdef HAVE_IP_ADC_V2
+#  ifdef BOARD_ADC3_DIFSEL
+  .difsel      = BOARD_ADC3_DIFSEL,
+#  else
+  .difsel      = ADC_DIFSEL_DEFAULT,
+#  endif
+#endif
 #ifdef ADC3_HAVE_TIMER
   .trigger     = CONFIG_STM32_ADC3_TIMTRIG,
   .tbase       = ADC3_TIMER_BASE,
@@ -983,6 +1055,13 @@ static struct stm32_dev_s g_adcpriv4 =
 #endif
 #ifdef ADC4_HAVE_JEXTCFG
   .jextcfg     = ADC4_JEXTCFG_VALUE,
+#endif
+#ifdef HAVE_IP_ADC_V2
+#  ifdef BOARD_ADC4_DIFSEL
+  .difsel      = BOARD_ADC4_DIFSEL,
+#  else
+  .difsel      = ADC_DIFSEL_DEFAULT,
+#  endif
 #endif
 #ifdef ADC4_HAVE_TIMER
   .trigger     = CONFIG_STM32_ADC4_TIMTRIG,
@@ -1255,6 +1334,7 @@ static void tim_modifyreg32(struct stm32_dev_s *priv, int offset,
                             uint32_t clrbits, uint32_t setbits)
 {
   uint32_t addr = priv->tbase + offset;
+
   putreg32((getreg32(addr) & ~clrbits) | setbits, addr);
 }
 #endif
@@ -2387,18 +2467,29 @@ static void adc_watchdog_cfg(struct stm32_dev_s *priv)
 #if defined(HAVE_IP_ADC_V2)
 static void adc_calibrate(struct stm32_dev_s *priv)
 {
-#if 0 /* Doesn't work */
-  /* Calibrate the ADC */
+  /* Calibrate single-ended channels if necessary */
 
-  adc_modifyreg(priv, STM32_ADC_CR_OFFSET, ADC_CR_ADCALDIF, AD_CR_ADCAL);
+  if (priv->difsel != ADC_DIFSEL_ALL_DIFF)
+    {
+      adc_modifyreg(priv, STM32_ADC_CR_OFFSET, ADC_CR_ADCALDIF, 0);
+      adc_modifyreg(priv, STM32_ADC_CR_OFFSET, 0, ADC_CR_ADCAL);
 
-  /* Wait for the calibration to complete */
+      /* Wait for the single-ended calibration to complete */
 
-  while ((adc_getreg(priv, STM32_ADC_CR_OFFSET) & ADC_CR_ADCAL) != 0);
+      while ((adc_getreg(priv, STM32_ADC_CR_OFFSET) & ADC_CR_ADCAL) != 0);
+    }
 
-#else
-  UNUSED(priv);
-#endif
+  /* Calibrate differential channels if necessary */
+
+  if (priv->difsel != ADC_DIFSEL_ALL_SINGLE)
+    {
+      adc_modifyreg(priv, STM32_ADC_CR_OFFSET, 0, ADC_CR_ADCALDIF);
+      adc_modifyreg(priv, STM32_ADC_CR_OFFSET, 0, ADC_CR_ADCAL);
+
+      /* Wait for the differential calibration to complete */
+
+      while ((adc_getreg(priv, STM32_ADC_CR_OFFSET) & ADC_CR_ADCAL) != 0);
+    }
 }
 #elif defined(HAVE_IP_ADC_V1) && defined(HAVE_BASIC_ADC)
 static void adc_calibrate(struct stm32_dev_s *priv)
@@ -2532,6 +2623,15 @@ static void adc_mode_cfg(struct stm32_dev_s *priv)
  ****************************************************************************/
 
 #if defined(HAVE_IP_ADC_V2)
+
+/* ADC voltage regulator start-up time (tADCVREG_STUP) */
+
+#  ifdef CONFIG_STM32_STM32G4XXX
+#    define ADC_VREG_STARTUP_US 20
+#  else
+#    define ADC_VREG_STARTUP_US 10
+#  endif
+
 static void adc_voltreg_cfg(struct stm32_dev_s *priv)
 {
   /* Set ADC voltage regulator to intermediate state */
@@ -2546,7 +2646,7 @@ static void adc_voltreg_cfg(struct stm32_dev_s *priv)
 
   /* Wait for the ADC voltage regulator to startup */
 
-  up_udelay(10);
+  up_udelay(ADC_VREG_STARTUP_US);
 }
 #else
 static void adc_voltreg_cfg(struct stm32_dev_s *priv)
@@ -2588,20 +2688,106 @@ static void adc_sampletime_cfg(struct adc_dev_s *dev)
  ****************************************************************************/
 
 #if defined(HAVE_IP_ADC_V2)
+#  ifdef HAVE_ADC_INTERNAL_CH
+
+/****************************************************************************
+ * Name: adc_internal_chan
+ *
+ * Description:
+ *   Return the ADC_CCR enable bit of an internal channel of the ADC, or
+ *   zero if the channel is not an internal channel of this ADC.
+ *
+ ****************************************************************************/
+
+static uint32_t adc_internal_chan(struct stm32_dev_s *priv, uint8_t chan)
+{
+  switch (chan)
+    {
+      case ADC_INTERNAL_CHAN_VTS:
+        return priv->intf == 1 ? ADC_CCR_TSEN : 0;
+
+      case ADC_INTERNAL_CHAN_VBAT:
+        return (priv->intf == 1 || priv->intf == 3) ? ADC_CCR_VBATEN : 0;
+
+      case ADC_INTERNAL_CHAN_VREFINT:
+        return priv->intf != 2 ? ADC_CCR_VREFEN : 0;
+
+      default:
+        return 0;
+    }
+}
+
+/****************************************************************************
+ * Name: adc_internal
+ *
+ * Description:
+ *   Return the ADC_CCR enable bits that the channels converted by this ADC
+ *   need.
+ *
+ ****************************************************************************/
+
+static uint32_t adc_internal(struct stm32_dev_s *priv)
+{
+  uint32_t ccr = 0;
+  int i;
+
+  for (i = 0; i < priv->cr_channels; i++)
+    {
+      ccr |= adc_internal_chan(priv, priv->r_chanlist[i]);
+    }
+
+#    ifdef ADC_HAVE_INJECTED
+  for (i = 0; i < priv->cj_channels; i++)
+    {
+      ccr |= adc_internal_chan(priv, priv->j_chanlist[i]);
+    }
+#    endif
+
+  return ccr;
+}
+#  endif /* HAVE_ADC_INTERNAL_CH */
+
 static void adc_common_cfg(struct stm32_dev_s *priv)
 {
   uint32_t clrbits = 0;
   uint32_t setbits = 0;
+#  ifdef HAVE_ADC_INTERNAL_CH
+  uint32_t internal;
+#  endif
 
   /* REVISIT: */
 
   clrbits = ADC_CCR_DUAL_MASK | ADC_CCR_DELAY_MASK | ADC_CCR_DMACFG |
-            ADC_CCR_MDMA_MASK | ADC_CCR_CKMODE_MASK | ADC_CCR_VREFEN |
-            ADC_CCR_TSEN | ADC_CCR_VBATEN;
+            ADC_CCR_MDMA_MASK | ADC_CCR_CKMODE_MASK;
   setbits = ADC_CCR_DUAL_IND | ADC_CCR_DELAY(1) | ADC_CCR_MDMA_DISABLED |
             ADC_CCR_CKMODE_ASYNCH;
 
+#  ifdef HAVE_ADC_INTERNAL_CH
+  /* Enable the internal channels in the channel list.  The bits are shared
+   * by the ADCs of the block, so they are not cleared here (the block is
+   * reset on the first open and the last close).
+   */
+
+  internal = adc_internal(priv);
+  setbits |= internal;
+#  else
+  clrbits |= ADC_CCR_VREFEN | ADC_CCR_TSEN | ADC_CCR_VBATEN;
+#  endif
+
   adccmn_modifyreg(priv, STM32_ADC_CCR_OFFSET, clrbits, setbits);
+
+#  ifdef HAVE_ADC_INTERNAL_CH
+  /* Wait for the sensors to start up */
+
+  if ((internal & ADC_CCR_TSEN) != 0)
+    {
+      up_udelay(ADC_VTS_STARTUP_US);
+    }
+  else if ((internal & ADC_CCR_VREFEN) != 0)
+    {
+      up_udelay(ADC_VREFINT_STARTUP_US);
+    }
+#  endif
 }
 #elif defined(HAVE_IP_ADC_V1) && !defined(HAVE_BASIC_ADC)
 static void adc_common_cfg(struct stm32_dev_s *priv)
@@ -2730,6 +2916,83 @@ static void adc_dma_start(struct adc_dev_s *dev)
 }
 #endif /* ADC_HAVE_DMA */
 
+#ifdef ADC_HAVE_OVERSAMPLE
+/****************************************************************************
+ * Name: adc_oversample_set
+ *
+ * Description:
+ *   Configure the regular group hardware oversampler (CFGR2).  The fields
+ *   can only be written while ADSTART is 0, which is the case here because
+ *   the ADC is configured before the first conversion is started.
+ *
+ ****************************************************************************/
+
+static void adc_oversample_set(struct stm32_dev_s *priv)
+{
+  uint32_t regval = 0;
+
+  switch (priv->intf)
+    {
+#ifdef CONFIG_STM32_ADC1_OVERSAMPLE
+      case 1:
+        regval = ADC_CFGR2_ROVSE |
+                 (CONFIG_STM32_ADC1_OVSR << ADC_CFGR2_OVSR_SHIFT) |
+                 (CONFIG_STM32_ADC1_OVSS << ADC_CFGR2_OVSS_SHIFT);
+#  ifdef CONFIG_STM32_ADC1_TROVS
+        regval |= ADC_CFGR2_TROVS;
+#  endif
+        break;
+#endif
+#ifdef CONFIG_STM32_ADC2_OVERSAMPLE
+      case 2:
+        regval = ADC_CFGR2_ROVSE |
+                 (CONFIG_STM32_ADC2_OVSR << ADC_CFGR2_OVSR_SHIFT) |
+                 (CONFIG_STM32_ADC2_OVSS << ADC_CFGR2_OVSS_SHIFT);
+#  ifdef CONFIG_STM32_ADC2_TROVS
+        regval |= ADC_CFGR2_TROVS;
+#  endif
+        break;
+#endif
+#ifdef CONFIG_STM32_ADC3_OVERSAMPLE
+      case 3:
+        regval = ADC_CFGR2_ROVSE |
+                 (CONFIG_STM32_ADC3_OVSR << ADC_CFGR2_OVSR_SHIFT) |
+                 (CONFIG_STM32_ADC3_OVSS << ADC_CFGR2_OVSS_SHIFT);
+#  ifdef CONFIG_STM32_ADC3_TROVS
+        regval |= ADC_CFGR2_TROVS;
+#  endif
+        break;
+#endif
+#ifdef CONFIG_STM32_ADC4_OVERSAMPLE
+      case 4:
+        regval = ADC_CFGR2_ROVSE |
+                 (CONFIG_STM32_ADC4_OVSR << ADC_CFGR2_OVSR_SHIFT) |
+                 (CONFIG_STM32_ADC4_OVSS << ADC_CFGR2_OVSS_SHIFT);
+#  ifdef CONFIG_STM32_ADC4_TROVS
+        regval |= ADC_CFGR2_TROVS;
+#  endif
+        break;
+#endif
+#ifdef CONFIG_STM32_ADC5_OVERSAMPLE
+      case 5:
+        regval = ADC_CFGR2_ROVSE |
+                 (CONFIG_STM32_ADC5_OVSR << ADC_CFGR2_OVSR_SHIFT) |
+                 (CONFIG_STM32_ADC5_OVSS << ADC_CFGR2_OVSS_SHIFT);
+#  ifdef CONFIG_STM32_ADC5_TROVS
+        regval |= ADC_CFGR2_TROVS;
+#  endif
+        break;
+#endif
+      default:
+        break;
+    }
+
+  adc_modifyreg(priv, STM32_ADC_CFGR2_OFFSET,
+                ADC_CFGR2_ROVSE | ADC_CFGR2_OVSR_MASK |
+                ADC_CFGR2_OVSS_MASK | ADC_CFGR2_TROVS, regval);
+}
+#endif /* ADC_HAVE_OVERSAMPLE */
+
 /****************************************************************************
  * Name: adc_configure
  ****************************************************************************/
@@ -2746,7 +3009,7 @@ static void adc_configure(struct adc_dev_s *dev)
 
   adc_voltreg_cfg(priv);
 
-  /* Calibrate ADC - doesn't work for now */
+  /* Calibrate ADC */
 
   adc_calibrate(priv);
 
@@ -2807,6 +3070,18 @@ static void adc_configure(struct adc_dev_s *dev)
   /* Configure external event for regular group */
 
   adc_extcfg_set(priv, priv->extcfg);
+#endif
+
+#ifdef HAVE_IP_ADC_V2
+  /* Configure differential mode */
+
+  adc_putreg(priv, STM32_ADC_DIFSEL_OFFSET, priv->difsel);
+#endif
+
+#ifdef ADC_HAVE_OVERSAMPLE
+  /* Configure hardware oversampling */
+
+  adc_oversample_set(priv);
 #endif
 
   /* Enable ADC */
@@ -2922,8 +3197,8 @@ out:
 #ifdef HAVE_HSI_CONTROL
 static void adc_reset_hsi_disable(struct adc_dev_s *dev)
 {
-    adc_reset(dev);
-    adc_shutdown(dev);
+  adc_reset(dev);
+  adc_shutdown(dev);
 }
 #endif
 
@@ -4656,8 +4931,8 @@ static void adc_llops_dumpregs(struct stm32_adc_dev_s *dev)
  *
  ****************************************************************************/
 
-static int adc_llops_multicfg(struct stm32_adc_dev_s *dev, uint8_t mode)
 #if defined(HAVE_IP_ADC_V2)
+static int adc_llops_multicfg(struct stm32_adc_dev_s *dev, uint8_t mode)
 {
   struct stm32_dev_s *priv    = (struct stm32_dev_s *)dev;
   int                 ret     = OK;
@@ -4710,6 +4985,7 @@ errout:
   return ret;
 }
 #elif defined(HAVE_IP_ADC_V1) && !defined(HAVE_BASIC_ADC)
+static int adc_llops_multicfg(struct stm32_adc_dev_s *dev, uint8_t mode)
 {
   struct stm32_dev_s *priv    = (struct stm32_dev_s *)dev;
   int                 ret     = OK;
@@ -4784,6 +5060,7 @@ errout:
   return ret;
 }
 #else  /* ADV IPv1 BASIC */
+static int adc_llops_multicfg(struct stm32_adc_dev_s *dev, uint8_t mode)
 {
   if (mode != ADC_MULTIMODE_INDEP)
     {
@@ -4804,6 +5081,52 @@ static void adc_llops_enable(struct stm32_adc_dev_s *dev, bool enable)
 
   adc_enable(priv, enable);
 }
+
+/****************************************************************************
+ * Name: adc_llops_calibrate
+ *
+ * Description:
+ *   Run the calibration again, for example after a large temperature
+ *   change.  The ADC is disabled for the calibration and enabled again if
+ *   it was enabled before.
+ *
+ * Returned Value:
+ *   OK on success, -EBUSY if a conversion is in progress.
+ *
+ ****************************************************************************/
+
+#  ifdef HAVE_IP_ADC_V2
+static int adc_llops_calibrate(struct stm32_adc_dev_s *dev)
+{
+  struct stm32_dev_s *priv = (struct stm32_dev_s *)dev;
+  irqstate_t flags;
+  uint32_t regval;
+  bool enabled;
+
+  flags = enter_critical_section();
+
+  regval = adc_getreg(priv, STM32_ADC_CR_OFFSET);
+  if ((regval & (ADC_CR_ADSTART | ADC_CR_JADSTART)) != 0)
+    {
+      leave_critical_section(flags);
+      return -EBUSY;
+    }
+
+  enabled = (regval & ADC_CR_ADEN) != 0;
+
+  adc_enable(priv, false);
+  adc_voltreg_cfg(priv);
+  adc_calibrate(priv);
+
+  if (enabled)
+    {
+      adc_enable(priv, true);
+    }
+
+  leave_critical_section(flags);
+  return OK;
+}
+#  endif
 
 #endif /* CONFIG_STM32_ADC_LL_OPS */
 

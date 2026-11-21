@@ -35,10 +35,16 @@
 
 # Cortex-M33 GPIO and EXTI capabilities
 
-config STM32_HAVE_IP_GPIO_M33_V1
+config STM32_HAVE_IP_GPIO_M33M55_V1
 	bool
 
-config STM32_HAVE_IP_EXTI_M33_V1
+config STM32_HAVE_GPIO_DELAY
+	bool
+
+config STM32_HAVE_IP_EXTI_M33M55_V1
+	bool
+
+config STM32_HAVE_IP_DMA_GPDMA
 	bool
 
 config STM32_HAVE_ADC_TIMTRIG_TRGO2
@@ -73,6 +79,10 @@ config STM32_HAVE_ADC5
 config STM32_HAVE_ADC_OVERSAMPLE
 	bool
 	default STM32_STM32L0 || STM32_STM32G0 || STM32_STM32C0 || STM32_STM32U0
+
+config STM32_HAVE_ADC_OVERSAMPLE_G4
+	bool
+	default ARCH_CHIP_STM32G4
 
 config STM32_HAVE_SDADC1
 	bool
@@ -239,20 +249,29 @@ config STM32_HAVE_DAC4
 
 # DBGMCU capabilities
 
-config STM32_HAVE_IP_DBGMCU_M0_V1
+config STM32_HAVE_IP_DBGMCU_V1
 	bool
 
-config STM32_HAVE_IP_DBGMCU_M3M4_V1
+config STM32_HAVE_IP_DBGMCU_V2
 	bool
-	select STM32_DBGMCU_HAVE_TIM_FZ_IN_CR
 
-config STM32_HAVE_IP_DBGMCU_M3M4_V2
+config STM32_HAVE_IP_DBGMCU_V3
 	bool
-	select STM32_DBGMCU_HAVE_TIM_FZ_IN_APB2_FZ
 
-config STM32_HAVE_IP_DBGMCU_M3M4_V3
+config STM32_HAVE_IP_DBGMCU_V4
 	bool
-	select STM32_DBGMCU_HAVE_TIM_FZ_IN_APB2_FZ
+
+config STM32_HAVE_IP_DBGMCU_V5
+	bool
+
+config STM32_HAVE_IP_DBGMCU_V6
+	bool
+
+config STM32_HAVE_IP_DBGMCU_V7
+	bool
+
+config STM32_HAVE_IP_DBGMCU_V8
+	bool
 
 # DCMI capabilities
 
@@ -284,12 +303,6 @@ config STM32_HAVE_MDMA
 config STM32_HAVE_BDMA
 	bool
 
-config STM32_HAVE_GPADMA1
-	bool
-
-config STM32_HAVE_LPDMA1
-	bool
-
 config STM32_HAVE_DMA1
 	bool
 
@@ -298,6 +311,14 @@ config STM32_HAVE_DMA2
 
 config STM32_HAVE_DMA2D
 	bool
+
+config STM32_HAVE_GPDMA_SECURE
+	bool
+	---help---
+		The CPU runs secure and privileged, and the memory it uses accepts
+		only secure, privileged bus accesses (STM32N6).  GPDMA channels are
+		then made secure and privileged, with secure source and
+		destination.  Other accesses read as zero and writes are lost.
 
 config STM32_HAVE_DMAMUX
 	bool
@@ -337,6 +358,17 @@ config STM32_HAVE_ETHMAC
 	bool
 
 config STM32_HAVE_IP_ETHMAC_M3M4_V1
+	bool
+
+# Synopsys Ethernet QoS MAC (STM32H5, STM32H7, STM32N6)
+
+config STM32_HAVE_IP_ETHMAC_V2
+	bool
+
+config STM32_HAVE_ETH_RGMII
+	bool
+
+config STM32_HAVE_ETH_AXI
 	bool
 
 config STM32_HAVE_ETHRNET
@@ -425,6 +457,9 @@ config STM32_HAVE_GPIOF
 config STM32_HAVE_GPIOG
 	bool
 
+config STM32_HAVE_GPIOI
+	bool
+
 # HRTIM capabilities
 
 config STM32_HAVE_HRTIM1
@@ -449,6 +484,12 @@ config STM32_HAVE_IP_I2C_M3M4_V1
 
 config STM32_HAVE_IP_I2C_M3M4_V2
 	bool
+
+config STM32_HAVE_IP_I2C_M33M55_V2
+	bool
+	---help---
+		I2C v2 of the Cortex-M33 and Cortex-M55 families with the kernel
+		clock from board.h (STM32H5, STM32N6).
 
 config STM32_HAVE_IP_I2C_M0_V1
 	bool
@@ -503,7 +544,10 @@ config STM32_HAVE_LPUART
 config STM32_HAVE_LTDC
 	bool
 
-config STM32_HAVE_IP_LTDC_M3M4_V1
+config STM32_HAVE_IP_LTDC_V1
+	bool
+
+config STM32_HAVE_IP_LTDC_V2
 	bool
 
 config STM32_HAVE_DSIHOST
@@ -627,6 +671,9 @@ config STM32_HAVE_IP_PWR_G0
 config STM32_HAVE_IP_PWR_M3M4_V1
 	bool
 
+config STM32_HAVE_IP_PWR_M33_V1
+	bool
+
 config STM32_HAVE_SMPS
 	bool
 
@@ -676,7 +723,7 @@ config STM32_HAVE_RNG
 config STM32_HAVE_IP_RNG_M0_V1
 	bool
 
-config STM32_HAVE_IP_RNG_M3M4_V1
+config STM32_HAVE_IP_RNG_V1
 	bool
 
 # RTC capabilities
@@ -709,6 +756,9 @@ config STM32_HAVE_IP_RTCC_M3M4_F4
 	bool
 
 config STM32_HAVE_IP_RTC_M3M4_V1
+	bool
+
+config STM32_HAVE_IP_RTCC_M33M55_V1
 	bool
 
 config STM32_HAVE_RTC_SUBSECONDS
@@ -758,6 +808,11 @@ config STM32_HAVE_SDMMC2
 config STM32_HAVE_IP_SDIO_M3M4_V1
 	bool
 
+config STM32_HAVE_IP_SDMMC_V2
+	bool
+	---help---
+		SDMMC with an internal DMA (IDMA) (STM32H7, STM32N6).
+
 # SECURITY capabilities
 
 config STM32_HAVE_FIREWALL
@@ -801,7 +856,7 @@ config STM32_HAVE_HASH
 config STM32_HAVE_SPI_CORE_DMA
 	bool
 	default y if STM32_COMMON_LEGACY || STM32_COMMON_F0_L0_G0_C0
-	default y if STM32_COMMON_F7_H7_H5
+	default y if STM32_COMMON_F7_H7_H5 || STM32_HAVE_IP_SPI_V5
 	default y if ARCH_CHIP_STM32WL5
 	default y if STM32_COMMON_L4_L5_U5 && STM32_SPI
 	default y if ARCH_CHIP_STM32WB && (STM32_SPI1 || STM32_SPI2) && STM32_DMA
@@ -809,12 +864,12 @@ config STM32_HAVE_SPI_CORE_DMA
 config STM32_HAVE_SPI_DMA_FAMILY_WL5
 	bool
 	default y if STM32_COMMON_LEGACY || ARCH_CHIP_STM32F7
-	default y if STM32_COMMON_H7_H5 || ARCH_CHIP_STM32WL5
+	default y if STM32_COMMON_H7_H5 || ARCH_CHIP_STM32WL5 || STM32_HAVE_IP_SPI_V5
 
 config STM32_HAVE_SPI_DMA_FAMILY
 	bool
 	default y if STM32_COMMON_LEGACY || ARCH_CHIP_STM32F7
-	default y if STM32_COMMON_H7_H5
+	default y if STM32_COMMON_H7_H5 || STM32_HAVE_IP_SPI_V5
 
 config STM32_HAVE_IP_SPI_V1
 	bool
@@ -827,6 +882,11 @@ config STM32_HAVE_IP_SPI_V3
 
 config STM32_HAVE_IP_SPI_V4
 	bool
+
+config STM32_HAVE_IP_SPI_V5
+	bool
+	---help---
+		SPI with FIFOs, TSIZE and a kernel clock (STM32H5, STM32N6).
 
 config STM32_HAVE_SPI1
 	bool
@@ -897,11 +957,11 @@ config STM32_HAVE_TIM_PWM_STM32PWM
 
 config STM32_HAVE_TIM_PWM_CHMODE_EXTENDED
 	bool
-	default y if (STM32_HAVE_IP_TIMERS && STM32_HAVE_IP_TIMERS_M3M4_V2) || STM32_COMMON_F7_H7 || ARCH_CHIP_STM32L4 || ARCH_CHIP_STM32H5
+	default y if (STM32_HAVE_IP_TIMERS && STM32_HAVE_IP_TIMERS_V2) || STM32_COMMON_F7_H7 || ARCH_CHIP_STM32L4 || ARCH_CHIP_STM32H5
 
 config STM32_HAVE_TIM_PWM_CHMODE_LEGACY
 	bool
-	default y if STM32_HAVE_IP_TIMERS && !STM32_HAVE_IP_TIMERS_M3M4_V2
+	default y if STM32_HAVE_IP_TIMERS && !STM32_HAVE_IP_TIMERS_V2
 
 config STM32_HAVE_TIM_PWM_CHMODE_LIMITED
 	bool
@@ -922,15 +982,6 @@ config STM32_HAVE_PWM_MULTICHAN
 	default y if (ARCH_CHIP_STM32L4 || ARCH_CHIP_STM32H5 || ARCH_CHIP_STM32U5) && STM32_PWM
 	default y if ARCH_CHIP_STM32L5 && STM32_PWM_MULTICHAN_L5_TIMERS
 
-config STM32_HAVE_QENCODER_MAIN
-	bool
-	default y if STM32_HAVE_IP_TIMERS || STM32_COMMON_F7_H7
-	default y if STM32_COMMON_L4_L5_U5
-
-config STM32_HAVE_QENCODER_16BIT
-	bool
-	default y if STM32_QENCODER_STM32 || STM32_QENCODER_F0
-
 config STM32_ENERGYLITE
 	bool
 	select STM32_HAVE_TIM6 if STM32_HAVE_IP_TIMERS
@@ -942,17 +993,15 @@ config STM32_HAVE_LPTIM_CHANNEL
 config STM32_HAVE_IP_TIMERS
 	bool
 
-config STM32_HAVE_IP_TIMERS_M3M4_V1
+config STM32_HAVE_IP_TIMERS_V1
 	bool
 	select STM32_HAVE_IP_TIMERS
 
-config STM32_HAVE_IP_TIMERS_M3M4_V2
+config STM32_HAVE_IP_TIMERS_V2
 	bool
-	select STM32_HAVE_IP_TIMERS
 
-config STM32_HAVE_IP_TIMERS_M3M4_V3
+config STM32_HAVE_IP_TIMERS_V3
 	bool
-	select STM32_HAVE_IP_TIMERS
 
 config STM32_HAVE_IP_TIMERS_M0_V1
 	bool
@@ -1035,6 +1084,19 @@ config STM32_HAVE_TIM19
 config STM32_HAVE_TIM20
 	bool
 
+# Timer counter width.  TIM2 and TIM5 are 32-bit on most families; these
+# capability flags carry that per-family knowledge so the common timer
+# lower-half driver does not need chip-line #ifdefs.  A family whose TIM2 or
+# TIM5 is 32-bit selects the matching flag from its chip Kconfig; every other
+# timer (and the 16-bit STM32F10xx/STM32L15xx/STM32F30xx/STM32L0 lines) is
+# left at the default 16-bit width.
+
+config STM32_HAVE_TIM2_32BITS
+	bool
+
+config STM32_HAVE_TIM5_32BITS
+	bool
+
 config STM32_HAVE_LPTIM1
 	bool
 
@@ -1047,10 +1109,10 @@ config STM32_HAVE_LPTIM3
 config STM32_HAVE_LPTIM4
 	bool
 
-config STM32_HAVE_IP_ONESHOT_M3M4_V1
+config STM32_HAVE_LPTIM5
 	bool
 
-config STM32_HAVE_IP_FREERUN_M3M4_V1
+config STM32_HAVE_LPTIM6
 	bool
 
 # TSC capabilities
@@ -1069,9 +1131,12 @@ config STM32_HAVE_USART_H5
 config STM32_HAVE_USART_RXFIFO_THRESHOLD
 	bool
 
+config STM32_HAVE_USART_WUS
+	bool
+
 config STM32_HAVE_USART_UNCONFIG_ON_CLOSE
 	bool
-	default y if ARCH_CHIP_STM32H5
+	default y if STM32_HAVE_IP_USART_M33M55_V3
 	default y if ARCH_CHIP_STM32N6
 
 config STM32_HAVE_USART2
@@ -1098,7 +1163,7 @@ config STM32_HAVE_UART8
 config STM32_HAVE_IP_USART
 	bool
 
-config STM32_HAVE_IP_USART_M33_V3
+config STM32_HAVE_IP_USART_M33M55_V3
 	bool
 	select STM32_HAVE_IP_USART
 
@@ -1209,10 +1274,21 @@ config STM32_HAVE_COMMON_USBHOST_DEBUG
 config STM32_HAVE_USB
 	bool
 
-# WDG capabilities
+# LPTIM capabilities
 
-config STM32_HAVE_IP_WDG_M0_V1
+config STM32_HAVE_IP_LPTIM_V1
 	bool
 
-config STM32_HAVE_IP_WDG_M3M4_V1
+config STM32_HAVE_IP_LPTIM_V2
+	bool
+
+# WDG capabilities
+
+config STM32_HAVE_IP_WDG_V1
+	bool
+
+config STM32_HAVE_IP_WDG_V2
+	bool
+
+config STM32_HAVE_IP_WDG_V3
 	bool

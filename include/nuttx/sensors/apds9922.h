@@ -28,6 +28,7 @@
  ****************************************************************************/
 
 #include <nuttx/config.h>
+#include <stdbool.h>
 #include <nuttx/irq.h>
 #include <nuttx/i2c/i2c_master.h>
 #include <nuttx/sensors/ioctl.h>
@@ -238,11 +239,8 @@ struct apds9922_ps_data
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -269,7 +267,6 @@ int apds9922_register(FAR const char *devpath_als,
                       FAR const char *devpath_ps,
                       FAR struct apds9922_config_s *config);
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

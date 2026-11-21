@@ -211,6 +211,18 @@ static inline void rcc_enableapb1(void)
   regval |= RCC_APB1ENR_USBEN;
 #endif
 
+#ifdef CONFIG_STM32_FDCAN
+  /* FDCAN clock enable */
+
+  regval |= RCC_APB1ENR_FDCANEN;
+#endif
+
+#ifdef CONFIG_STM32_WWDG
+  /* Window watchdog clock enable */
+
+  regval |= RCC_APB1ENR_WWDGEN;
+#endif
+
 #ifdef CONFIG_STM32_SPI2
   /* SPI 2 clock enable */
 
@@ -672,6 +684,13 @@ static void stm32_stdclockconfig(void)
   regval &= ~RCC_CCIPR_ADCSEL_MASK;
   regval |= STM32_RCC_CCIPR_ADCSEL;
   putreg32(regval, STM32_RCC_CCIPR);
+#endif
+
+#if defined(STM32_FDCAN_SEL)
+  regval = getreg32(STM32_RCC_CCIPR2);
+  regval &= ~RCC_CCIPR2_FDCANSEL_MASK;
+  regval |= STM32_FDCAN_SEL;
+  putreg32(regval, STM32_RCC_CCIPR2);
 #endif
 }
 #endif

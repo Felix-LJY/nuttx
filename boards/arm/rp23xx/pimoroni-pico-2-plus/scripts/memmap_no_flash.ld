@@ -162,9 +162,11 @@ SECTIONS
         . = ALIGN(4);
         /* init data */
         PROVIDE_HIDDEN (__init_array_start = .);
+        _sinit = .;
         KEEP(*(SORT(.init_array.*)))
         KEEP(*(.init_array))
         PROVIDE_HIDDEN (__init_array_end = .);
+        _einit = .;
 
         . = ALIGN(4);
         /* finit data */
@@ -215,7 +217,7 @@ SECTIONS
         *(COMMON)
         PROVIDE(__global_pointer$ = . + 2K);
         *(.sbss*)
-        . = ALIGN(4);
+        . = ALIGN(8);
         __bss_end__ = .;
         _ebss = ABSOLUTE(.);
     } > RAM

@@ -33,6 +33,7 @@
  ****************************************************************************/
 
 #include <nuttx/config.h>
+#include <stdbool.h>
 #include <nuttx/i2c/i2c_master.h>
 
 #if defined(CONFIG_INPUT) && defined(CONFIG_INPUT_TSC2007)
@@ -110,11 +111,8 @@ struct tsc2007_config_s
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -139,7 +137,6 @@ extern "C"
 int tsc2007_register(FAR struct i2c_master_s *dev,
                      FAR struct tsc2007_config_s *config, int minor);
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

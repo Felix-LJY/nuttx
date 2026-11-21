@@ -1,6 +1,8 @@
 /****************************************************************************
  * arch/arm/src/ra4/ra_gpio.h
  *
+ * SPDX-License-Identifier: Apache-2.0
+ *
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.  The
@@ -44,13 +46,9 @@
 
 #ifndef __ASSEMBLY__
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /* Must be big enough to hold the 32-bit encoding */
@@ -92,7 +90,6 @@ void ra_gpiowrite(gpio_pinset_t pinset, bool value);
 
 bool ra_gpioread(gpio_pinset_t pinset);
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

@@ -34,7 +34,7 @@
 #include <nuttx/arch.h>
 
 #include <arch/irq.h>
-#include <arch/armv7-m/nvicpri.h>
+#include <arch/arm_m/nvicpri.h>
 
 #include "nvic.h"
 #include "ram_vectors.h"
@@ -189,9 +189,11 @@ static int stm32_nmi(int irq, void *context, void *arg)
 
 static int stm32_pendsv(int irq, void *context, void *arg)
 {
+#ifndef CONFIG_ARCH_HIPRI_INTERRUPT
   up_irq_save();
   _err("PANIC!!! PendSV received\n");
   PANIC();
+#endif
   return 0;
 }
 

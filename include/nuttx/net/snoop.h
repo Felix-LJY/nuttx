@@ -28,9 +28,11 @@
  ****************************************************************************/
 
 #include <stdint.h>
+#include <stdbool.h>
 
 #include <nuttx/fs/fs.h>
 #include <nuttx/mutex.h>
+#include <nuttx/spinlock.h>
 #include <nuttx/wqueue.h>
 
 /****************************************************************************
@@ -96,6 +98,7 @@ struct snoop_s
   uint32_t         datalink;
   struct file      filep;
   mutex_t          mutex;
+  spinlock_t       lock;
   struct work_s    work;
   uint8_t          buf[CONFIG_NET_SNOOP_BUFSIZE];
   size_t           next;
@@ -106,11 +109,8 @@ struct snoop_s
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -194,7 +194,6 @@ int snoop_sync(FAR struct snoop_s *snoop);
 
 int snoop_close(FAR struct snoop_s *snoop);
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

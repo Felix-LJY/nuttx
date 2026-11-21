@@ -109,8 +109,8 @@ static ssize_t mtdconfig_read(FAR struct file *filep, FAR char *buffer,
                               size_t buflen);
 static int     mtdconfig_ioctl(FAR struct file *filep, int cmd,
                                unsigned long arg);
-static int     mtdconfig_poll(FAR struct file *filep, FAR struct pollfd *fds,
-                              bool setup);
+static int mtdconfig_poll(FAR struct file *filep, FAR struct pollfd_s *fds,
+                          bool setup);
 
 /****************************************************************************
  * Private Data
@@ -1715,7 +1715,7 @@ static int mtdconfig_ioctl(FAR struct file *filep, int cmd,
  * Name: mtdconfig_poll
  ****************************************************************************/
 
-static int mtdconfig_poll(FAR struct file *filep, FAR struct pollfd *fds,
+static int mtdconfig_poll(FAR struct file *filep, FAR struct pollfd_s *fds,
                           bool setup)
 {
   if (setup)
@@ -1828,12 +1828,27 @@ int mtdconfig_unregister_by_path(FAR const char *path)
 
   inode = file.f_inode;
   dev = inode->i_private;
+
+  /* Close the file before freeing the private device structure. */
+
+  ret = file_close(&file);
+  if (ret < 0)
+    {
+      ferr("ERROR: close %s failed: %d\n", path, ret);
+      return ret;
+    }
+
+  /* Free the private device structure only after unregistering the driver. */
+
+  ret = unregister_driver(path);
+  if (ret < 0)
+    {
+      ferr("ERROR: unregister %s failed: %d\n", path, ret);
+      return ret;
+    }
+
   nxmutex_destroy(&dev->lock);
   kmm_free(dev);
-
-  file_close(&file);
-
-  unregister_driver(path);
 
   return OK;
 }

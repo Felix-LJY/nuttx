@@ -146,16 +146,56 @@ struct net_bufpool_s
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
  * Inline Functions
  ****************************************************************************/
+
+/****************************************************************************
+ * Name: conn_init
+ *
+ * Description:
+ *   Initialize a connection structure, including s_lock mutex
+ *
+ * Parameters:
+ *   sconn - Pointer to the socket_conn_s structure to initialize
+ *
+ * Return:
+ *   None
+ *
+ ****************************************************************************/
+
+static inline_function void conn_init(FAR struct socket_conn_s *sconn)
+{
+  DEBUGASSERT(sconn != NULL);
+
+  /* Initialize the connection lock */
+
+  nxrmutex_init(&sconn->s_lock);
+}
+
+/****************************************************************************
+ * Name: conn_uninit
+ *
+ * Description:
+ *   Uninitialize a connection structure, releasing all resources
+ *
+ * Parameters:
+ *   sconn - Pointer to the socket_conn_s structure to uninitialize
+ *
+ ****************************************************************************/
+
+static inline_function void conn_uninit(FAR struct socket_conn_s *sconn)
+{
+  DEBUGASSERT(sconn != NULL);
+
+  /* Destroy the connection lock */
+
+  nxrmutex_destroy(&sconn->s_lock);
+}
 
 /****************************************************************************
  * Name: conn_lock, conn_unlock, conn_dev_lock, conn_dev_unlock
@@ -668,9 +708,28 @@ uint16_t icmpv6_chksum(FAR struct net_driver_s *dev, unsigned int iplen);
  ****************************************************************************/
 
 FAR void *cmsg_append(FAR struct msghdr *msg, int level, int type,
-                      FAR void *value, int value_len);
+                      FAR const void *value, int value_len);
 
-#undef EXTERN
+/****************************************************************************
+ * Name: cmsg_store_timestamp
+ *
+ * Description:
+ *   Store the timestamp in the cmsg
+ *
+ * Input Parameters:
+ *   msg    - Pointer to the msghdr containing ancillary data (CMSG).
+ *   tstamp - Timestamp information.
+ *
+ * Returned Value:
+ *   None
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_NET_TIMESTAMP
+void cmsg_store_timestamp(FAR struct msghdr *msg,
+                          FAR const struct timespec *tstamp, sockopt_t opt);
+#endif /* CONFIG_NET_TIMESTAMP */
+
 #ifdef __cplusplus
 }
 #endif

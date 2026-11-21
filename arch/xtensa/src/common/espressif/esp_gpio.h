@@ -120,13 +120,9 @@ typedef uint8_t gpio_intrtype_t;
  * Public Data
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -156,6 +152,25 @@ extern "C"
  ****************************************************************************/
 
 int esp_configgpio(int pin, gpio_pinattr_t attr);
+
+/****************************************************************************
+ * Name: esp_getconfiggpio
+ *
+ * Description:
+ *   Return the attr last passed to esp_configgpio() for this pin, so a
+ *   caller that has to temporarily reconfigure a pin (e.g. PM wake-source
+ *   setup) can restore it afterward without needing its own knowledge of
+ *   what the pin is normally used for.
+ *
+ * Input Parameters:
+ *   pin - GPIO pin to query.
+ *
+ * Returned Value:
+ *   The attr last passed to esp_configgpio() for this pin.
+ *
+ ****************************************************************************/
+
+gpio_pinattr_t esp_getconfiggpio(int pin);
 
 /****************************************************************************
  * Name: esp_gpio_matrix_in
@@ -326,7 +341,6 @@ int esp_gpio_irq(int id, xcpt_t irqhandler, void *arg);
 #ifdef __cplusplus
 }
 #endif
-#undef EXTERN
 
 #endif /* __ASSEMBLY__ */
 #endif /* __ARCH_XTENSA_SRC_COMMON_ESPRESSIF_ESP_GPIO_H */

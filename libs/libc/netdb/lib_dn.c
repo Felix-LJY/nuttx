@@ -78,7 +78,10 @@ static int getlens(FAR unsigned char *lens, FAR const char *s, int l)
   for (; ; )
     {
       for (; j < l && s[j] != '.'; j++);
-      if (j - k - 1 > 62)
+
+      /* A label has 1 to 63 bytes */
+
+      if (j == k || j - k > 63)
         {
           return 0;
         }
@@ -310,6 +313,40 @@ int dn_expand(FAR const unsigned char *base, FAR const unsigned char *end,
 
           return len;
         }
+    }
+
+  return -1;
+}
+
+int dn_skipname(FAR const unsigned char *src, FAR const unsigned char *end)
+{
+  FAR const unsigned char *p = src;
+
+  while (p < end)
+    {
+      if (*p == 0)
+        {
+          /* The root label ends the name */
+
+          return p + 1 - src;
+        }
+      else if ((*p & 0xc0) == 0xc0)
+        {
+          /* A compression pointer (two bytes) ends the name */
+
+          if (end - p < 2)
+            {
+              break;
+            }
+
+          return p + 2 - src;
+        }
+      else if ((*p & 0xc0) != 0 || end - p < *p + 1)
+        {
+          break;
+        }
+
+      p += *p + 1;
     }
 
   return -1;

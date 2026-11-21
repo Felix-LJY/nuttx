@@ -700,6 +700,19 @@ struct xcptcontext
  * Inline functions
  ****************************************************************************/
 
+/* Return program counter */
+
+static inline_function uintptr_t up_getpc(void)
+{
+  register uintptr_t pc;
+  __asm__
+  (
+    "\tauipc %0, 0\n"
+    : "=r"(pc)
+  );
+  return pc;
+}
+
 /* Return the current value of the stack pointer */
 
 static inline_function uintptr_t up_getsp(void)
@@ -717,18 +730,14 @@ static inline_function uintptr_t up_getsp(void)
  * Public Data
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /* g_interrupt_context store irq status */
 
-EXTERN volatile bool g_interrupt_context[CONFIG_SMP_NCPUS];
+extern volatile bool g_interrupt_context[CONFIG_SMP_NCPUS];
 
 /****************************************************************************
  * Public Function Prototypes
@@ -802,7 +811,11 @@ int up_this_cpu(void);
  * Inline Functions
  ****************************************************************************/
 
-#ifdef CONFIG_ARCH_RV_HAVE_CLIC
+#if defined(CONFIG_ARCH_RV_CUSTOM_TRAP)
+
+/* up_irq_save() and up_irq_restore() are provided by <arch/chip/irq.h> */
+
+#elif defined(CONFIG_ARCH_RV_HAVE_CLIC)
 
 /****************************************************************************
  * Name: up_irq_save
@@ -942,7 +955,6 @@ noinstrument_function static inline_function bool up_interrupt_context(void)
 #define up_getusrsp(regs) \
     (((uintptr_t*)(regs))[REG_SP])
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

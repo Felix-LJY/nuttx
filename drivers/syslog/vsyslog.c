@@ -27,6 +27,7 @@
 #include <nuttx/config.h>
 
 #include <stdio.h>
+#include <string.h>
 #include <syslog.h>
 #include <errno.h>
 
@@ -54,6 +55,9 @@ static FAR const char * const g_priority_color[] =
     "",           /* LOG_INFO, Normal */
     "\e[2m",      /* LOG_DEBUG, Dim */
   };
+
+#  define SYSLOG_COLOR_RESET     "\e[0m"
+#  define SYSLOG_COLOR_RESET_LEN (sizeof(SYSLOG_COLOR_RESET) - 1)
 #endif
 
 #if defined(CONFIG_SYSLOG_PRIORITY)
@@ -84,6 +88,10 @@ static FAR const char * const g_priority_str[] =
 int nx_vsyslog(int priority, FAR const IPTR char *fmt, FAR va_list *ap)
 {
   struct lib_syslograwstream_s stream;
+#ifdef CONFIG_SYSLOG_OPENLOG
+  FAR const char *ident;
+  char tail[16];
+#endif
   int ret = 0;
 #ifdef CONFIG_SYSLOG_PROCESS_NAME
   FAR struct tcb_s *tcb = nxsched_self();
@@ -96,11 +104,24 @@ int nx_vsyslog(int priority, FAR const IPTR char *fmt, FAR va_list *ap)
 #  endif
 #endif
 
+  /* Save errno so that nx_vsyslog does not clobber it. The syslog
+   * formatting path calls libc functions (e.g. strftime -> tzset -> open)
+   * that may modify errno as a side effect.
+   */
+
+  int saved_errno = get_errno();
+
   /* Wrap the low-level output in a stream object and let lib_vsprintf
    * do the work.
    */
 
   lib_syslograwstream_open(&stream);
+
+#ifdef CONFIG_SYSLOG_DROPMASK
+  /* The channels select the messages by their priority */
+
+  stream.priority = LOG_PRI(priority);
+#endif
 
 #ifdef CONFIG_SYSLOG_TIMESTAMP
   ts.tv_sec = 0;
@@ -120,13 +141,13 @@ int nx_vsyslog(int priority, FAR const IPTR char *fmt, FAR va_list *ap)
 #  if defined(CONFIG_SYSLOG_TIMESTAMP_REALTIME)
       /* Use CLOCK_REALTIME if so configured */
 
-      clock_gettime(CLOCK_REALTIME, &ts);
+      nxclock_gettime(CLOCK_REALTIME, &ts);
 #  else
       /* Prefer monotonic when enabled, as it can be synchronized to
        * RTC with clock_resynchronize.
        */
 
-      clock_gettime(CLOCK_MONOTONIC, &ts);
+      nxclock_gettime(CLOCK_MONOTONIC, &ts);
 #  endif
 
       /* Prepend the message with the current time, if available */
@@ -150,13 +171,18 @@ int nx_vsyslog(int priority, FAR const IPTR char *fmt, FAR va_list *ap)
 #if defined(CONFIG_SYSLOG_COLOR_OUTPUT) || defined(CONFIG_SYSLOG_TIMESTAMP) || \
     defined(CONFIG_SMP) || defined(CONFIG_SYSLOG_PROCESSID) || \
     defined(CONFIG_SYSLOG_PRIORITY) || defined(CONFIG_SYSLOG_PREFIX) || \
-    defined(CONFIG_SYSLOG_PROCESS_NAME)
+    defined(CONFIG_SYSLOG_PROCESS_NAME) || defined(CONFIG_SYSLOG_OPENLOG)
+#  ifdef CONFIG_SYSLOG_OPENLOG
+  /* The ident and the process ID of openlog() */
+
+  ident = syslog_ident(tail, sizeof(tail));
+#  endif
 
   ret = lib_sprintf_internal(&stream.common,
 #if defined(CONFIG_SYSLOG_COLOR_OUTPUT)
   /* Reset the terminal style. */
 
-                             "\e[0m"
+                             SYSLOG_COLOR_RESET
 #endif
 
 #ifdef CONFIG_SYSLOG_TIMESTAMP
@@ -206,6 +232,12 @@ int nx_vsyslog(int priority, FAR const IPTR char *fmt, FAR va_list *ap)
   /* Prepend the thread name */
 
                              "%s: "
+#endif
+
+#ifdef CONFIG_SYSLOG_OPENLOG
+  /* Prepend the ident of openlog() */
+
+                             "%.*s%s"
 #endif
 #ifdef CONFIG_SYSLOG_TIMESTAMP
 #  if defined(CONFIG_SYSLOG_TIMESTAMP_FORMATTED)
@@ -258,9 +290,14 @@ int nx_vsyslog(int priority, FAR const IPTR char *fmt, FAR va_list *ap)
 
                              , get_task_name(tcb)
 #endif
-                    );
 
-#endif /* CONFIG_SYSLOG_COLOR_OUTPUT || CONFIG_SYSLOG_TIMESTAMP || ... */
+#ifdef CONFIG_SYSLOG_OPENLOG
+  /* Prepend the ident of openlog() */
+
+                             , OPENLOG_IDENT_SIZE - 1, ident, tail
+#endif
+                    );
+#endif
 
   /* Generate the output */
 
@@ -275,11 +312,20 @@ int nx_vsyslog(int priority, FAR const IPTR char *fmt, FAR va_list *ap)
 #if defined(CONFIG_SYSLOG_COLOR_OUTPUT)
   /* Reset the terminal style back to normal. */
 
-  ret += lib_stream_puts(&stream.common, "\e[0m", sizeof("\e[0m"));
+  ret += lib_stream_puts(&stream.common, SYSLOG_COLOR_RESET,
+                         SYSLOG_COLOR_RESET_LEN);
 #endif
 
   /* Flush and destroy the syslog stream buffer */
 
   lib_syslograwstream_close(&stream);
+
+  /* Restore errno that may have been clobbered by libc calls
+   * (e.g. strftime -> tzset -> open sets ENOENT when timezone
+   * file is not found).
+   */
+
+  set_errno(saved_errno);
+
   return ret;
 }

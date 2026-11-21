@@ -71,19 +71,22 @@ static FAR struct inode *inode_unlink(FAR const char *path)
 
   /* Find the node to unlink */
 
-  SETUP_SEARCH(&desc, path, true);
+  if (inode_search_setup(&desc, path, true) < 0)
+    {
+      return NULL;
+    }
 
-  ret = inode_search(&desc);
+  ret = inode_search(&desc, &inode);
   if (ret >= 0)
     {
-      inode = desc.node;
       DEBUGASSERT(inode != NULL);
 
       if (desc.parent != NULL)
         {
           /* Caller holds the inode tree lock. */
 
-          ret = inode_checkpathperm(desc.parent, W_OK, INODE_CHECK_LOCKED);
+          ret = inode_checkpathperm(desc.parent, W_OK | X_OK,
+                                    INODE_CHECK_LOCKED);
           if (ret < 0)
             {
               inode = NULL;
@@ -120,6 +123,14 @@ static FAR struct inode *inode_unlink(FAR const char *path)
       inode->i_peer   = NULL;
       inode->i_parent = NULL;
       atomic_sub(&inode->i_crefs, 1);
+#ifdef CONFIG_PSEUDOFS_ATTRIBUTES
+      if (desc.parent != NULL)
+        {
+          clock_gettime(CLOCK_REALTIME, &desc.parent->i_ctime);
+          desc.parent->i_mtime = desc.parent->i_ctime;
+        }
+#endif
+
 #ifdef CONFIG_FS_LINKS
       if (INODE_IS_HARDLINK(inode))
         {
@@ -127,6 +138,12 @@ static FAR struct inode *inode_unlink(FAR const char *path)
 
           DEBUGASSERT(inode->i_private != NULL);
           target = inode->i_private;
+#  ifdef CONFIG_PSEUDOFS_ATTRIBUTES
+          /* The link count of the target changes */
+
+          clock_gettime(CLOCK_REALTIME, &target->i_ctime);
+#  endif
+
           atomic_sub(&target->i_crefs, INODE_NLINK_INC);
           if (atomic_read(&target->i_crefs) == 0)
             {
@@ -137,7 +154,7 @@ static FAR struct inode *inode_unlink(FAR const char *path)
     }
 
 errout:
-  RELEASE_SEARCH(&desc);
+  inode_search_release(&desc);
   return inode;
 }
 

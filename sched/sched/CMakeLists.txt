@@ -50,6 +50,10 @@ set(SRCS
     sched_switchcontext.c
     sched_sleep.c)
 
+if(NOT CONFIG_SCHED_INLINE_ADDPRIORITIZED)
+  list(APPEND SRCS sched_addprioritized.c)
+endif()
+
 if(DEFINED CONFIG_STACKCHECK_MARGIN)
   if(NOT CONFIG_STACKCHECK_MARGIN EQUAL -1)
     list(APPEND SRCS nxsched_checkstackoverflow.c)
@@ -58,6 +62,10 @@ endif()
 
 if(CONFIG_PRIORITY_INHERITANCE)
   list(APPEND SRCS sched_reprioritize.c)
+endif()
+
+if(CONFIG_SCHED_CAPABILITIES)
+  list(APPEND SRCS sched_maycontrol.c)
 endif()
 
 if(CONFIG_SMP)

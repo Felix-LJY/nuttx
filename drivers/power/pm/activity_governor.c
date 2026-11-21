@@ -47,13 +47,13 @@
 /* Convert the time slice interval into system clock ticks.
  *
  * CONFIG_PM_SLICEMS provides the duration of one time slice in milliseconds.
- * CLOCKS_PER_SEC provides the number of timer ticks in one second.
+ * CLK_TCK provides the number of timer ticks in one second.
  *
  * slice ticks = (CONFIG_PM_SLICEMS msec / 1000 msec/sec) /
- *               (CLOCKS_PER_SEC ticks/sec)
+ *               (CLK_TCK ticks/sec)
  */
 
-#define TIME_SLICE_TICKS ((CONFIG_PM_GOVERNOR_SLICEMS * CLOCKS_PER_SEC) /  1000)
+#define TIME_SLICE_TICKS ((CONFIG_PM_GOVERNOR_SLICEMS * CLK_TCK) /  1000)
 
 /****************************************************************************
  * Private Types
@@ -223,7 +223,8 @@ static void governor_initialize(void)
 static void governor_activity(int domain, int count)
 {
   FAR struct pm_domain_state_s *pdomstate;
-  clock_t now, elapsed;
+  clock_t now;
+  clock_t elapsed;
   uint32_t accum;
   irqstate_t flags;
 
@@ -467,21 +468,14 @@ static enum pm_state_e governor_checkstate(int domain)
 {
   FAR struct pm_domain_state_s *pdomstate;
   FAR struct pm_domain_s *pdom;
-  clock_t now, elapsed;
-  irqstate_t flags;
+  clock_t now;
+  clock_t elapsed;
   int index;
 
   /* Get a convenience pointer to minimize all of the indexing */
 
   pdomstate = &g_pm_activity_governor.domain_states[domain];
   pdom      = &g_pmdomains[domain];
-
-  /* Check for the end of the current time slice.  This must be performed
-   * with interrupts disabled so that it does not conflict with the similar
-   * logic in governor_activity().
-   */
-
-  flags = pm_domain_lock(domain);
 
   /* Check the elapsed time.  In periods of low activity, time slicing is
    * controlled by IDLE loop polling; in periods of higher activity, time
@@ -519,8 +513,6 @@ static enum pm_state_e governor_checkstate(int domain)
           break;
         }
     }
-
-  pm_domain_unlock(domain, flags);
 
   return pdomstate->recommended;
 }

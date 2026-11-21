@@ -28,6 +28,7 @@
  ****************************************************************************/
 
 #include <nuttx/config.h>
+#include <nuttx/memoryregion.h>
 
 #include <sys/types.h>
 #include <stdbool.h>
@@ -36,13 +37,9 @@
  * Public Function Prototypes
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -147,6 +144,19 @@ void devurandom_register(void);
 void devcrypto_register(void);
 
 /****************************************************************************
+ * Name: crypto_backends_init
+ *
+ * Description:
+ *   Register the software and hardware crypto backends into the driver
+ *   table, making them reachable through the in-kernel crypto API.
+ *   Independent of devcrypto_register(), which only creates the
+ *   /dev/crypto interface.
+ *
+ ****************************************************************************/
+
+void crypto_backends_init(void);
+
+/****************************************************************************
  * Name: devmem_register
  *
  * Description:
@@ -156,6 +166,19 @@ void devcrypto_register(void);
 
 #ifdef CONFIG_DEV_MEM
 int devmem_register(void);
+#endif
+
+/****************************************************************************
+ * Name: devmem_register_region
+ *
+ * Description:
+ *   Register devmem driver
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_DEV_MEM
+int devmem_register_region(FAR const char *path,
+                           FAR const struct memory_region_s *region);
 #endif
 
 /****************************************************************************
@@ -284,7 +307,6 @@ void rpmsg_serialinit(void);
 
 void rpmsg_serialrawinit(void);
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif

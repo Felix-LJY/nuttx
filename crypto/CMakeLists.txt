@@ -26,13 +26,17 @@ if(CONFIG_CRYPTO)
 
   # cryptodev support
 
-  if(CONFIG_CRYPTO_CRYPTODEV)
-    list(APPEND SRCS cryptodev.c)
+  if(CONFIG_CRYPTO_BACKENDS)
+    list(APPEND SRCS backends.c)
     if(CONFIG_CRYPTO_CRYPTODEV_SOFTWARE_CRYPTO
        OR CONFIG_CRYPTO_CRYPTODEV_SOFTWARE_KEYMGMT)
       list(APPEND SRCS cryptosoft.c)
       list(APPEND SRCS xform.c)
     endif()
+  endif()
+
+  if(CONFIG_CRYPTO_CRYPTODEV)
+    list(APPEND SRCS cryptodev.c)
   endif()
 
   # Software crypto library
@@ -69,6 +73,7 @@ if(CONFIG_CRYPTO)
   list(APPEND SRCS siphash.c)
   list(APPEND SRCS hmac_buff.c)
   list(APPEND SRCS bn.c)
+  list(APPEND SRCS rsa.c)
 
   # Entropy pool random number generator
 

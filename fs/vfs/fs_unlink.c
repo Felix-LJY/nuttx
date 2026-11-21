@@ -68,9 +68,13 @@ int nx_unlink(FAR const char *pathname)
    * which may be a symbolic link)
    */
 
-  SETUP_SEARCH(&desc, pathname, true);
+  ret = inode_search_setup(&desc, pathname, true);
+  if (ret < 0)
+    {
+      return ret;
+    }
 
-  ret = inode_find(&desc);
+  ret = inode_find(&desc, &inode);
   if (ret < 0)
     {
       /* There is no inode that includes in this path */
@@ -78,9 +82,6 @@ int nx_unlink(FAR const char *pathname)
       goto errout_with_search;
     }
 
-  /* Get the search results */
-
-  inode = desc.node;
   DEBUGASSERT(inode != NULL);
 
 #ifndef CONFIG_DISABLE_MOUNTPOINT
@@ -88,7 +89,7 @@ int nx_unlink(FAR const char *pathname)
 
   if (INODE_IS_MOUNTPT(inode) && inode->u.i_mops)
     {
-      ret = inode_checkpathperm(inode, 0, 0);
+      ret = inode_checkpathperm(inode, INODE_PATH_AMODE(&desc), 0);
       if (ret < 0)
         {
           goto errout_with_inode;
@@ -155,17 +156,17 @@ int nx_unlink(FAR const char *pathname)
             }
         }
 #endif
-      else if (
-#ifdef CONFIG_FS_LINKS
-      INODE_IS_SOFTLINK(inode) || INODE_IS_HARDLINK(inode) ||
-#endif
-      INODE_IS_PSEUDODIR(inode))
+      else if (INODE_IS_PSEUDODIR(inode))
         {
-          /* If this is a "dangling" pseudo-file node
-           * (i.e., it has no operations) or a soft link,
-           * then rm should remove the node.
-           */
+          ret = -EISDIR;
+          goto errout_with_inode;
         }
+#ifdef CONFIG_FS_LINKS
+      else if (INODE_IS_SOFTLINK(inode) || INODE_IS_HARDLINK(inode))
+        {
+          /* A link has no operations: removing the node removes it */
+        }
+#endif
       else
         {
           ret = -ENXIO;
@@ -193,7 +194,7 @@ int nx_unlink(FAR const char *pathname)
   /* Successfully unlinked */
 
   inode_release(inode);
-  RELEASE_SEARCH(&desc);
+  inode_search_release(&desc);
 #ifdef CONFIG_FS_NOTIFY
   notify_unlink(pathname);
 #endif
@@ -205,7 +206,7 @@ errout_with_inode:
 #endif
 
 errout_with_search:
-  RELEASE_SEARCH(&desc);
+  inode_search_release(&desc);
   return ret;
 }
 

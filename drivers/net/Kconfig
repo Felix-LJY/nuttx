@@ -1,3 +1,24 @@
+############################################################################
+# drivers/net/Kconfig
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.  The
+# ASF licenses this file to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance with the
+# License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
+############################################################################
 #
 # For a description of the syntax of this configuration file,
 # see the file kconfig-language.txt in the NuttX tools repository.
@@ -600,6 +621,9 @@ config ETH0_PHY_DP83848C
 config ETH0_PHY_DP83825I
 	bool "Texas Instruments DP83825I PHY"
 
+config ETH0_PHY_DP83630
+	bool "Texas Instruments DP83630 PHY"
+
 config ETH0_PHY_TJA1100
 	bool "NXP TJA1100 PHY"
 	select ARCH_PHY_100BASE_T1
@@ -833,5 +857,74 @@ config NET_IGC_INT_INTERVAL
 endif # NET_IGC
 
 source "drivers/net/oa_tc6/Kconfig"
+
+comment "PHY Support"
+
+menuconfig NET_PHYLIB
+	bool "PHY Abstraction Layer (PHYLIB)"
+	default n
+	depends on NET
+	depends on MDIO_BUS
+	---help---
+		Enable the PHY Abstraction Layer (PHYLIB) which provides a
+		standardized MDIO bus abstraction, PHY device model, PHY driver
+		framework, and PHY state machine. This decouples PHY management
+		from individual MAC drivers.
+
+if NET_PHYLIB
+
+config NET_PHYLIB_POLL_INTERVAL
+	int "PHY state machine poll interval (ms)"
+	default 1000
+	---help---
+		The interval in milliseconds at which the PHY state machine
+		polls the PHY link status.
+
+config NET_PHYLIB_MAX_DRIVERS
+	int "Maximum number of PHY drivers"
+	default 8
+	---help---
+		Maximum number of PHY drivers that can be registered
+		simultaneously.
+
+config NET_PHYLIB_MAX_PHYS
+	int "Maximum number of PHY devices"
+	default 8
+	---help---
+		Maximum number of PHY devices that can be tracked
+		simultaneously.
+
+comment "PHY Device Drivers"
+
+config NET_PHY_REALTEK_RTL8201F
+	bool "Realtek RTL8201F 10/100Mbps PHY"
+	---help---
+		Support for the RTL8201F MII/RMII PHY, including RMII reference
+		clock direction configuration.
+
+config NET_PHY_REALTEK_RTL8211F
+	bool "Realtek RTL8211F Gigabit PHY"
+	---help---
+		Support for RTL8211F-VD and RTL8211F/FDI RGMII PHYs, including
+		the RGMII internal RX and TX delay modes.
+
+config NET_PHY_REALTEK_RTL8221B
+	bool "Realtek RTL8221B 2.5Gbps PHY"
+	default n
+	depends on MDIO_CLAUSE_45
+	---help---
+		Support for the Realtek RTL8221B 2.5Gbps Ethernet PHY.  Enable
+		only on boards that use an RTL8221B.  Includes the firmware patch
+		(ramcode) blob, which consumes a few KB of flash, so leaving this
+		disabled keeps flash/RAM usage minimal on embedded targets.
+
+config NET_PHY_REALTEK_RTL9000B
+	bool "Realtek RTL9000B 100BASE-T1 PHY"
+	default n
+	---help---
+		Support for the Realtek RTL9000B 100BASE-T1 automotive PHY.
+		Enable only on boards that use an RTL9000B.
+
+endif # NET_PHYLIB
 
 endif # NETDEVICES

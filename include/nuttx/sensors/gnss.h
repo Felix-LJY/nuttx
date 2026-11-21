@@ -27,6 +27,7 @@
  * Included Files
  ****************************************************************************/
 
+#include <stdbool.h>
 #include <nuttx/fs/fs.h>
 #include <nuttx/sensors/sensor.h>
 
@@ -210,11 +211,8 @@ struct gnss_lowerhalf_s
  ****************************************************************************/
 
 #ifdef __cplusplus
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -260,7 +258,6 @@ int gnss_register(FAR struct gnss_lowerhalf_s *dev, int devno,
 
 void gnss_unregister(FAR struct gnss_lowerhalf_s *dev, int devno);
 
-#undef EXTERN
 #ifdef __cplusplus
 }
 #endif

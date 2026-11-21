@@ -26,16 +26,24 @@
 
 #include <nuttx/config.h>
 
+#include <sys/param.h>
 #include <assert.h>
 #include <nuttx/debug.h>
 #include <errno.h>
+#include <inttypes.h>
+#include <stdbool.h>
 #include <stdio.h>
 
 #include <nuttx/arch.h>
+#include <nuttx/fs/fs.h>
 #include <nuttx/kmalloc.h>
-#include <nuttx/pci/pci.h>
+
+#ifdef CONFIG_PCI
+#  include <nuttx/pci/pci.h>
+#endif
 
 #ifdef CONFIG_CAN_CTUCANFD_CHARDEV
+#  include <nuttx/can.h>
 #  include <nuttx/can/can.h>
 #endif
 
@@ -106,7 +114,9 @@ struct ctucanfd_can_s
   struct netdev_lowerhalf_s dev;
 #endif
 
+#ifdef CONFIG_PCI
   FAR struct pci_device_s *pcidev;
+#endif
   uint64_t                 base;
   uint8_t                  txbufcnt;
 };
@@ -122,7 +132,9 @@ struct ctucanfd_driver_s
 
   /* PCI data */
 
+#ifdef CONFIG_PCI
   FAR struct pci_device_s   *pcidev;
+#endif
   int                        irq;
   uintptr_t                  base;
 };
@@ -195,9 +207,11 @@ static int ctucanfd_interrupt(int irq, FAR void *context, FAR void *arg);
 
 /* PCI */
 
+#ifdef CONFIG_PCI
 static void ctucanfd_init(FAR struct ctucanfd_driver_s *priv);
 static uint8_t ctucanfd_ctucanfd_probe(FAR struct ctucanfd_driver_s *priv);
 static int ctucanfd_probe(FAR struct pci_device_s *dev);
+#endif
 
 /*****************************************************************************
  * Private Data
@@ -232,6 +246,7 @@ static const struct netdev_ops_s g_ctucanfd_net_ops =
 };
 #endif
 
+#ifdef CONFIG_PCI
 static const struct pci_device_id_s g_ctucanfd_id_table[] =
 {
   {
@@ -246,8 +261,9 @@ static struct pci_driver_s g_ctucanfd_drv =
   .id_table = g_ctucanfd_id_table,
   .probe    = ctucanfd_probe,
 };
+#endif
 
-#ifdef CONFIG_CAN_CTUCANFD_CHARDEV
+#if defined(CONFIG_PCI) && defined(CONFIG_CAN_CTUCANFD_CHARDEV)
 static uint8_t g_ctucanfd_count = 0;
 #endif
 
@@ -263,6 +279,7 @@ static uint32_t ctucanfd_getreg(FAR struct ctucanfd_can_s *priv,
                                 unsigned int offset)
 {
   uintptr_t addr = priv->base + offset;
+
   return *((FAR volatile uint32_t *)addr);
 }
 
@@ -275,6 +292,7 @@ static void ctucanfd_putreg(FAR struct ctucanfd_can_s *priv,
                             uint32_t value)
 {
   uintptr_t addr = priv->base + offset;
+
   *((FAR volatile uint32_t *)addr) = value;
 }
 
@@ -607,8 +625,8 @@ static int ctucanfd_chrdev_send(FAR struct can_dev_s *dev,
 #ifdef CONFIG_CAN_EXTID
   if (msg->cm_hdr.ch_extid)
     {
-      fmt.s.ide   = 1;
-      id.s.id_ext = msg->cm_hdr.ch_id;
+      fmt.s.ide = 1;
+      id.u32    = msg->cm_hdr.ch_id & CAN_MAX_EXTMSGID;
     }
   else
 #endif
@@ -633,11 +651,32 @@ static int ctucanfd_chrdev_send(FAR struct can_dev_s *dev,
   ctucanfd_putreg(priv, offset + CTUCANFD_TXBUF_TSL, 0);
   ctucanfd_putreg(priv, offset + CTUCANFD_TXBUF_TSU, 0);
 
-  bytes = can_dlc2bytes(msg->cm_hdr.ch_dlc);
-  for (i = 0; i < bytes; i++)
+  /* DLC 9..15 of a classic frame carry 8 data bytes */
+
+#ifdef CONFIG_CAN_FD
+  if (msg->cm_hdr.ch_edl)
     {
-      ctucanfd_putreg(priv, offset + CTUCANFD_TXBUF_DATA + i,
-                      msg->cm_data[i]);
+      bytes = can_dlc2bytes(msg->cm_hdr.ch_dlc);
+    }
+  else
+#endif
+    {
+      bytes = MIN(msg->cm_hdr.ch_dlc, CAN_MAX_DLEN);
+    }
+
+  /* Pack bytes into aligned register writes and pad the final word. */
+
+  for (i = 0; i < bytes; i += 4)
+    {
+      regval  = (uint32_t)msg->cm_data[i];
+      regval |= (uint32_t)(i + 1 < bytes ? msg->cm_data[i + 1] : 0)
+                << 8;
+      regval |= (uint32_t)(i + 2 < bytes ? msg->cm_data[i + 2] : 0)
+                << 16;
+      regval |= (uint32_t)(i + 3 < bytes ? msg->cm_data[i + 3] : 0)
+                << 24;
+
+      ctucanfd_putreg(priv, offset + CTUCANFD_TXBUF_DATA + i, regval);
     }
 
   /* Set TX ready */
@@ -762,7 +801,7 @@ static void ctucanfd_chardev_receive(FAR struct ctucanfd_can_s *priv)
 
       /* buff[0] populated the frame->fmt.rwcnt. Check before use. */
 
-      if (frame->fmt.rwcnt > sizeof(buff) / sizeof(buff[0]) - 1)
+      if (frame->fmt.rwcnt > nitems(buff) - 1)
         {
           canerr("ERROR: CAN read/write count is too large.  Dropped\n");
           return;
@@ -790,7 +829,8 @@ static void ctucanfd_chardev_receive(FAR struct ctucanfd_can_s *priv)
 
       if (hdr.ch_extid)
         {
-          hdr.ch_id = frame->id.id_ext;
+          hdr.ch_id = ((uint32_t)frame->id.id << CTUCANFD_ID_EXT_BITS) |
+                      frame->id.id_ext;
         }
       else
         {
@@ -919,6 +959,7 @@ static void ctucanfd_chardev_interrupt(FAR struct ctucanfd_driver_s *priv)
 {
   uint32_t stat   = 0;
   uint32_t regval = 0;
+  uint32_t setval = 0;
   int      i      = 0;
   int      txidx  = 0;
 
@@ -927,12 +968,18 @@ static void ctucanfd_chardev_interrupt(FAR struct ctucanfd_driver_s *priv)
       stat = ctucanfd_getreg(&priv->devs[i], CTUCANFD_INTSTAT);
       if (stat == 0)
         {
+          /* Re-enable RX/TX interrupts */
+
+          ctucanfd_txint(&priv->devs[i], true);
+          ctucanfd_rxint(&priv->devs[i], true);
           continue;
         }
 
-      /* Frame received */
+      /* Frame received.  RBNEI stays set while the RX buffer is not empty,
+       * RXI may be already cleared for frames still in the buffer.
+       */
 
-      if (stat & CTUCANFD_INT_RXI)
+      if (stat & (CTUCANFD_INT_RXI | CTUCANFD_INT_RBNEI))
         {
           ctucanfd_chardev_receive(&priv->devs[i]);
         }
@@ -952,9 +999,10 @@ static void ctucanfd_chardev_interrupt(FAR struct ctucanfd_driver_s *priv)
 
                   /* Mark buffer as empty */
 
-                  regval = (CTUCANFD_TXCMD_TXCE +
+                  setval = (CTUCANFD_TXCMD_TXCE +
                             (1 << (CTUCANFD_TXCMD_TXB_SHIFT + txidx)));
-                  ctucanfd_putreg(&priv->devs[i], CTUCANFD_TXINFOCMD, regval);
+                  ctucanfd_putreg(&priv->devs[i],
+                                  CTUCANFD_TXINFOCMD, setval);
                 }
             }
         }
@@ -1006,6 +1054,8 @@ static int ctucanfd_sock_ifup(FAR struct netdev_lowerhalf_s *dev)
   ctucanfd_txint(priv, true);
   ctucanfd_rxint(priv, true);
 
+  netdev_lower_carrier_on(dev);
+
   return OK;
 }
 
@@ -1033,6 +1083,8 @@ static int ctucanfd_sock_ifdown(FAR struct netdev_lowerhalf_s *dev)
   /* Shutdown */
 
   ctucanfd_shutdown(priv);
+
+  netdev_lower_carrier_off(dev);
 
   return OK;
 }
@@ -1078,6 +1130,9 @@ static int ctucanfd_sock_transmit(FAR struct netdev_lowerhalf_s *dev,
   uint32_t                    offset;
   int                         txidx;
   int                         i;
+#ifdef CONFIG_NET_CAN_CANFD
+  int                         wirelen;
+#endif
 
   /* Get TX empty buffer */
 
@@ -1118,13 +1173,13 @@ static int ctucanfd_sock_transmit(FAR struct netdev_lowerhalf_s *dev,
 
       /* Set RTR bit */
 
-      fmt.s.rtr = (frame->can_id & CAN_RTR_FLAG);
+      fmt.s.rtr = (frame->can_id & CAN_RTR_FLAG) ? 1 : 0;
 
 #ifdef CONFIG_NET_CAN_EXTID
       if (frame->can_id & CAN_EFF_FLAG)
         {
-          fmt.s.ide   = 1;
-          id.s.id_ext = (frame->can_id & 0x1ffffff);
+          fmt.s.ide = 1;
+          id.u32    = frame->can_id & CAN_EFF_MASK;
         }
       else
 #endif
@@ -1140,10 +1195,19 @@ static int ctucanfd_sock_transmit(FAR struct netdev_lowerhalf_s *dev,
       ctucanfd_putreg(priv, offset + CTUCANFD_TXBUF_TSL, 0);
       ctucanfd_putreg(priv, offset + CTUCANFD_TXBUF_TSU, 0);
 
-      for (i = 0; i < frame->can_dlc; i++)
+      /* Pack bytes into aligned register writes and pad the final word. */
+
+      for (i = 0; i < frame->can_dlc; i += 4)
         {
-          ctucanfd_putreg(priv, offset + CTUCANFD_TXBUF_DATA + i,
-                          frame->data[i]);
+          regval  = (uint32_t)frame->data[i];
+          regval |= (uint32_t)(i + 1 < frame->can_dlc ?
+                               frame->data[i + 1] : 0) << 8;
+          regval |= (uint32_t)(i + 2 < frame->can_dlc ?
+                               frame->data[i + 2] : 0) << 16;
+          regval |= (uint32_t)(i + 3 < frame->can_dlc ?
+                               frame->data[i + 3] : 0) << 24;
+
+          ctucanfd_putreg(priv, offset + CTUCANFD_TXBUF_DATA + i, regval);
         }
     }
 #ifdef CONFIG_NET_CAN_CANFD
@@ -1162,15 +1226,15 @@ static int ctucanfd_sock_transmit(FAR struct netdev_lowerhalf_s *dev,
 
       /* Set flags */
 
-      fmt.s.rtr     = (frame->can_id & CAN_RTR_FLAG);
-      fmt.s.brs     = (frame->flags & CANFD_BRS);
-      fmt.s.esi_rsv = (frame->flags & CANFD_ESI);
+      fmt.s.rtr     = (frame->can_id & CAN_RTR_FLAG) ? 1 : 0;
+      fmt.s.brs     = (frame->flags & CANFD_BRS) ? 1 : 0;
+      fmt.s.esi_rsv = (frame->flags & CANFD_ESI) ? 1 : 0;
 
 #ifdef CONFIG_NET_CAN_EXTID
       if (frame->can_id & CAN_EFF_FLAG)
         {
-          fmt.s.ide   = 1;
-          id.s.id_ext = (frame->can_id & 0x1ffffff);
+          fmt.s.ide = 1;
+          id.u32    = frame->can_id & CAN_EFF_MASK;
         }
       else
 #endif
@@ -1186,10 +1250,23 @@ static int ctucanfd_sock_transmit(FAR struct netdev_lowerhalf_s *dev,
       ctucanfd_putreg(priv, offset + CTUCANFD_TXBUF_TSL, 0);
       ctucanfd_putreg(priv, offset + CTUCANFD_TXBUF_TSU, 0);
 
-      for (i = 0; i < frame->len; i++)
+      /* Pack bytes into aligned register writes.  The controller sends
+       * can_dlc2bytes(dlc) bytes, which can be more than frame->len, so
+       * pad up to that length with zeros.
+       */
+
+      wirelen = can_dlc2bytes(fmt.s.dlc);
+      for (i = 0; i < wirelen; i += 4)
         {
-          ctucanfd_putreg(priv, offset + CTUCANFD_TXBUF_DATA + i,
-                          frame->data[i]);
+          regval  = (uint32_t)(i < frame->len ? frame->data[i] : 0);
+          regval |= (uint32_t)(i + 1 < frame->len ? frame->data[i + 1] : 0)
+                    << 8;
+          regval |= (uint32_t)(i + 2 < frame->len ? frame->data[i + 2] : 0)
+                    << 16;
+          regval |= (uint32_t)(i + 3 < frame->len ? frame->data[i + 3] : 0)
+                    << 24;
+
+          ctucanfd_putreg(priv, offset + CTUCANFD_TXBUF_DATA + i, regval);
         }
     }
 #endif
@@ -1225,6 +1302,13 @@ static FAR netpkt_t *ctucanfd_sock_recv(FAR struct netdev_lowerhalf_s *dev)
   regval = ctucanfd_getreg(priv, CTUCANFD_RXSETSTAT);
   if ((regval & CTUCANFD_RXSTAT_RXE) != 0)
     {
+      /* Clear the RX buffer not empty interrupt before re-enabling RX
+       * interrupts.  Leave the error interrupts pending, they are handled
+       * by ctucanfd_sock_error().
+       */
+
+      ctucanfd_putreg(priv, CTUCANFD_INTSTAT, CTUCANFD_INT_RBNEI);
+
       /* Re-enable RX interrupts if no more messages to read */
 
       ctucanfd_rxint(priv, true);
@@ -1259,9 +1343,10 @@ static FAR netpkt_t *ctucanfd_sock_recv(FAR struct netdev_lowerhalf_s *dev)
 
   /* buff[0] populated the frame->fmt.rwcnt. Check before use. */
 
-  if (frame->fmt.rwcnt > sizeof(buff) / sizeof(buff[0]) - 1)
+  if (rxframe->fmt.rwcnt > nitems(buff) - 1)
     {
       canerr("ERROR: CAN read/write count is too large.  Dropped\n");
+      netpkt_free(dev, pkt, NETPKT_RX);
       return NULL;
     }
 
@@ -1291,7 +1376,8 @@ static FAR netpkt_t *ctucanfd_sock_recv(FAR struct netdev_lowerhalf_s *dev)
 
       if (rxframe->fmt.ide)
         {
-          frame->can_id = rxframe->id.id_ext;
+          frame->can_id = ((uint32_t)rxframe->id.id <<
+                           CTUCANFD_ID_EXT_BITS) | rxframe->id.id_ext;
           frame->can_id |= CAN_EFF_FLAG;
         }
       else
@@ -1303,7 +1389,8 @@ static FAR netpkt_t *ctucanfd_sock_recv(FAR struct netdev_lowerhalf_s *dev)
         {
           canerr("ERROR: Received message with extended"
                  " identifier.  Dropped\n");
-          continue;
+          netpkt_free(dev, pkt, NETPKT_RX);
+          return NULL;
         }
 
       frame->can_id = rxframe->id.id;
@@ -1346,16 +1433,19 @@ static FAR netpkt_t *ctucanfd_sock_recv(FAR struct netdev_lowerhalf_s *dev)
       netpkt_setdatalen(dev, pkt, sizeof(struct can_frame));
       frame = (FAR struct can_frame *)netpkt_getdata(dev, pkt);
 
-      /* Get the DLC */
+      /* Get the DLC.  A classic frame carries at most 8 data bytes, also
+       * with DLC 9..15.
+       */
 
-      frame->can_dlc = rxframe->fmt.dlc;
+      frame->can_dlc = MIN(rxframe->fmt.dlc, CAN_MAX_DLEN);
 
 #ifdef CONFIG_NET_CAN_EXTID
       /* Get the CAN identifier. */
 
       if (rxframe->fmt.ide)
         {
-          frame->can_id = rxframe->id.id_ext;
+          frame->can_id = ((uint32_t)rxframe->id.id <<
+                           CTUCANFD_ID_EXT_BITS) | rxframe->id.id_ext;
           frame->can_id |= CAN_EFF_FLAG;
         }
       else
@@ -1367,7 +1457,8 @@ static FAR netpkt_t *ctucanfd_sock_recv(FAR struct netdev_lowerhalf_s *dev)
         {
           canerr("ERROR: Received message with extended"
                  " identifier.  Dropped\n");
-          continue;
+          netpkt_free(dev, pkt, NETPKT_RX);
+          return NULL;
         }
 
       frame->can_id = rxframe->id.id;
@@ -1382,7 +1473,7 @@ static FAR netpkt_t *ctucanfd_sock_recv(FAR struct netdev_lowerhalf_s *dev)
 
       /* Get data */
 
-      for (i = 0; i < rxframe->fmt.dlc; i++)
+      for (i = 0; i < frame->can_dlc; i++)
         {
           frame->data[i] = rxframe->data[i];
         }
@@ -1454,7 +1545,7 @@ static FAR netpkt_t *ctucanfd_sock_error(FAR struct netdev_lowerhalf_s *dev)
 
   /* Copy frame */
 
-  frame->can_id  = errbits;
+  frame->can_id  = errbits | CAN_ERR_FLAG;
   frame->can_dlc = CAN_ERR_DLC;
 
   return pkt;
@@ -1469,6 +1560,7 @@ static void ctucanfd_sock_interrupt(FAR struct ctucanfd_driver_s *priv)
 {
   uint32_t stat   = 0;
   uint32_t regval = 0;
+  uint32_t setval = 0;
   int      i      = 0;
   int      txidx  = 0;
 
@@ -1477,6 +1569,10 @@ static void ctucanfd_sock_interrupt(FAR struct ctucanfd_driver_s *priv)
       stat = ctucanfd_getreg(&priv->devs[i], CTUCANFD_INTSTAT);
       if (stat == 0)
         {
+          /* Re-enable RX/TX interrupts */
+
+          ctucanfd_txint(&priv->devs[i], true);
+          ctucanfd_rxint(&priv->devs[i], true);
           continue;
         }
 
@@ -1502,9 +1598,10 @@ static void ctucanfd_sock_interrupt(FAR struct ctucanfd_driver_s *priv)
 
                   /* Mark buffer as empty */
 
-                  regval = (CTUCANFD_TXCMD_TXCE +
+                  setval = (CTUCANFD_TXCMD_TXCE +
                             (1 << (CTUCANFD_TXCMD_TXB_SHIFT + txidx)));
-                  ctucanfd_putreg(&priv->devs[i], CTUCANFD_TXINFOCMD, regval);
+                  ctucanfd_putreg(&priv->devs[i],
+                                  CTUCANFD_TXINFOCMD, setval);
                 }
             }
         }
@@ -1538,21 +1635,11 @@ static int ctucanfd_interrupt(int irq, FAR void *context, FAR void *arg)
 
   DEBUGASSERT(priv != NULL);
 
+  /* Check for any pending interrupt */
+
   for (i = 0; i < priv->count; i++)
     {
       regval |= ctucanfd_getreg(&priv->devs[i], CTUCANFD_INTSTAT);
-
-      /* Break now if interrupt is pending */
-
-      if (regval != 0)
-        {
-          /* Disable RX/TX interrupts until we are done */
-
-          ctucanfd_rxint(&priv->devs[i], false);
-          ctucanfd_txint(&priv->devs[i], false);
-
-          break;
-        }
     }
 
   /* Check for pending interrupts for this card */
@@ -1560,6 +1647,19 @@ static int ctucanfd_interrupt(int irq, FAR void *context, FAR void *arg)
   if (regval == 0)
     {
       return OK;
+    }
+
+  else
+    {
+      /* Disable all RX/TX interrupts for this card until all pending
+       * interrupts are handled.
+       */
+
+      for (i = 0; i < priv->count; i++)
+        {
+          ctucanfd_rxint(&priv->devs[i], false);
+          ctucanfd_txint(&priv->devs[i], false);
+        }
     }
 
 #ifdef CONFIG_CAN_CTUCANFD_CHARDEV
@@ -1577,6 +1677,7 @@ static int ctucanfd_interrupt(int irq, FAR void *context, FAR void *arg)
   return OK;
 }
 
+#ifdef CONFIG_PCI
 /*****************************************************************************
  * Name: ctucanfd_init
  *
@@ -1753,12 +1854,6 @@ static int ctucanfd_probe(FAR struct pci_device_s *dev)
       netdev->quota[NETPKT_RX] = CTUCANFD_RX_QUOTA;
       netdev->ops = &g_ctucanfd_net_ops;
 
-      /* Put the interface in the down state.  This usually amounts to
-       * resetting the device and/or calling ctucanfd_sock_ifdown().
-       */
-
-      ctucanfd_sock_ifdown(&priv->devs[i].dev);
-
       /* Register the network interface. */
 
       ret = netdev_lower_register(netdev, NET_LL_CAN);
@@ -1767,6 +1862,12 @@ static int ctucanfd_probe(FAR struct pci_device_s *dev)
           pcierr("ERROR: failed to register count=%d, %d\n", i, ret);
           goto errout;
         }
+
+      /* Put the interface in the down state.  This usually amounts to
+       * resetting the device and/or calling ctucanfd_sock_ifdown().
+       */
+
+      ctucanfd_sock_ifdown(&priv->devs[i].dev);
 #endif
     }
 
@@ -1793,6 +1894,7 @@ errout:
 
   return ret;
 }
+#endif /* CONFIG_PCI */
 
 /*****************************************************************************
  * Public Functions
@@ -1806,7 +1908,114 @@ errout:
  *
  *****************************************************************************/
 
+#ifdef CONFIG_PCI
 int pci_ctucanfd_init(void)
 {
   return pci_register_driver(&g_ctucanfd_drv);
+}
+#endif
+
+/*****************************************************************************
+ * Name: ctucanfd_register
+ *
+ * Description:
+ *   Register a CTU CAN FD device via SysBus MMIO (without PCI).
+ *   Used on platforms where the CAN controller is memory-mapped directly,
+ *   such as the QEMU ARM virt platform with ctucan-sysbus.
+ *
+ * Input Parameters:
+ *   base - MMIO base address of the CTU CAN FD controller
+ *   irq  - IRQ number
+ *   id   - CAN channel number assigned by the caller
+ *
+ * Returned Value:
+ *   Zero on success; a negated errno on failure
+ *
+ *****************************************************************************/
+
+int ctucanfd_register(uintptr_t base, int irq, uint32_t id)
+{
+  FAR struct ctucanfd_driver_s *priv;
+  FAR struct ctucanfd_can_s    *dev;
+#ifdef CONFIG_CAN_CTUCANFD_CHARDEV
+  char                          devpath[16];
+#endif
+  int                           ret;
+
+  priv = kmm_zalloc(sizeof(struct ctucanfd_driver_s));
+  if (!priv)
+    {
+      return -ENOMEM;
+    }
+
+  dev = kmm_zalloc(sizeof(struct ctucanfd_can_s));
+  if (!dev)
+    {
+      ret = -ENOMEM;
+      goto err_free_priv;
+    }
+
+  /* Set up single channel */
+
+  priv->devs       = dev;
+  priv->count      = 1;
+  priv->canfd_base = base;
+  priv->irq        = irq;
+
+  dev->base        = base;
+  dev->txbufcnt    = CTUCANFD_TXBUF_CNT;
+
+  /* Attach interrupt handler.  The GIC line is left masked here; we only
+   * call up_enable_irq() after every registration step succeeds.  This
+   * keeps the error path race-free: a stray pending IRQ (warm reset, etc.)
+   * cannot dispatch into ctucanfd_interrupt() while we are tearing down
+   * priv/dev on failure, and on SMP no in-flight handler can run on a
+   * peer core against memory we are about to free.
+   */
+
+  irq_attach(irq, ctucanfd_interrupt, priv);
+
+  /* Register the CAN interface */
+
+#ifdef CONFIG_CAN_CTUCANFD_CHARDEV
+  snprintf(devpath, sizeof(devpath), "/dev/can%" PRIu32, id);
+
+  dev->dev.cd_ops  = &g_ctucanfd_can_ops;
+  dev->dev.cd_priv = dev;
+
+  ret = can_register(devpath, &dev->dev);
+  if (ret < 0)
+    {
+      canerr("ERROR: can_register(%s) failed: %d\n", devpath, ret);
+      goto err_detach_irq;
+    }
+#endif
+
+#ifdef CONFIG_CAN_CTUCANFD_SOCKET
+  dev->dev.quota[NETPKT_TX] = CTUCANFD_TX_QUOTA;
+  dev->dev.quota[NETPKT_RX] = CTUCANFD_RX_QUOTA;
+  dev->dev.ops              = &g_ctucanfd_net_ops;
+
+  snprintf(dev->dev.netdev.d_ifname, IFNAMSIZ, "can%" PRIu32, id);
+
+  ret = netdev_lower_register(&dev->dev, NET_LL_CAN);
+  if (ret < 0)
+    {
+      canerr("ERROR: netdev_lower_register failed: %d\n", ret);
+      goto err_detach_irq;
+    }
+#endif
+
+  /* All registrations succeeded; enable the GIC line. */
+
+  up_enable_irq(irq);
+
+  return OK;
+
+err_detach_irq:
+  irq_detach(irq);
+  kmm_free(dev);
+err_free_priv:
+  kmm_free(priv);
+  return ret;
 }

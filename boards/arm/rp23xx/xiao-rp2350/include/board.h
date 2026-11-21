@@ -1,6 +1,8 @@
 /****************************************************************************
  * boards/arm/rp23xx/xiao-rp2350/include/board.h
  *
+ * SPDX-License-Identifier: Apache-2.0
+ *
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.  The
@@ -136,13 +138,9 @@
  * Public Data
  ****************************************************************************/
 
-#undef EXTERN
 #if defined(__cplusplus)
-#define EXTERN extern "C"
 extern "C"
 {
-#else
-#define EXTERN extern
 #endif
 
 /****************************************************************************
@@ -167,7 +165,6 @@ void rp23xx_boardearlyinitialize(void);
 
 void rp23xx_boardinitialize(void);
 
-#undef EXTERN
 #if defined(__cplusplus)
 }
 #endif
