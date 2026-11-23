@@ -79,6 +79,7 @@ static int n32_ncd_interrupt(int irq, void *context, void *param)
   bool present;
 
   present = !n32_gpioread(GPIO_SDIO_NCD);
+
   if (present != g_sd_inserted)
     {
       sdio_mediachange(g_sdio_dev, present);
@@ -141,6 +142,7 @@ int n32_sdmmc_initialize(int minor)
     }
 
   finfo("Successfully bound SDIO to the MMC/SD driver\n");
+
 
 #ifdef HAVE_NCD
   /* Use SD card detect pin to check if a card is g_sd_inserted */

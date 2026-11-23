@@ -49,9 +49,9 @@ extern const uint8_t _axiram_heap_start[];
 extern const uint8_t _ahbram_heap_start[];
 
 /* Adjust memory region definitions */
-#define N32_DTCM_SIZE       (1024U * 1024U)  /* DTCM 1024KB */
+#define N32_DTCM_SIZE       (1024U * 1024U)
 #define N32_AHBSRAM_SIZE    ( 352U * 1024U)  /* AHBSRAM 352KB */
-#define N32_AXISRAM_SIZE    ( 128U * 1024U)  /* AXI SRAM 128KB */
+#define N32_AXISRAM_SIZE    ( 128U * 1024U)  /* AXI SRAM 128KB (MPU only covers this) */
 #define N32_BSRAM_SIZE      (   4U * 1024U)  /* BSRAM 4KB */
 
 /* Adjust main heap start address to DTCM */

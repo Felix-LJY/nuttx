@@ -101,7 +101,8 @@
  * Actual PLL_VCOx: 800000000 Hz
  */
 
-#define TCM_SIZE_VALUE N32H7_TCM_CFG(0, 1024, 0)
+#define TCM_SIZE_VALUE N32H7_TCM_CFG(0, 1024, 0)  /* 1MB DTCM (user HW-verified OK); SW heap capped at 128KB -
+ * heap end beyond 0x2001FFFF breaks SDMMC (mechanism TBD) */  /* BISECT: ITCM-style TCM, XIP exec */
 #define CLK_TCK (USEC_PER_SEC /CONFIG_USEC_PER_TICK)
 
 #define N32_BOARD_USEHSE

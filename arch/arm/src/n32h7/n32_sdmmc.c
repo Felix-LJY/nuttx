@@ -171,6 +171,12 @@ struct n32_sdmmc_s
   uint32_t           nblocks;         /* Number of blocks */
   bool               is_read;         /* true=read, false=write */
   bool               using_dma;       /* true if using ADMA */
+  bool               tcseen;          /* TC arrived before the PIO FIFO
+                                       * drain finished; the drain-complete
+                                       * path must post TRANSFERDONE */
+  bool               last_was_write;  /* TX just completed - the RX data
+                                       * phase needs settling time (silicon
+                                       * race, see dmarecvsetup) */
 
   /* ADMA2 state */
 
@@ -612,7 +618,7 @@ static int n32_sdmmc_enable_clock(struct n32_sdmmc_s *priv, uint32_t freq_hz)
           break;
         }
 
-      up_udelay(10);
+      up_udelay(50);
     }
   while (--timeout > 0);
 
@@ -924,7 +930,7 @@ static void n32_sdmmc_setup_data(struct n32_sdmmc_s *priv)
            (priv->blocksize & N32_SDHOST_BLKCFG_SIZE_MASK);
   n32_sdmmc_putreg(priv, regval, N32_SDHOST_BLKCFG_OFFSET);
 
-  up_udelay(25);
+  up_udelay(50);
 
   mcinfo("DATA: size=%lu, blocks=%lu, total=%lu, dir=%s\n",
          (unsigned long)priv->blocksize, (unsigned long)priv->nblocks,
@@ -1063,7 +1069,7 @@ static void n32_sdmmc_datadisable(struct n32_sdmmc_s *priv)
 
   n32_sdmmc_modifyreg(priv, N32_SDHOST_CTRL2_OFFSET,
                       0, N32_SDHOST_CTRL2_SWRSTDAT);
-  up_udelay(10);
+  up_udelay(50);
   n32_sdmmc_modifyreg(priv, N32_SDHOST_CTRL2_OFFSET,
                       N32_SDHOST_CTRL2_SWRSTDAT, 0);
 
@@ -1210,6 +1216,21 @@ static int n32_sdmmc_build_adma_desc(struct n32_sdmmc_s *priv,
       len -= chunk;
     }
 
+  /* Make the descriptor table visible to the DMA engine BEFORE the
+   * controller is armed: without this barrier the DMA can fetch stale
+   * descriptor memory (the register write that starts the fetch is not
+   * ordered after the CPU writes above), the transfer then never
+   * completes and the read times out.  Extremely timing sensitive -
+   * heap layout or debug prints shift the window.
+   */
+
+  up_clean_dcache((uintptr_t)priv->adma_list.desc,
+                  (uintptr_t)priv->adma_list.desc +
+                    priv->adma_list.count *
+                      sizeof(*priv->adma_list.desc));
+  UP_DSB();
+  UP_ISB();
+
   mcinfo("ADMA desc: count=%d, total_len=%lu\n",
          desc_count, (unsigned long)total_len);
   return OK;
@@ -1314,6 +1335,7 @@ static void n32_sdmmc_stop_adma(struct n32_sdmmc_s *priv)
 static void n32_sdmmc_endwait(struct n32_sdmmc_s *priv,
                               sdio_eventset_t wkupevent)
 {
+
   /* Cancel the watchdog timeout */
 
   wd_cancel(&priv->waitwdog);
@@ -1482,6 +1504,13 @@ static int n32_sdmmc_interrupt(int irq, void *context, void *arg)
                 }
             }
 
+          /* TC while the PIO drain is still pending: remember it so the
+           * drain-complete path posts the wakeup.  A single ISR entry
+           * seeing TC|BUFRDY together would otherwise lose the event.
+           */
+
+          priv->tcseen = true;
+
           if (priv->remaining == 0)
             {
               n32_sdmmc_endwait(priv, SDIOWAIT_TRANSFERDONE);
@@ -1504,6 +1533,12 @@ static int n32_sdmmc_interrupt(int irq, void *context, void *arg)
 
               priv->waitmask &= ~N32_SDHOST_INTSTS_BUFWRDY;
               n32_sdmmc_configints(priv);
+
+              if (priv->tcseen &&
+                  (priv->waitevents & SDIOWAIT_TRANSFERDONE))
+                {
+                  n32_sdmmc_endwait(priv, SDIOWAIT_TRANSFERDONE);
+                }
             }
         }
     }
@@ -1523,6 +1558,16 @@ static int n32_sdmmc_interrupt(int irq, void *context, void *arg)
 
               priv->waitmask &= ~N32_SDHOST_INTSTS_BUFRRDY;
               n32_sdmmc_configints(priv);
+
+              /* TC already arrived in an earlier (or the same) ISR entry
+               * but could not post because the drain had not finished.
+               */
+
+              if (priv->tcseen &&
+                  (priv->waitevents & SDIOWAIT_TRANSFERDONE))
+                {
+                  n32_sdmmc_endwait(priv, SDIOWAIT_TRANSFERDONE);
+                }
             }
         }
     }
@@ -1601,7 +1646,7 @@ static void n32_sdmmc_reset(struct sdio_dev_s *dev)
           break;
         }
 
-      up_udelay(10);
+      up_udelay(50);
     }
   while (--timeout > 0);
 
@@ -1661,7 +1706,7 @@ static sdio_capset_t n32_sdmmc_capabilities(struct sdio_dev_s *dev)
 {
   sdio_capset_t caps = SDIO_CAPS_4BIT | SDIO_CAPS_DMABEFOREWRITE;
 #if HAVE_ADMA2
-  caps |= (SDIO_CAPS_DMASUPPORTED/* | SDIO_CAPS_SD_HS_MODE*/);
+  caps |= (SDIO_CAPS_DMASUPPORTED | SDIO_CAPS_SD_HS_MODE);
 #endif
   return caps;
 }
@@ -1788,8 +1833,53 @@ static void n32_sdmmc_clock(struct sdio_dev_s *dev, enum sdio_clock_e rate)
         regval |= N32_SDHOST_CTRL1_HSEN;
         n32_sdmmc_putreg(priv, regval, N32_SDHOST_CTRL1_OFFSET);
         n32_sdmmc_set_input_tap(priv, 16);
-        freq = 50000000;
-        break;
+
+        /* Max data timeout at HS as well: DTCNT=0 is only 2^13 cycles
+         * (~164us at 50MHz) - cards with slow read-start would abort
+         * silently. */
+
+        regval = n32_sdmmc_getreg(priv, N32_SDHOST_CTRL2_OFFSET);
+        regval &= ~N32_SDHOST_CTRL2_DTCNT_MASK;
+        regval |= N32_SDHOST_CTRL2_DTCNT(0xF);
+        n32_sdmmc_putreg(priv, regval, N32_SDHOST_CTRL2_OFFSET);
+
+        n32_sdmmc_enable_clock(priv, 50000000);
+
+        /* Some counterfeit-grade cards ACK the CMD6 high-speed switch but
+         * never actually switch - every command at 50MHz then times out.
+         * Probe with a data-less command and quietly drop back to default
+         * speed so such cards keep working.  Handled here (in the host
+         * driver) so the SDIO framework needs no changes.
+         */
+
+        n32_sdmmc_send_cmd(priv, 0x50, 512);        /* CMD16, arg=512 */
+        if (n32_sdmmc_wait_cmd_done(priv, 0x50) != OK)
+          {
+            mcerr("HS50 probe failed, falling back to DS25\n");
+
+            regval = n32_sdmmc_getreg(priv, N32_SDHOST_CTRL1_OFFSET);
+            regval &= ~N32_SDHOST_CTRL1_HSEN;
+            n32_sdmmc_putreg(priv, regval, N32_SDHOST_CTRL1_OFFSET);
+            N32_PUT_CFG(priv, N32_SDMMC_DLYCTRL_OFFSET, 0);
+            n32_sdmmc_enable_clock(priv, 25000000);
+
+            /* A card that just chewed on a garbled 50MHz command needs a
+             * few correctly-clocked commands to resynchronize its input
+             * shifter (first ones come back with COMCRC set).
+             */
+
+            for (int i = 0; i < 5; i++)
+              {
+                up_udelay(200);
+                n32_sdmmc_send_cmd(priv, 0x50, 512);
+                if (n32_sdmmc_wait_cmd_done(priv, 0x50) == OK)
+                  {
+                    break;
+                  }
+              }
+          }
+
+        return;
       default:
         freq = 400000;
         break;
@@ -1998,7 +2088,7 @@ static int n32_sdmmc_cancel(struct sdio_dev_s *dev)
 
   n32_sdmmc_modifyreg(priv, N32_SDHOST_CTRL2_OFFSET,
                       0, N32_SDHOST_CTRL2_SWRSTCMD);
-  up_udelay(10);
+  up_udelay(50);
   n32_sdmmc_modifyreg(priv, N32_SDHOST_CTRL2_OFFSET,
                       N32_SDHOST_CTRL2_SWRSTCMD, 0);
 
@@ -2165,6 +2255,14 @@ static void n32_sdmmc_waitenable(struct sdio_dev_s *dev,
   struct n32_sdmmc_s *priv = (struct n32_sdmmc_s *)dev;
   uint32_t mask = priv->waitmask;
 
+  /* New wait generation: no stale wakeup or TC latch may leak in. */
+
+  priv->wkupevent = 0;
+  priv->tcseen = false;
+  while (nxsem_trywait(&priv->waitsem) == 0)
+    {
+    }
+
   if (eventset & SDIOWAIT_CMDDONE)
     {
       mask |= N32_SDHOST_INTSTS_CMDC;
@@ -2202,6 +2300,15 @@ static void n32_sdmmc_waitenable(struct sdio_dev_s *dev,
       wd_start(&priv->waitwdog, delay, n32_sdmmc_eventtimeout,
                (wdparm_t)priv);
     }
+
+  /* Drain the domain write buffer: the ISE write above must LAND in the
+   * controller before the caller writes TMODE and triggers the command,
+   * otherwise the transfer can complete with its interrupt still masked
+   * at the controller - observed as a 100% silent data phase.  Heap
+   * layout modulates AXI congestion and with it this race window.
+   */
+
+  UP_DSB();
 }
 
 /****************************************************************************
@@ -2327,6 +2434,16 @@ static int n32_sdmmc_dmarecvsetup(struct sdio_dev_s *dev,
   priv->is_read = true;
   priv->using_dma = true;
 
+  /* Silicon-race mitigation: the SDHOST intermittently fails to start
+   * the receive data phase right after a completed TX (identical
+   * register writes, divergent outcome - see session log 2026-11-23).
+   * Any back-to-back transfer can trigger it (even pure read runs),
+   * so the settling delay is unconditional.  Empirically bisected
+   * 2026-11-23: 10us fails, 25us passes, 50us ships (2x margin).
+   */
+
+  up_udelay(50);
+
   ret = n32_sdmmc_build_adma_desc(priv, buffer, buflen);
   if (ret < 0)
     {
@@ -2368,6 +2485,7 @@ static int n32_sdmmc_dmasendsetup(struct sdio_dev_s *dev,
   priv->remaining = buflen;
   priv->is_read = false;
   priv->using_dma = true;
+  priv->last_was_write = true;
 
   ret = n32_sdmmc_build_adma_desc(priv, (uint8_t *)buffer, buflen);
   if (ret < 0)
@@ -2556,7 +2674,7 @@ struct sdio_dev_s *sdio_initialize(int slotno)
       regval = getreg32(N32_RCC_AXIRST1);
       regval |= (RCC_AXIRST1_SDMMC1RST | RCC_AXIRST1_SDHOST1RST);
       putreg32(regval, N32_RCC_AXIRST1);
-      up_udelay(10);
+      up_udelay(50);
       regval &= ~(RCC_AXIRST1_SDMMC1RST | RCC_AXIRST1_SDHOST1RST);
       putreg32(regval, N32_RCC_AXIRST1);
 
@@ -2627,7 +2745,7 @@ struct sdio_dev_s *sdio_initialize(int slotno)
       regval = getreg32(N32_RCC_AHB1RST1);
       regval |= (RCC_AHB1RST1_SDMMC2RST | RCC_AHB1RST1_SDHOST2RST);
       putreg32(regval, N32_RCC_AHB1RST1);
-      up_udelay(10);
+      up_udelay(50);
       regval &= ~(RCC_AHB1RST1_SDMMC2RST | RCC_AHB1RST1_SDHOST2RST);
       putreg32(regval, N32_RCC_AHB1RST1);
 
