@@ -1,11 +1,11 @@
 /* Specify the memory areas */
 MEMORY
 {
-ITCMRAM  (xrw) : ORIGIN = 0x00000000, LENGTH = 896K
-DTCMRAM  (xrw) : ORIGIN = 0x20000000, LENGTH = 128K
+ITCMRAM  (xrw) : ORIGIN = 0x00000000, LENGTH = 0K
+DTCMRAM  (xrw) : ORIGIN = 0x20000000, LENGTH = 1024K
 AXI_RAM  (xrw) : ORIGIN = 0x24000000, LENGTH = 128K
 AHB_RAM  (xrw) : ORIGIN = 0x30000000, LENGTH = 352K
-FLASH    (rx ) : ORIGIN = 0x15000000, LENGTH = 896K /* 896K for code, 1024K for mtd */
+XIP      (rx ) : ORIGIN = 0x17000000, LENGTH = 4096K
 }
 
 /* Entry Point */
@@ -23,16 +23,7 @@ SECTIONS
         _svectors = ABSOLUTE(.);
         *(.vectors)
         _evectors = ABSOLUTE(.);
-    } > ITCMRAM AT > FLASH
-
-    .startup :
-    {
-        *(.rodata.g_idle_topstack)
-        *(.text.start)
-        *(.text.__start)
-        *(.text.n32_tcmenable)
-        *(.text.n32_tcm_init)
-    } > FLASH
+    } > XIP
 
     _sitext = LOADADDR(.text);
 
@@ -50,7 +41,7 @@ SECTIONS
         *(.gcc_except_table)
         *(.gnu.linkonce.r.*)
         _etext = ABSOLUTE(.);
-    } > ITCMRAM AT > FLASH
+    } > XIP
 
     .init_section :
     {
@@ -58,21 +49,21 @@ SECTIONS
         KEEP(*(SORT_BY_INIT_PRIORITY(.init_array.*) SORT_BY_INIT_PRIORITY(.ctors.*)))
         KEEP(*(.init_array EXCLUDE_FILE(*crtbegin.o *crtbegin?.o *crtend.o *crtend?.o) .ctors))
         _einit = ABSOLUTE(.);
-    } > ITCMRAM AT > FLASH
+    } > XIP
 
     .ARM.extab :
     {
         __extab_start = ABSOLUTE(.);
         *(.ARM.extab*)
         __extab_end = ABSOLUTE(.);
-    } > ITCMRAM AT > FLASH
+    } > XIP
 
     .ARM.exidx :
     {
         __exidx_start = ABSOLUTE(.);
         *(.ARM.exidx*)
         __exidx_end = ABSOLUTE(.);
-    } > ITCMRAM AT > FLASH
+    } > XIP
 
     .data :
     {
@@ -82,7 +73,7 @@ SECTIONS
         CONSTRUCTORS
         . = ALIGN(4);
         _edata = ABSOLUTE(.);
-    } > DTCMRAM AT > FLASH
+    } > DTCMRAM AT > XIP
 
     _eronly = LOADADDR(.data);
 

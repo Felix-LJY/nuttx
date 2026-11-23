@@ -298,6 +298,8 @@ static void up_dma_receive(struct uart_dev_s *dev);
 static void up_dma_rxint(struct uart_dev_s *dev, bool enable);
 static bool up_dma_rxavailable(struct uart_dev_s *dev);
 static void up_dma_rxcallback(DMA_HANDLE handle, uint8_t status, void *arg);
+static void up_dma_rxharvest(struct uart_dev_s *dev);
+static void up_dma_rxfree(struct uart_dev_s *dev);
 #endif
 
 #if defined(SERIAL_HAVE_RXDMA) || defined(SERIAL_HAVE_TXDMA)
@@ -328,6 +330,7 @@ static const struct uart_ops_s g_uart_rxdma_ops =
   .ioctl          = up_ioctl,
   .receive        = up_receive,
   .dmareceive     = up_dma_receive,
+  .dmarxfree      = up_dma_rxfree,
   .rxint          = up_dma_rxint,
   .rxavailable    = up_dma_rxavailable,
 #ifdef CONFIG_SERIAL_IFLOWCONTROL
@@ -373,6 +376,7 @@ static const struct uart_ops_s g_uart_rxtxdma_ops =
   .ioctl          = up_ioctl,
   .receive        = up_receive,
   .dmareceive     = up_dma_receive,
+  .dmarxfree      = up_dma_rxfree,
   .rxint          = up_dma_rxint,
   .rxavailable    = up_dma_rxavailable,
 #ifdef CONFIG_SERIAL_IFLOWCONTROL
@@ -1980,6 +1984,44 @@ static void up_detach(struct uart_dev_s *dev)
 }
 
 /****************************************************************************
+ * Name: up_dma_rxharvest
+ *
+ * Stop the RX DMA channel, deliver the received block to the serial
+ * framework, and re-arm the channel with a fresh descriptor.  Shared by
+ * the IDLE interrupt path (partial frame delivery) and the DMA transfer
+ * complete callback (full block delivery).
+ *
+ * Re-arm only happens with a real block size: a zero-length block would
+ * complete instantly and disable the channel with no re-arm path left
+ * (the ring-full corner).
+ *
+ ****************************************************************************/
+
+#ifdef SERIAL_HAVE_RXDMA
+static void up_dma_rxharvest(struct uart_dev_s *dev)
+{
+  struct up_dev_s *priv = (struct up_dev_s *)dev->priv;
+
+  n32_dmastop(priv->rxdma);
+  priv->dev.dmarx.nbytes = n32_getcount(priv->rxdma);
+  uart_recvchars_done(&priv->dev);
+  uart_recvchars_dma(&priv->dev);
+
+  if (priv->dev.dmarx.length > 0)
+    {
+      rxcfg.src_addr = priv->usartbase + N32_USART_DAT_OFFSET;
+      rxcfg.dst_addr = (uint32_t)priv->dev.dmarx.buffer;
+      rxcfg.block_size = priv->dev.dmarx.length;
+      rxcfg.src_hs_if = n32_getchannel(priv->rxdma);
+      rxcfg.dst_hs_if = n32_getchannel(priv->rxdma);
+
+      n32_dmasetup(priv->rxdma, &rxcfg);
+      n32_dmastart(priv->rxdma, up_dma_rxcallback, priv);
+    }
+}
+#endif
+
+/****************************************************************************
  * Name: up_interrupt
  ****************************************************************************/
 
@@ -2013,25 +2055,13 @@ static int up_interrupt(int irq, void *context, void *arg)
     {
       if (up_dma_rxavailable(&priv->dev))
         {
-          /* Clear error by reading STS then DAT */
+          /* Clear IDLEF by reading STS (already done at entry) then DAT */
 
           uint32_t dat = up_serialin(priv, N32_USART_DAT_OFFSET);
 
           UNUSED(dat);
 
-          n32_dmastop(priv->rxdma);
-          priv->dev.dmarx.nbytes = n32_getcount(priv->rxdma);
-          uart_recvchars_done(&priv->dev);
-          uart_recvchars_dma(&priv->dev);
-
-          rxcfg.src_addr = priv->usartbase + N32_USART_DAT_OFFSET;
-          rxcfg.dst_addr = (uint32_t)priv->dev.dmarx.buffer;
-          rxcfg.block_size = priv->dev.dmarx.length;
-          rxcfg.src_hs_if = n32_getchannel(priv->rxdma);
-          rxcfg.dst_hs_if = n32_getchannel(priv->rxdma);
-
-          n32_dmasetup(priv->rxdma, &rxcfg);
-          n32_dmastart(priv->rxdma, up_dma_rxcallback, priv);
+          up_dma_rxharvest(&priv->dev);
 
           return OK;
         }
@@ -2256,8 +2286,19 @@ static bool up_txempty(struct uart_dev_s *dev)
 static void up_dma_rxcallback(DMA_HANDLE handle, uint8_t status, void *arg)
 {
   struct up_dev_s *priv = arg;
+  if(status & DMA_INT_ERROR)
+    {
+      PANIC();
+    }
+  else if (status & DMA_INT_TFR)
+    {
+      /* Deliver the completed block immediately and re-arm; without
+       * this the bytes would sit undelivered until the next IDLE event
+       * and the channel would stay disabled in between.
+       */
 
-  uart_recvchars_dma(&priv->dev);
+      up_dma_rxharvest(&priv->dev);
+    }
 }
 #endif
 
@@ -2269,7 +2310,18 @@ static void up_dma_rxcallback(DMA_HANDLE handle, uint8_t status, void *arg)
 static void up_dma_receive(struct uart_dev_s *dev)
 {
   struct up_dev_s *priv = (struct up_dev_s *)dev->priv;
-  uint32_t nextrx = n32_getcount(priv->rxdma);
+  uint32_t nextrx;
+
+  /* The RX DMA channel does not exist until up_dma_setup() created it;
+   * reading its count register through a NULL handle bus-faults.
+   */
+
+  if (priv->rxdma == NULL)
+    {
+      return;
+    }
+
+  nextrx = n32_getcount(priv->rxdma);
 
   /* Check if more data is available */
 
@@ -2326,6 +2378,45 @@ static bool up_dma_rxavailable(struct uart_dev_s *dev)
 
   return n32_getcount(priv->rxdma) != 0;
 }
+
+/****************************************************************************
+ * Name: up_dma_rxfree
+ *
+ * The framework calls here after the reader freed space in the RX ring.
+ * If the channel was left stopped by a full ring (zero-length descriptor,
+ * nobody left to re-arm it), fill a fresh descriptor and restart it.
+ *
+ ****************************************************************************/
+
+static void up_dma_rxfree(struct uart_dev_s *dev)
+{
+  struct up_dev_s *priv = (struct up_dev_s *)dev->priv;
+  irqstate_t flags;
+
+  if (!priv->rxdma)
+    {
+      return;
+    }
+
+  flags = enter_critical_section();
+  if (priv->dev.dmarx.length == 0)
+    {
+      uart_recvchars_dma(dev);
+      if (priv->dev.dmarx.length > 0)
+        {
+          rxcfg.src_addr = priv->usartbase + N32_USART_DAT_OFFSET;
+          rxcfg.dst_addr = (uint32_t)priv->dev.dmarx.buffer;
+          rxcfg.block_size = priv->dev.dmarx.length;
+          rxcfg.src_hs_if = n32_getchannel(priv->rxdma);
+          rxcfg.dst_hs_if = n32_getchannel(priv->rxdma);
+
+          n32_dmasetup(priv->rxdma, &rxcfg);
+          n32_dmastart(priv->rxdma, up_dma_rxcallback, priv);
+        }
+    }
+
+  leave_critical_section(flags);
+}
 #endif
 
 /****************************************************************************
@@ -2337,7 +2428,11 @@ static void up_dma_txcallback(DMA_HANDLE handle, uint8_t status, void *arg)
 {
   struct up_dev_s *priv = arg;
 
-  if (status == DMA_INT_TFR)
+  if(status & DMA_INT_ERROR)
+    {
+      PANIC();
+    }
+  else if (status & DMA_INT_TFR)
     {
       priv->dev.dmatx.nbytes += priv->dev.dmatx.length;
       if (priv->dev.dmatx.nlength)
@@ -2362,19 +2457,15 @@ static void up_dma_txcallback(DMA_HANDLE handle, uint8_t status, void *arg)
 
           return;
         }
+
+      /* Adjust the pointers */
+
+      uart_xmitchars_done(&priv->dev);
+
+      /* Send more if available */
+
+      up_dma_txavailable(&priv->dev);
     }
-  else if(status == DMA_INT_ERROR)
-    {
-      PANIC();
-    }
-
-  /* Adjust the pointers */
-
-  uart_xmitchars_done(&priv->dev);
-
-  /* Send more if available */
-
-  up_dma_txavailable(&priv->dev);
 }
 
 static void up_dma_txavailable(struct uart_dev_s *dev)
