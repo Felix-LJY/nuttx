@@ -313,6 +313,13 @@ static noinline_function void n32_startup_m7(void)
   /* Enable I- and D-Caches */
 
   up_enable_icache();
+#ifdef CONFIG_ARMV7M_DCACHE_WRITETHROUGH
+  /* nvic.h points NVIC_CACR at the Cortex-M55/M85 address, so on the
+   * Cortex-M7 up_enable_dcache() never sets FORCEWT.
+   */
+
+  modifyreg32(0xe000ef9c, 0, NVIC_CACR_FORCEWT);
+#endif
   up_enable_dcache();
 #endif
   showprogress('C');
