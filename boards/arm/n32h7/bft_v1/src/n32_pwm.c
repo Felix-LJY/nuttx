@@ -30,7 +30,6 @@
 #include <debug.h>
 
 #include <nuttx/timers/pwm.h>
-#include <sys/stat.h>
 #include <arch/board/board.h>
 
 #include "chip.h"
@@ -81,8 +80,6 @@ int n32_pwm_setup(void)
 
   if (!initialized)
     {
-      mkdir("/dev/pwm", 0666);
-
       /* Get an instance of the PWM interface */
 
       pwm = n32_pwminitialize(BFT_V1_PWM0TIMER);
@@ -92,9 +89,9 @@ int n32_pwm_setup(void)
           return -ENODEV;
         }
 
-      /* Register the PWM driver at "/dev/pwm/0" */
+      /* Register the PWM driver at "/dev/pwm0" */
 
-      ret = pwm_register("/dev/pwm/0", pwm);
+      ret = pwm_register("/dev/pwm0", pwm);
       if (ret < 0)
         {
           tmrerr("ERROR: pwm_register failed: %d\n", ret);
@@ -110,14 +107,34 @@ int n32_pwm_setup(void)
           return -ENODEV;
         }
 
-      /* Register the PWM driver at "/dev/pwm/1" */
+      /* Register the PWM driver at "/dev/pwm1" */
 
-      ret = pwm_register("/dev/pwm/1", pwm);
+      ret = pwm_register("/dev/pwm1", pwm);
       if (ret < 0)
         {
           tmrerr("ERROR: pwm_register failed: %d\n", ret);
           return ret;
         }
+
+#ifdef CONFIG_N32H7_GTIMB2_PWM
+      /* Get an instance of the PWM interface */
+
+      pwm = n32_pwminitialize(BFT_V1_PWM2TIMER);
+      if (!pwm)
+        {
+          tmrerr("ERROR: Failed to get the N32H7 PWM lower half\n");
+          return -ENODEV;
+        }
+
+      /* Register the PWM driver at "/dev/pwm2" */
+
+      ret = pwm_register("/dev/pwm2", pwm);
+      if (ret < 0)
+        {
+          tmrerr("ERROR: pwm_register failed: %d\n", ret);
+          return ret;
+        }
+#endif
 
       /* Now we are initialized */
 

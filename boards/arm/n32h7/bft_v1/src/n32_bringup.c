@@ -33,9 +33,12 @@
 #include <arch/board/board.h>
 
 #include <nuttx/fs/fs.h>
-#include <sys/stat.h>
 
 #include "bft_v1.h"
+
+#if defined(CONFIG_SENSORS) && defined(CONFIG_N32H7_ADC3)
+#  include "n32_temp.h"
+#endif
 
 #ifdef CONFIG_USERLED
 #  include <nuttx/leds/userled.h>
@@ -57,6 +60,20 @@
 #  include <nuttx/usb/usbmonitor.h>
 #endif
 
+#ifdef CONFIG_N32H7_I2C
+#  include <nuttx/i2c/i2c_master.h>
+#  include "n32_i2c.h"
+#endif
+
+/* The MS85010 RTC is the only device on I2C1 */
+
+#if defined(CONFIG_RTC_PCF8563) && defined(CONFIG_N32H7_I2C1)
+#  include <nuttx/arch.h>
+#  include <nuttx/clock.h>
+#  include <nuttx/timers/pcf8563.h>
+#  define RTC_I2C_BUS 1
+#endif
+
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
@@ -72,8 +89,166 @@ extern struct cap_lowerhalf_s *n32_cap_initialize(int timer);
 #endif
 
 /****************************************************************************
+ * Name: n32_i2c_register
+ *
+ * Description:
+ *   Initialize one I2C port and register its character driver as the next
+ *   /dev/i2cN: the buses are numbered in the order they are set up,
+ *   whichever of the eight are enabled.
+ *
+ * Input Parameters:
+ *   port - The I2C, 1 to 8
+ *
+ * Returned Value:
+ *   None
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_N32H7_I2C
+static void n32_i2c_register(int port)
+{
+  FAR struct i2c_master_s *i2c;
+#ifdef CONFIG_I2C_DRIVER
+  static int minor = 0;
+  int ret;
+#endif
+
+  i2c = n32_i2cbus_initialize(port);
+  if (i2c == NULL)
+    {
+      syslog(LOG_ERR, "ERROR: Failed to get I2C%d interface\n", port);
+      return;
+    }
+
+#ifdef CONFIG_I2C_DRIVER
+  ret = i2c_register(i2c, minor);
+  if (ret < 0)
+    {
+      syslog(LOG_ERR, "ERROR: Failed to register I2C%d as /dev/i2c%d: %d\n",
+             port, minor, ret);
+      n32_i2cbus_uninitialize(i2c);
+    }
+  else
+    {
+      minor++;
+    }
+#endif
+}
+#endif
+
+/****************************************************************************
+ * Name: n32_i2c_setup
+ *
+ * Description:
+ *   Initialize and register the I2C ports enabled in the configuration.
+ *
+ * Returned Value:
+ *   None
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_N32H7_I2C
+static void n32_i2c_setup(void)
+{
+#ifdef CONFIG_N32H7_I2C1
+  n32_i2c_register(1);
+#endif
+
+#ifdef CONFIG_N32H7_I2C2
+  n32_i2c_register(2);
+#endif
+
+#ifdef CONFIG_N32H7_I2C3
+  n32_i2c_register(3);
+#endif
+
+#ifdef CONFIG_N32H7_I2C4
+  n32_i2c_register(4);
+#endif
+
+#ifdef CONFIG_N32H7_I2C5
+  n32_i2c_register(5);
+#endif
+
+#ifdef CONFIG_N32H7_I2C6
+  n32_i2c_register(6);
+#endif
+
+#ifdef CONFIG_N32H7_I2C7
+  n32_i2c_register(7);
+#endif
+
+#ifdef CONFIG_N32H7_I2C8
+  n32_i2c_register(8);
+#endif
+}
+#endif
+
+/****************************************************************************
+ * Name: n32_rtc_setup
+ *
+ * Description:
+ *   Make the MS85010 RTC on I2C1 the system's clock, and take the system
+ *   time from it.  Called once the bus exists, since an I2C RTC is not
+ *   available as early as the system clock is started.
+ *
+ * Returned Value:
+ *   None
+ *
+ ****************************************************************************/
+
+#ifdef RTC_I2C_BUS
+static void n32_rtc_setup(void)
+{
+  FAR struct i2c_master_s *i2c;
+  int ret;
+
+  /* A second reference to the bus that n32_i2c_setup() has brought up */
+
+  i2c = n32_i2cbus_initialize(RTC_I2C_BUS);
+  if (i2c == NULL)
+    {
+      syslog(LOG_ERR, "ERROR: Failed to get I2C%d interface\n", RTC_I2C_BUS);
+      return;
+    }
+
+  ret = pcf8563_rtc_initialize(i2c);
+  if (ret < 0)
+    {
+      syslog(LOG_ERR, "ERROR: pcf8563_rtc_initialize() failed: %d\n", ret);
+      return;
+    }
+
+  /* The chip answers with an error rather than a time it cannot vouch for,
+   * in which case the system clock stays where it started.
+   */
+
+  clock_synchronize(NULL);
+}
+#endif
+
+/****************************************************************************
  * Public Functions
  ****************************************************************************/
+
+/****************************************************************************
+ * Name: up_rtc_initialize
+ *
+ * Description:
+ *   Nothing can be done this early: the board's only RTC hangs off I2C,
+ *   which does not exist yet.  n32_rtc_setup() binds it once it does.
+ *
+ * Returned Value:
+ *   OK
+ *
+ ****************************************************************************/
+
+#ifdef RTC_I2C_BUS
+int up_rtc_initialize(void)
+{
+  return OK;
+}
+#endif
 
 /****************************************************************************
  * Name: n32_bringup
@@ -95,6 +270,18 @@ int n32_bringup(void)
   int ret = OK;
 
   UNUSED(ret);
+
+#ifdef CONFIG_N32H7_I2C
+  /* Register the I2C buses */
+
+  n32_i2c_setup();
+#endif
+
+#ifdef RTC_I2C_BUS
+  /* Start the system clock from the RTC */
+
+  n32_rtc_setup();
+#endif
 
 #ifdef CONFIG_FS_PROCFS
   /* Mount the procfs file system */
@@ -164,12 +351,10 @@ int n32_bringup(void)
 
 #ifdef CONFIG_TIMER
 
-  mkdir("/dev/timer", 0666);
-
 #ifdef CONFIG_N32H7_BTIM1
   /* Register BTIM1 as /dev/timer0 (timer number 15) */
 
-  ret = n32_timer_initialize("/dev/timer/0", 15);
+  ret = n32_timer_initialize("/dev/timer0", 15);
   if (ret < 0)
     {
       syslog(LOG_ERR, "ERROR: Failed to register /dev/timer0: %d\n", ret);
@@ -177,34 +362,34 @@ int n32_bringup(void)
 #endif
 
 #ifdef CONFIG_N32H7_BTIM2
-  ret = n32_timer_initialize("/dev/timer/1", 16);
+  ret = n32_timer_initialize("/dev/timer1", 16);
   if (ret < 0)
     {
-      syslog(LOG_ERR, "ERROR: Failed to register /dev/timer/1: %d\n", ret);
+      syslog(LOG_ERR, "ERROR: Failed to register /dev/timer1: %d\n", ret);
     }
 #endif
 
 #ifdef CONFIG_N32H7_BTIM3
-  ret = n32_timer_initialize("/dev/timer/2", 17);
+  ret = n32_timer_initialize("/dev/timer2", 17);
   if (ret < 0)
     {
-      syslog(LOG_ERR, "ERROR: Failed to register /dev/timer/2: %d\n", ret);
+      syslog(LOG_ERR, "ERROR: Failed to register /dev/timer2: %d\n", ret);
     }
 #endif
 
 #ifdef CONFIG_N32H7_BTIM4
-  ret = n32_timer_initialize("/dev/timer/3", 18);
+  ret = n32_timer_initialize("/dev/timer3", 18);
   if (ret < 0)
     {
-      syslog(LOG_ERR, "ERROR: Failed to register /dev/timer/3: %d\n", ret);
+      syslog(LOG_ERR, "ERROR: Failed to register /dev/timer3: %d\n", ret);
     }
 #endif
 
 #ifdef CONFIG_N32H7_GTIMA1
-  ret = n32_timer_initialize("/dev/timer/4", 3);
+  ret = n32_timer_initialize("/dev/timer4", 3);
   if (ret < 0)
     {
-      syslog(LOG_ERR, "ERROR: Failed to register /dev/timer/4: %d\n", ret);
+      syslog(LOG_ERR, "ERROR: Failed to register /dev/timer4: %d\n", ret);
     }
 #endif
 
@@ -222,8 +407,6 @@ int n32_bringup(void)
 
 #ifdef CONFIG_N32H7_ONESHOT
 
-  mkdir("/dev/oneshot", 0666);
-
 #  ifdef CONFIG_N32H7_GTIMA1
   struct oneshot_lowerhalf_s *oneshot;
   int chan;
@@ -238,10 +421,10 @@ int n32_bringup(void)
     }
   else
     {
-      ret = oneshot_register("/dev/oneshot/0", oneshot);
+      ret = oneshot_register("/dev/oneshot0", oneshot);
       if (ret < 0)
         {
-          syslog(LOG_ERR, "ERROR: Failed to register /dev/oneshot/1/0: %d\n",
+          syslog(LOG_ERR, "ERROR: Failed to register /dev/oneshot0: %d\n",
                   ret);
         }
     }
@@ -256,10 +439,10 @@ int n32_bringup(void)
     }
   else
     {
-      ret = oneshot_register("/dev/oneshot/1", oneshot);
+      ret = oneshot_register("/dev/oneshot1", oneshot);
       if (ret < 0)
         {
-          syslog(LOG_ERR, "ERROR: Failed to register /dev/oneshot/1: %d\n",
+          syslog(LOG_ERR, "ERROR: Failed to register /dev/oneshot1: %d\n",
                   ret);
         }
     }
@@ -274,10 +457,10 @@ int n32_bringup(void)
     }
   else
     {
-      ret = oneshot_register("/dev/oneshot/2", oneshot);
+      ret = oneshot_register("/dev/oneshot2", oneshot);
       if (ret < 0)
         {
-          syslog(LOG_ERR, "ERROR: Failed to register /dev/oneshot/2: %d\n",
+          syslog(LOG_ERR, "ERROR: Failed to register /dev/oneshot2: %d\n",
                   ret);
         }
     }
@@ -292,10 +475,10 @@ int n32_bringup(void)
     }
   else
     {
-      ret = oneshot_register("/dev/oneshot/3", oneshot);
+      ret = oneshot_register("/dev/oneshot3", oneshot);
       if (ret < 0)
         {
-          syslog(LOG_ERR, "ERROR: Failed to register /dev/oneshot/3: %d\n",
+          syslog(LOG_ERR, "ERROR: Failed to register /dev/oneshot3: %d\n",
                   ret);
         }
     }
@@ -321,6 +504,24 @@ int n32_bringup(void)
   if (ret < 0)
     {
       syslog(LOG_ERR, "ERROR: n32_pwm_setup() failed: %d\n", ret);
+    }
+#endif
+
+#ifdef CONFIG_ADC
+  /* Initialize ADC and register the ADC driver. */
+
+  ret = n32_adc_setup();
+  if (ret < 0)
+    {
+      syslog(LOG_ERR, "ERROR: n32_adc_setup() failed: %d\n", ret);
+    }
+#endif
+
+#if defined(CONFIG_SENSORS) && defined(CONFIG_N32H7_ADC3)
+  ret = n32_temp_setup();
+  if (ret < 0)
+    {
+      syslog(LOG_ERR, "ERROR: n32_temp_setup() failed: %d\n", ret);
     }
 #endif
 

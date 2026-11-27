@@ -40,6 +40,10 @@
 #include "hardware/n32h76x_pinmap.h"
 #include "hardware/n32h7_rcc.h"
 
+/* Entries of a channel table, which holds only the channels a board uses */
+
+#define PWM_NCHAN(table) (sizeof(table) / sizeof((table)[0]))
+
 #ifdef CONFIG_N32H7_PWM
 
 /****************************************************************************
@@ -279,6 +283,7 @@ static struct n32_pwmtimer_s g_pwmatim1dev =
   .ops         = &g_pwmops,
   .timid       = 1,
   .channels    = g_pwmatim1channels,
+  .nchan       = PWM_NCHAN(g_pwmatim1channels),
   .timtype     = TIMTYPE_ADVANCED,
   .mode        = CONFIG_N32H7_ATIM1_MODE,
   .lock        = CONFIG_N32H7_ATIM1_LOCK,
@@ -399,6 +404,7 @@ static struct n32_pwmtimer_s g_pwmatim2dev =
   .ops         = &g_pwmops,
   .timid       = 2,
   .channels    = g_pwmatim2channels,
+  .nchan       = PWM_NCHAN(g_pwmatim2channels),
   .timtype     = TIMTYPE_ADVANCED,
   .mode        = CONFIG_N32H7_ATIM2_MODE,
   .lock        = CONFIG_N32H7_ATIM2_LOCK,
@@ -519,6 +525,7 @@ static struct n32_pwmtimer_s g_pwmatim3dev =
   .ops         = &g_pwmops,
   .timid       = 3,
   .channels    = g_pwmatim3channels,
+  .nchan       = PWM_NCHAN(g_pwmatim3channels),
   .timtype     = TIMTYPE_ADVANCED,
   .mode        = CONFIG_N32H7_ATIM3_MODE,
   .lock        = CONFIG_N32H7_ATIM3_LOCK,
@@ -639,6 +646,7 @@ static struct n32_pwmtimer_s g_pwmatim4dev =
   .ops         = &g_pwmops,
   .timid       = 4,
   .channels    = g_pwmatim4channels,
+  .nchan       = PWM_NCHAN(g_pwmatim4channels),
   .timtype     = TIMTYPE_ADVANCED,
   .mode        = CONFIG_N32H7_ATIM4_MODE,
   .lock        = CONFIG_N32H7_ATIM4_LOCK,
@@ -716,6 +724,7 @@ static struct n32_pwmtimer_s g_pwmgtima1dev =
   .ops         = &g_pwmops,
   .timid       = 5,
   .channels    = g_pwmgtima1channels,
+  .nchan       = PWM_NCHAN(g_pwmgtima1channels),
   .timtype     = TIMTYPE_GENERAL16,
   .mode        = CONFIG_N32H7_GTIMA1_MODE,
   .lock        = 0,
@@ -793,6 +802,7 @@ static struct n32_pwmtimer_s g_pwmgtima2dev =
   .ops         = &g_pwmops,
   .timid       = 6,
   .channels    = g_pwmgtima2channels,
+  .nchan       = PWM_NCHAN(g_pwmgtima2channels),
   .timtype     = TIMTYPE_GENERAL16,
   .mode        = CONFIG_N32H7_GTIMA2_MODE,
   .lock        = 0,
@@ -870,6 +880,7 @@ static struct n32_pwmtimer_s g_pwmgtima3dev =
   .ops         = &g_pwmops,
   .timid       = 7,
   .channels    = g_pwmgtima3channels,
+  .nchan       = PWM_NCHAN(g_pwmgtima3channels),
   .timtype     = TIMTYPE_GENERAL16,
   .mode        = CONFIG_N32H7_GTIMA3_MODE,
   .lock        = 0,
@@ -947,6 +958,7 @@ static struct n32_pwmtimer_s g_pwmgtima4dev =
   .ops         = &g_pwmops,
   .timid       = 8,
   .channels    = g_pwmgtima4channels,
+  .nchan       = PWM_NCHAN(g_pwmgtima4channels),
   .timtype     = TIMTYPE_GENERAL16,
   .mode        = CONFIG_N32H7_GTIMA4_MODE,
   .lock        = 0,
@@ -1024,6 +1036,7 @@ static struct n32_pwmtimer_s g_pwmgtima5dev =
   .ops         = &g_pwmops,
   .timid       = 9,
   .channels    = g_pwmgtima5channels,
+  .nchan       = PWM_NCHAN(g_pwmgtima5channels),
   .timtype     = TIMTYPE_GENERAL16,
   .mode        = CONFIG_N32H7_GTIMA5_MODE,
   .lock        = 0,
@@ -1101,6 +1114,7 @@ static struct n32_pwmtimer_s g_pwmgtima6dev =
   .ops         = &g_pwmops,
   .timid       = 10,
   .channels    = g_pwmgtima6channels,
+  .nchan       = PWM_NCHAN(g_pwmgtima6channels),
   .timtype     = TIMTYPE_GENERAL16,
   .mode        = CONFIG_N32H7_GTIMA6_MODE,
   .lock        = 0,
@@ -1178,6 +1192,7 @@ static struct n32_pwmtimer_s g_pwmgtima7dev =
   .ops         = &g_pwmops,
   .timid       = 11,
   .channels    = g_pwmgtima7channels,
+  .nchan       = PWM_NCHAN(g_pwmgtima7channels),
   .timtype     = TIMTYPE_GENERAL16,
   .mode        = CONFIG_N32H7_GTIMA7_MODE,
   .lock        = 0,
@@ -1271,6 +1286,7 @@ static struct n32_pwmtimer_s g_pwmgtimb1dev =
   .ops         = &g_pwmops,
   .timid       = 12,
   .channels    = g_pwmgtimb1channels,
+  .nchan       = PWM_NCHAN(g_pwmgtimb1channels),
   .timtype     = TIMTYPE_GTIMB,
   .mode        = CONFIG_N32H7_GTIMB1_MODE,
   .lock        = CONFIG_N32H7_GTIMB1_LOCK,
@@ -1364,6 +1380,7 @@ static struct n32_pwmtimer_s g_pwmgtimb2dev =
   .ops         = &g_pwmops,
   .timid       = 13,
   .channels    = g_pwmgtimb2channels,
+  .nchan       = PWM_NCHAN(g_pwmgtimb2channels),
   .timtype     = TIMTYPE_GTIMB,
   .mode        = CONFIG_N32H7_GTIMB2_MODE,
   .lock        = CONFIG_N32H7_GTIMB2_LOCK,
@@ -1457,6 +1474,7 @@ static struct n32_pwmtimer_s g_pwmgtimb3dev =
   .ops         = &g_pwmops,
   .timid       = 14,
   .channels    = g_pwmgtimb3channels,
+  .nchan       = PWM_NCHAN(g_pwmgtimb3channels),
   .timtype     = TIMTYPE_GTIMB,
   .mode        = CONFIG_N32H7_GTIMB3_MODE,
   .lock        = CONFIG_N32H7_GTIMB3_LOCK,
@@ -1794,6 +1812,11 @@ static int pwm_frequency_update(struct pwm_lowerhalf_s *dev,
   uint32_t prescaler;
   uint32_t reload;
 
+  if (frequency == 0)
+    {
+      return -EINVAL;
+    }
+
   prescaler = (timclk / frequency + 65534) / 65535;
   if (prescaler < 1)
     {
@@ -2089,7 +2112,7 @@ static uint16_t pwm_outputs_from_channels(struct n32_pwmtimer_s *priv)
 {
   uint16_t outputs = 0;
 
-  for (int i = 0; i < CONFIG_PWM_NCHANNELS; i++)
+  for (int i = 0; i < CONFIG_PWM_NCHANNELS && i < priv->nchan; i++)
     {
       if (priv->channels[i].channel == 0)
         {
@@ -2149,7 +2172,7 @@ static int pwm_configure(struct pwm_lowerhalf_s *dev)
 
   /* Configure each channel */
 
-  for (i = 0; i < CONFIG_PWM_NCHANNELS; i++)
+  for (i = 0; i < CONFIG_PWM_NCHANNELS && i < priv->nchan; i++)
     {
       struct n32_pwmchan_s *chan = &priv->channels[i];
 
@@ -2274,7 +2297,7 @@ static int pwm_setup(struct pwm_lowerhalf_s *dev)
 
   /* Configure GPIOs */
 
-  for (int i = 0; i < CONFIG_PWM_NCHANNELS; i++)
+  for (int i = 0; i < CONFIG_PWM_NCHANNELS && i < priv->nchan; i++)
     {
       if (priv->channels[i].channel == 0)
         {
@@ -2319,7 +2342,7 @@ static int pwm_shutdown(struct pwm_lowerhalf_s *dev)
 
   /* Unconfigure GPIOs */
 
-  for (int i = 0; i < CONFIG_PWM_NCHANNELS; i++)
+  for (int i = 0; i < CONFIG_PWM_NCHANNELS && i < priv->nchan; i++)
     {
       if (priv->channels[i].channel == 0)
         {

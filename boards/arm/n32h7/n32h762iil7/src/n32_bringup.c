@@ -33,7 +33,6 @@
 #include <arch/board/board.h>
 
 #include <nuttx/fs/fs.h>
-#include <sys/stat.h>
 
 #include "n32h762iil7.h"
 
@@ -191,12 +190,10 @@ int n32_bringup(void)
 
 #ifdef CONFIG_TIMER
 
-  mkdir("/dev/timer", 0666);
-
 #ifdef CONFIG_N32H7_BTIM1
   /* Register BTIM1 as /dev/timer0 (timer number 15) */
 
-  ret = n32_timer_initialize("/dev/timer/0", 15);
+  ret = n32_timer_initialize("/dev/timer0", 15);
   if (ret < 0)
     {
       syslog(LOG_ERR, "ERROR: Failed to register /dev/timer0: %d\n", ret);
@@ -204,34 +201,34 @@ int n32_bringup(void)
 #endif
 
 #ifdef CONFIG_N32H7_BTIM2
-  ret = n32_timer_initialize("/dev/timer/1", 16);
+  ret = n32_timer_initialize("/dev/timer1", 16);
   if (ret < 0)
     {
-      syslog(LOG_ERR, "ERROR: Failed to register /dev/timer/1: %d\n", ret);
+      syslog(LOG_ERR, "ERROR: Failed to register /dev/timer1: %d\n", ret);
     }
 #endif
 
 #ifdef CONFIG_N32H7_BTIM3
-  ret = n32_timer_initialize("/dev/timer/2", 17);
+  ret = n32_timer_initialize("/dev/timer2", 17);
   if (ret < 0)
     {
-      syslog(LOG_ERR, "ERROR: Failed to register /dev/timer/2: %d\n", ret);
+      syslog(LOG_ERR, "ERROR: Failed to register /dev/timer2: %d\n", ret);
     }
 #endif
 
 #ifdef CONFIG_N32H7_BTIM4
-  ret = n32_timer_initialize("/dev/timer/3", 18);
+  ret = n32_timer_initialize("/dev/timer3", 18);
   if (ret < 0)
     {
-      syslog(LOG_ERR, "ERROR: Failed to register /dev/timer/3: %d\n", ret);
+      syslog(LOG_ERR, "ERROR: Failed to register /dev/timer3: %d\n", ret);
     }
 #endif
 
 #ifdef CONFIG_N32H7_GTIMA1
-  ret = n32_timer_initialize("/dev/timer/4", 3);
+  ret = n32_timer_initialize("/dev/timer4", 3);
   if (ret < 0)
     {
-      syslog(LOG_ERR, "ERROR: Failed to register /dev/timer/4: %d\n", ret);
+      syslog(LOG_ERR, "ERROR: Failed to register /dev/timer4: %d\n", ret);
     }
 #endif
 
@@ -249,8 +246,6 @@ int n32_bringup(void)
 
 #ifdef CONFIG_N32H7_ONESHOT
 
-  mkdir("/dev/oneshot", 0666);
-
 #  ifdef CONFIG_N32H7_GTIMA1
   struct oneshot_lowerhalf_s *oneshot;
   int chan;
@@ -265,10 +260,10 @@ int n32_bringup(void)
     }
   else
     {
-      ret = oneshot_register("/dev/oneshot/0", oneshot);
+      ret = oneshot_register("/dev/oneshot0", oneshot);
       if (ret < 0)
         {
-          syslog(LOG_ERR, "ERROR: Failed to register /dev/oneshot/1/0: %d\n",
+          syslog(LOG_ERR, "ERROR: Failed to register /dev/oneshot0: %d\n",
                   ret);
         }
     }
@@ -283,10 +278,10 @@ int n32_bringup(void)
     }
   else
     {
-      ret = oneshot_register("/dev/oneshot/1", oneshot);
+      ret = oneshot_register("/dev/oneshot1", oneshot);
       if (ret < 0)
         {
-          syslog(LOG_ERR, "ERROR: Failed to register /dev/oneshot/1: %d\n",
+          syslog(LOG_ERR, "ERROR: Failed to register /dev/oneshot1: %d\n",
                   ret);
         }
     }
@@ -301,10 +296,10 @@ int n32_bringup(void)
     }
   else
     {
-      ret = oneshot_register("/dev/oneshot/2", oneshot);
+      ret = oneshot_register("/dev/oneshot2", oneshot);
       if (ret < 0)
         {
-          syslog(LOG_ERR, "ERROR: Failed to register /dev/oneshot/2: %d\n",
+          syslog(LOG_ERR, "ERROR: Failed to register /dev/oneshot2: %d\n",
                   ret);
         }
     }
@@ -319,10 +314,10 @@ int n32_bringup(void)
     }
   else
     {
-      ret = oneshot_register("/dev/oneshot/3", oneshot);
+      ret = oneshot_register("/dev/oneshot3", oneshot);
       if (ret < 0)
         {
-          syslog(LOG_ERR, "ERROR: Failed to register /dev/oneshot/3: %d\n",
+          syslog(LOG_ERR, "ERROR: Failed to register /dev/oneshot3: %d\n",
                   ret);
         }
     }

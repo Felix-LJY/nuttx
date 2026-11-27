@@ -144,6 +144,7 @@ struct n32_pwmtimer_s
   uint8_t  lock:2;
   uint8_t  deadtime;
   uint8_t  t_dts;
+  uint8_t  nchan;       /* Entries in channels[] */
   uint32_t base;
   uint32_t pclk;
   struct n32_pwmchan_s *channels;

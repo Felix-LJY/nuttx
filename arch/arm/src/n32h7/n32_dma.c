@@ -1301,6 +1301,17 @@ static void n32_sdma_start(DMA_HANDLE handle, dma_callback_t callback,
   dmabase_putreg(dmachan, N32_DMA_TCINTMSK_OFFSET, regval);
   dmabase_putreg(dmachan, N32_DMA_ERRINTMSK_OFFSET, regval);
 
+  /* A channel that follows a list reports each block it completes: the
+   * list may have no end, so the transfer complete interrupt alone would
+   * leave its user waiting for nothing.
+   */
+
+  if (dmachan_getreg(dmachan, N32_DMA_CH_CTRL_OFFSET) &
+      (uint32_t)(DMA_CHCTRL_LLPSRCEN | DMA_CHCTRL_LLPDSTEN))
+    {
+      dmabase_putreg(dmachan, N32_DMA_BTCINTMSK_OFFSET, regval);
+    }
+
   /* Enable all interrupts at the DMA controller */
 
   regval  = dmachan_getreg(dmachan, N32_DMA_CH_CTRL_OFFSET);

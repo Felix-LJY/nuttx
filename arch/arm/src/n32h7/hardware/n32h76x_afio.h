@@ -39,8 +39,8 @@
 
 #define N32_AFIO_XSPI1_NON_OFFSET(n)       (0x0008 + (n) * 4)
 #define N32_AFIO_EXTI_CFG_OFFSET(n)        (0x0018 + (n) * 4)
-#define N32_AFIO_TOL5V_CFG0_2_OFFSET(n)    (0x0028 + (n) * 4)
-#define N32_AFIO_TOL5V_CFG3_6_OFFSET(n)    (0x003C + (n) * 4)
+#define N32_AFIO_ANAEN_CFG0_2_OFFSET(n)    (0x0028 + (n) * 4)
+#define N32_AFIO_ANAEN_CFG3_6_OFFSET(n)    (0x003C + (n) * 4)
 #define N32_AFIO_EFT_CFG_OFFSET(n)         (0x0054 + (n) * 4)
 #define N32_AFIO_DIGEFT_CFG_OFFSET(n)      (0x006C + (n) * 4)
 #define N32_AFIO_SHRT1_EXEV_CFG_OFFSET(n)  (0x0084 + (n) * 4)
@@ -60,15 +60,15 @@
 #define N32_AFIO_EXTI_CFG1_OFFSET         0x001C    /* External Interrupt Config Reg 1 */
 #define N32_AFIO_EXTI_CFG2_OFFSET         0x0020    /* External Interrupt Config Reg 2 */
 #define N32_AFIO_EXTI_CFG3_OFFSET         0x0024    /* External Interrupt Config Reg 3 */
-#define N32_AFIO_TOL5V_CFG0_OFFSET        0x0028    /* IO Port 5V Tolerance Config Reg 0 */
-#define N32_AFIO_TOL5V_CFG1_OFFSET        0x002C    /* IO Port 5V Tolerance Config Reg 1 */
-#define N32_AFIO_TOL5V_CFG2_OFFSET        0x0030    /* IO Port 5V Tolerance Config Reg 2 */
+#define N32_AFIO_ANAEN_CFG0_OFFSET        0x0028    /* IO Port Analog Channel Enable Reg 0 */
+#define N32_AFIO_ANAEN_CFG1_OFFSET        0x002C    /* IO Port Analog Channel Enable Reg 1 */
+#define N32_AFIO_ANAEN_CFG2_OFFSET        0x0030    /* IO Port Analog Channel Enable Reg 2 */
 #define N32_AFIO_SHRT1_FALT_CFG_OFFSET    0x0034    /* SHRTIM1 Fat Config Register */
 #define N32_AFIO_SHRT2_FALT_CFG_OFFSET    0x0038    /* SHRTIM2 Fat Config Register */
-#define N32_AFIO_TOL5V_CFG3_OFFSET        0x003C    /* IO Port 5V Tolerance Config Reg 3 */
-#define N32_AFIO_TOL5V_CFG4_OFFSET        0x0044    /* IO Port 5V Tolerance Config Reg 4 */
-#define N32_AFIO_TOL5V_CFG5_OFFSET        0x0048    /* IO Port 5V Tolerance Config Reg 5 */
-#define N32_AFIO_TOL5V_CFG6_OFFSET        0x004C    /* IO Port 5V Tolerance Config Reg 6 */
+#define N32_AFIO_ANAEN_CFG3_OFFSET        0x003C    /* IO Port Analog Channel Enable Reg 3 */
+#define N32_AFIO_ANAEN_CFG4_OFFSET        0x0044    /* IO Port Analog Channel Enable Reg 4 */
+#define N32_AFIO_ANAEN_CFG5_OFFSET        0x0048    /* IO Port Analog Channel Enable Reg 5 */
+#define N32_AFIO_ANAEN_CFG6_OFFSET        0x004C    /* IO Port Analog Channel Enable Reg 6 */
 #define N32_AFIO_EFT_CFG0_OFFSET          0x0054    /* IO Port Analog Filtering Config Reg 0 */
 #define N32_AFIO_EFT_CFG1_OFFSET          0x0058    /* IO Port Analog Filtering Config Reg 1 */
 #define N32_AFIO_EFT_CFG2_OFFSET          0x005C    /* IO Port Analog Filtering Config Reg 2 */
@@ -108,8 +108,8 @@
 
 #define N32_AFIO_XSPI1_NON(n)             (N32_AFIO_BASE + N32_AFIO_XSPI1_NON_OFFSET(n))
 #define N32_AFIO_EXTI_CFG(n)              (N32_AFIO_BASE + N32_AFIO_EXTI_CFG_OFFSET(n))
-#define N32_AFIO_TOL5V_CFG0_2(n)          (N32_AFIO_BASE + N32_AFIO_TOL5V_CFG0_2_OFFSET(n))
-#define N32_AFIO_TOL5V_CFG3_6(n)          (N32_AFIO_BASE + N32_AFIO_TOL5V_CFG3_6_OFFSET(n))
+#define N32_AFIO_ANAEN_CFG0_2(n)          (N32_AFIO_BASE + N32_AFIO_ANAEN_CFG0_2_OFFSET(n))
+#define N32_AFIO_ANAEN_CFG3_6(n)          (N32_AFIO_BASE + N32_AFIO_ANAEN_CFG3_6_OFFSET(n))
 #define N32_AFIO_EFT_CFG(n)               (N32_AFIO_BASE + N32_AFIO_EFT_CFG_OFFSET(n))
 #define N32_AFIO_DIGEFT_CFG(n)            (N32_AFIO_BASE + N32_AFIO_DIGEFT_CFG_OFFSET(n))
 #define N32_AFIO_SHRT1_EXEV_CFG(n)        (N32_AFIO_BASE + N32_AFIO_SHRT1_EXEV_CFG_OFFSET(n))
@@ -129,15 +129,15 @@
 #define N32_AFIO_EXTI_CFG1                (N32_AFIO_BASE + N32_AFIO_EXTI_CFG1_OFFSET)
 #define N32_AFIO_EXTI_CFG2                (N32_AFIO_BASE + N32_AFIO_EXTI_CFG2_OFFSET)
 #define N32_AFIO_EXTI_CFG3                (N32_AFIO_BASE + N32_AFIO_EXTI_CFG3_OFFSET)
-#define N32_AFIO_TOL5V_CFG0               (N32_AFIO_BASE + N32_AFIO_TOL5V_CFG0_OFFSET)
-#define N32_AFIO_TOL5V_CFG1               (N32_AFIO_BASE + N32_AFIO_TOL5V_CFG1_OFFSET)
-#define N32_AFIO_TOL5V_CFG2               (N32_AFIO_BASE + N32_AFIO_TOL5V_CFG2_OFFSET)
+#define N32_AFIO_ANAEN_CFG0               (N32_AFIO_BASE + N32_AFIO_ANAEN_CFG0_OFFSET)
+#define N32_AFIO_ANAEN_CFG1               (N32_AFIO_BASE + N32_AFIO_ANAEN_CFG1_OFFSET)
+#define N32_AFIO_ANAEN_CFG2               (N32_AFIO_BASE + N32_AFIO_ANAEN_CFG2_OFFSET)
 #define N32_AFIO_SHRT1_FALT_CFG           (N32_AFIO_BASE + N32_AFIO_SHRT1_FALT_CFG_OFFSET)
 #define N32_AFIO_SHRT2_FALT_CFG           (N32_AFIO_BASE + N32_AFIO_SHRT2_FALT_CFG_OFFSET)
-#define N32_AFIO_TOL5V_CFG3               (N32_AFIO_BASE + N32_AFIO_TOL5V_CFG3_OFFSET)
-#define N32_AFIO_TOL5V_CFG4               (N32_AFIO_BASE + N32_AFIO_TOL5V_CFG4_OFFSET)
-#define N32_AFIO_TOL5V_CFG5               (N32_AFIO_BASE + N32_AFIO_TOL5V_CFG5_OFFSET)
-#define N32_AFIO_TOL5V_CFG6               (N32_AFIO_BASE + N32_AFIO_TOL5V_CFG6_OFFSET)
+#define N32_AFIO_ANAEN_CFG3               (N32_AFIO_BASE + N32_AFIO_ANAEN_CFG3_OFFSET)
+#define N32_AFIO_ANAEN_CFG4               (N32_AFIO_BASE + N32_AFIO_ANAEN_CFG4_OFFSET)
+#define N32_AFIO_ANAEN_CFG5               (N32_AFIO_BASE + N32_AFIO_ANAEN_CFG5_OFFSET)
+#define N32_AFIO_ANAEN_CFG6               (N32_AFIO_BASE + N32_AFIO_ANAEN_CFG6_OFFSET)
 #define N32_AFIO_EFT_CFG0                 (N32_AFIO_BASE + N32_AFIO_EFT_CFG0_OFFSET)
 #define N32_AFIO_EFT_CFG1                 (N32_AFIO_BASE + N32_AFIO_EFT_CFG1_OFFSET)
 #define N32_AFIO_EFT_CFG2                 (N32_AFIO_BASE + N32_AFIO_EFT_CFG2_OFFSET)
@@ -351,62 +351,66 @@
 #define N32_AFIO_EXTI_CFG3_EXTI15_SHIFT 24    /* Bits 31-24: EXTI15 configuration */
 #define N32_AFIO_EXTI_CFG3_EXTI15_MASK  (N32_AFIO_EXTICR_PORT_MASK << N32_AFIO_EXTI_CFG3_EXTI15_SHIFT)
 
-/* AFIO_TOL5V_CFG0 (Offset: 0x28) */
-#define N32_AFIO_TOL5V_CFG0_PA7TOLENN    (1 << 9)   /* Bit 9: PA7 5V tolerance */
-#define N32_AFIO_TOL5V_CFG0_PA6TOLENN    (1 << 8)   /* Bit 8: PA6 5V tolerance */
-#define N32_AFIO_TOL5V_CFG0_PA5TOLENN    (1 << 7)   /* Bit 7: PA5 5V tolerance */
-#define N32_AFIO_TOL5V_CFG0_PA4TOLENN    (1 << 6)   /* Bit 6: PA4 5V tolerance */
-#define N32_AFIO_TOL5V_CFG0_PA3TOLENN    (1 << 5)   /* Bit 5: PA3 5V tolerance */
-#define N32_AFIO_TOL5V_CFG0_PA2TOLENN    (1 << 4)   /* Bit 4: PA2 5V tolerance */
-#define N32_AFIO_TOL5V_CFG0_PA1_CTOLENN  (1 << 3)   /* Bit 3: PA1_C 5V tolerance */
-#define N32_AFIO_TOL5V_CFG0_PA1TOLENN    (1 << 2)   /* Bit 2: PA1 5V tolerance */
-#define N32_AFIO_TOL5V_CFG0_PA0_CTOLENN  (1 << 1)   /* Bit 1: PA0_C 5V tolerance */
-#define N32_AFIO_TOL5V_CFG0_PA0TOLENN    (1 << 0)   /* Bit 0: PA0 5V tolerance */
+/* AFIO_ANAEN_CFG0 (Offset: 0x28): analog channels of port pins */
+#define N32_AFIO_ANAEN_CFG0_PA7ANAEN    (1 << 9)   /* Bit 9: PA7 analog channel */
+#define N32_AFIO_ANAEN_CFG0_PA6ANAEN    (1 << 8)   /* Bit 8: PA6 analog channel */
+#define N32_AFIO_ANAEN_CFG0_PA5ANAEN    (1 << 7)   /* Bit 7: PA5 analog channel */
+#define N32_AFIO_ANAEN_CFG0_PA4ANAEN    (1 << 6)   /* Bit 6: PA4 analog channel */
+#define N32_AFIO_ANAEN_CFG0_PA3ANAEN    (1 << 5)   /* Bit 5: PA3 analog channel */
+#define N32_AFIO_ANAEN_CFG0_PA2ANAEN    (1 << 4)   /* Bit 4: PA2 analog channel */
+#define N32_AFIO_ANAEN_CFG0_PA1_CANAEN  (1 << 2)   /* Bit 2: PA1_C analog channel */
+#define N32_AFIO_ANAEN_CFG0_PA1ANAEN    (1 << 3)   /* Bit 3: PA1 analog channel */
+#define N32_AFIO_ANAEN_CFG0_PA0_CANAEN  (1 << 0)   /* Bit 0: PA0_C analog channel */
+#define N32_AFIO_ANAEN_CFG0_PA0ANAEN    (1 << 1)   /* Bit 1: PA0 analog channel */
 
-/* AFIO_TOL5V_CFG1 (Offset: 0x2C) */
-#define N32_AFIO_TOL5V_CFG1_PB1TOLENN    (1 << 1)   /* Bit 1: PB1 5V tolerance */
-#define N32_AFIO_TOL5V_CFG1_PB0TOLENN    (1 << 0)   /* Bit 0: PB0 5V tolerance */
+/* AFIO_ANAEN_CFG1 (Offset: 0x2C): analog channels of port pins */
+#define N32_AFIO_ANAEN_CFG1_PB1ANAEN    (1 << 1)   /* Bit 1: PB1 analog channel */
+#define N32_AFIO_ANAEN_CFG1_PB0ANAEN    (1 << 0)   /* Bit 0: PB0 analog channel */
 
-/* AFIO_TOL5V_CFG2 (Offset: 0x30) */
-#define N32_AFIO_TOL5V_CFG2_PC13TOLENN   (1 << 10)  /* Bit 10: PC13 5V tolerance */
-#define N32_AFIO_TOL5V_CFG2_PC8TOLENN    (1 << 9)   /* Bit 9: PC8 5V tolerance */
-#define N32_AFIO_TOL5V_CFG2_PC6TOLENN    (1 << 8)   /* Bit 8: PC6 5V tolerance */
-#define N32_AFIO_TOL5V_CFG2_PC5TOLENN    (1 << 7)   /* Bit 7: PC5 5V tolerance */
-#define N32_AFIO_TOL5V_CFG2_PC4TOLENN    (1 << 6)   /* Bit 6: PC4 5V tolerance */
-#define N32_AFIO_TOL5V_CFG2_PC3_CTOLENN  (1 << 5)   /* Bit 5: PC3_C 5V tolerance */
-#define N32_AFIO_TOL5V_CFG2_PC3TOLENN    (1 << 4)   /* Bit 4: PC3 5V tolerance */
-#define N32_AFIO_TOL5V_CFG2_PC2_CTOLENN  (1 << 3)   /* Bit 3: PC2_C 5V tolerance */
-#define N32_AFIO_TOL5V_CFG2_PC2TOLENN    (1 << 2)   /* Bit 2: PC2 5V tolerance */
-#define N32_AFIO_TOL5V_CFG2_PC1TOLENN    (1 << 1)   /* Bit 1: PC1 5V tolerance */
-#define N32_AFIO_TOL5V_CFG2_PC0TOLENN    (1 << 0)   /* Bit 0: PC0 5V tolerance */
+/* AFIO_ANAEN_CFG2 (Offset: 0x30): analog channels of port pins */
+#define N32_AFIO_ANAEN_CFG2_PC13ANAEN   (1 << 10)  /* Bit 10: PC13 analog channel */
+#define N32_AFIO_ANAEN_CFG2_PC8ANAEN    (1 << 9)   /* Bit 9: PC8 analog channel */
+#define N32_AFIO_ANAEN_CFG2_PC6ANAEN    (1 << 8)   /* Bit 8: PC6 analog channel */
+#define N32_AFIO_ANAEN_CFG2_PC5ANAEN    (1 << 7)   /* Bit 7: PC5 analog channel */
+#define N32_AFIO_ANAEN_CFG2_PC4ANAEN    (1 << 6)   /* Bit 6: PC4 analog channel */
+#define N32_AFIO_ANAEN_CFG2_PC3_CANAEN  (1 << 5)   /* Bit 5: PC3_C analog channel */
+#define N32_AFIO_ANAEN_CFG2_PC3ANAEN    (1 << 4)   /* Bit 4: PC3 analog channel */
+#define N32_AFIO_ANAEN_CFG2_PC2_CANAEN  (1 << 3)   /* Bit 3: PC2_C analog channel */
+#define N32_AFIO_ANAEN_CFG2_PC2ANAEN    (1 << 2)   /* Bit 2: PC2 analog channel */
+#define N32_AFIO_ANAEN_CFG2_PC1ANAEN    (1 << 1)   /* Bit 1: PC1 analog channel */
+#define N32_AFIO_ANAEN_CFG2_PC0ANAEN    (1 << 0)   /* Bit 0: PC0 analog channel */
 
-/* AFIO_TOL5V_CFG3 (Offset: 0x3C) */
-#define N32_AFIO_TOL5V_CFG3_PF14TOLENN   (1 << 11)  /* Bit 11: PF14 5V tolerance */
-#define N32_AFIO_TOL5V_CFG3_PF13TOLENN   (1 << 10)  /* Bit 10: PF13 5V tolerance */
-#define N32_AFIO_TOL5V_CFG3_PF12TOLENN   (1 << 9)   /* Bit 9: PF12 5V tolerance */
-#define N32_AFIO_TOL5V_CFG3_PF11TOLENN   (1 << 8)   /* Bit 8: PF11 5V tolerance */
-#define N32_AFIO_TOL5V_CFG3_PF10TOLENN   (1 << 7)   /* Bit 7: PF10 5V tolerance */
-#define N32_AFIO_TOL5V_CFG3_PF9TOLENN    (1 << 6)   /* Bit 6: PF9 5V tolerance */
-#define N32_AFIO_TOL5V_CFG3_PF8TOLENN    (1 << 5)   /* Bit 5: PF8 5V tolerance */
-#define N32_AFIO_TOL5V_CFG3_PF7TOLENN    (1 << 4)   /* Bit 4: PF7 5V tolerance */
-#define N32_AFIO_TOL5V_CFG3_PF6TOLENN    (1 << 3)   /* Bit 3: PF6 5V tolerance */
-#define N32_AFIO_TOL5V_CFG3_PF5TOLENN    (1 << 2)   /* Bit 2: PF5 5V tolerance */
-#define N32_AFIO_TOL5V_CFG3_PF4TOLENN    (1 << 1)   /* Bit 1: PF4 5V tolerance */
-#define N32_AFIO_TOL5V_CFG3_PF3TOLENN    (1 << 0)   /* Bit 0: PF3 5V tolerance */
+/* AFIO_ANAEN_CFG3 (Offset: 0x3C): analog channels of port pins */
+#define N32_AFIO_ANAEN_CFG3_PF14ANAEN   (1 << 11)  /* Bit 11: PF14 analog channel */
+#define N32_AFIO_ANAEN_CFG3_PF13ANAEN   (1 << 10)  /* Bit 10: PF13 analog channel */
+#define N32_AFIO_ANAEN_CFG3_PF12ANAEN   (1 << 9)   /* Bit 9: PF12 analog channel */
+#define N32_AFIO_ANAEN_CFG3_PF11ANAEN   (1 << 8)   /* Bit 8: PF11 analog channel */
+#define N32_AFIO_ANAEN_CFG3_PF10ANAEN   (1 << 7)   /* Bit 7: PF10 analog channel */
+#define N32_AFIO_ANAEN_CFG3_PF9ANAEN    (1 << 6)   /* Bit 6: PF9 analog channel */
+#define N32_AFIO_ANAEN_CFG3_PF8ANAEN    (1 << 5)   /* Bit 5: PF8 analog channel */
+#define N32_AFIO_ANAEN_CFG3_PF7ANAEN    (1 << 4)   /* Bit 4: PF7 analog channel */
+#define N32_AFIO_ANAEN_CFG3_PF6ANAEN    (1 << 3)   /* Bit 3: PF6 analog channel */
+#define N32_AFIO_ANAEN_CFG3_PF5ANAEN    (1 << 2)   /* Bit 2: PF5 analog channel */
+#define N32_AFIO_ANAEN_CFG3_PF4ANAEN    (1 << 1)   /* Bit 1: PF4 analog channel */
+#define N32_AFIO_ANAEN_CFG3_PF3ANAEN    (1 << 0)   /* Bit 0: PF3 analog channel */
 
-/* AFIO_TOL5V_CFG4 (Offset: 0x44) */
-#define N32_AFIO_TOL5V_CFG4_PH5TOLENN    (1 << 3)   /* Bit 3: PH5 5V tolerance */
-#define N32_AFIO_TOL5V_CFG4_PH4TOLENN    (1 << 2)   /* Bit 2: PH4 5V tolerance */
-#define N32_AFIO_TOL5V_CFG4_PH3TOLENN    (1 << 1)   /* Bit 1: PH3 5V tolerance */
-#define N32_AFIO_TOL5V_CFG4_PH2TOLENN    (1 << 0)   /* Bit 0: PH2 5V tolerance */
+/* AFIO_ANAEN_CFG4 (Offset: 0x44): analog channels of port pins */
+#define N32_AFIO_ANAEN_CFG4_PH5ANAEN    (1 << 3)   /* Bit 3: PH5 analog channel */
+#define N32_AFIO_ANAEN_CFG4_PH4ANAEN    (1 << 2)   /* Bit 2: PH4 analog channel */
+#define N32_AFIO_ANAEN_CFG4_PH3ANAEN    (1 << 1)   /* Bit 1: PH3 analog channel */
+#define N32_AFIO_ANAEN_CFG4_PH2ANAEN    (1 << 0)   /* Bit 0: PH2 analog channel */
 
-/* AFIO_TOL5V_CFG6 (Offset: 0x4C) */
-#define N32_AFIO_TOL5V_CFG6_PI7TOLENN    (1 << 5)   /* Bit 5: PI7 5V tolerance */
-#define N32_AFIO_TOL5V_CFG6_PI6TOLENN    (1 << 4)   /* Bit 4: PI6 5V tolerance */
-#define N32_AFIO_TOL5V_CFG6_PI5TOLENN    (1 << 3)   /* Bit 3: PI5 5V tolerance */
-#define N32_AFIO_TOL5V_CFG6_PI4TOLENN    (1 << 2)   /* Bit 2: PI4 5V tolerance */
-#define N32_AFIO_TOL5V_CFG6_PI3TOLENN    (1 << 1)   /* Bit 1: PI3 5V tolerance */
-#define N32_AFIO_TOL5V_CFG6_PI0TOLENN    (1 << 0)   /* Bit 0: PI0 5V tolerance */
+/* AFIO_ANAEN_CFG5 (Offset: 0x48): analog channels of port pins */
+#define N32_AFIO_ANAEN_CFG5_PI15ANAEN   (1 << 1)   /* Bit 1: PI15 analog channel */
+#define N32_AFIO_ANAEN_CFG5_PI8ANAEN    (1 << 0)   /* Bit 0: PI8 analog channel */
+
+/* AFIO_ANAEN_CFG6 (Offset: 0x4C): analog channels of port pins */
+#define N32_AFIO_ANAEN_CFG6_PJ7ANAEN    (1 << 5)   /* Bit 5: PJ7 analog channel */
+#define N32_AFIO_ANAEN_CFG6_PJ6ANAEN    (1 << 4)   /* Bit 4: PJ6 analog channel */
+#define N32_AFIO_ANAEN_CFG6_PJ5ANAEN    (1 << 3)   /* Bit 3: PJ5 analog channel */
+#define N32_AFIO_ANAEN_CFG6_PJ4ANAEN    (1 << 2)   /* Bit 2: PJ4 analog channel */
+#define N32_AFIO_ANAEN_CFG6_PJ3ANAEN    (1 << 1)   /* Bit 1: PJ3 analog channel */
+#define N32_AFIO_ANAEN_CFG6_PJ0ANAEN    (1 << 0)   /* Bit 0: PJ0 analog channel */
 
 /* AFIO_SHRT1_FALT_CFG (Offset: 0x34) */
 

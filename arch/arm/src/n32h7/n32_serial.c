@@ -119,7 +119,9 @@ n32_dmacfg_t rxcfg =
                     DMA_CHCTRL_SRCMSIZE(DMA_BURST_1) |
                     DMA_CHCTRL_SMS(DMA_MS_1) |
                     DMA_CHCTRL_DMS(DMA_MS_1) |
-                    DMA_CHCTRL_TTFC(DMA_TTFC_PER_TO_MEM_DMA)),
+                    DMA_CHCTRL_TTFC(DMA_TTFC_PER_TO_MEM_DMA) |
+                    DMA_CHCTRL_LLPSRCEN |
+                    DMA_CHCTRL_LLPDSTEN),
     .sg_cfg      = 0,
     .ds_cfg      = 0,
     .src_hs_if   = 0,
@@ -129,6 +131,21 @@ n32_dmacfg_t rxcfg =
     .dst_hs_mode = 0,
     .link_list   = NULL,
 };
+
+/* A receive channel circles its buffer on its own, one list item per cache
+ * line.  The buffer has to hold what arrives while the serial framework is
+ * still busy with earlier bytes; the items are small that each one's
+ * interrupt finds room in the framework's receive buffer.
+ */
+
+#ifndef CONFIG_N32H7_SERIAL_RXDMA_BUFFER_SIZE
+#  define CONFIG_N32H7_SERIAL_RXDMA_BUFFER_SIZE 256
+#endif
+
+#define RXDMA_BUFFER_SIZE \
+  roundup(CONFIG_N32H7_SERIAL_RXDMA_BUFFER_SIZE, ARMV7M_DCACHE_LINESIZE)
+#define RXDMA_BLOCK_SIZE  ARMV7M_DCACHE_LINESIZE
+#define RXDMA_NBLOCKS     (RXDMA_BUFFER_SIZE / RXDMA_BLOCK_SIZE)
 #endif
 
 #undef SERIAL_HAVE_TXDMA
@@ -189,6 +206,17 @@ n32_dmacfg_t txcfg =
  * Private Types
  ****************************************************************************/
 
+/* One item of the list a receive channel follows round its buffer */
+
+struct up_rxlli_s
+{
+  uint32_t src;     /* Source address of the block */
+  uint32_t dst;     /* Destination address of the block */
+  uint32_t next;    /* Item that describes the next block */
+  uint32_t ctrl;    /* Control register, low word */
+  uint32_t ctlh;    /* Control register, high word */
+};
+
 struct up_dev_s
 {
   struct uart_dev_s dev;       /* Generic UART device */
@@ -244,6 +272,13 @@ struct up_dev_s
 #ifdef SERIAL_HAVE_RXDMA
   const unsigned int rxdma_channel;
   DMA_HANDLE         rxdma;
+  const char        *rxfifo;      /* Buffer the channel circles */
+  struct up_rxlli_s *rxlli;       /* List items that take it round */
+  bool               rxenable;    /* The serial framework takes characters */
+  uint32_t           rxdmanext;   /* Offset of the next byte to be read */
+#  ifdef CONFIG_ARMV7M_DCACHE
+  uint32_t           rxdmaavail;  /* Bytes from there on held in the cache */
+#  endif
 #  ifdef CONFIG_PM
   bool               rxdmasusp;
 #  endif
@@ -294,12 +329,11 @@ static void up_dma_txcallback(DMA_HANDLE handle, uint8_t status, void *arg);
 #endif
 
 #ifdef SERIAL_HAVE_RXDMA
-static void up_dma_receive(struct uart_dev_s *dev);
+static int  up_dma_receive(struct uart_dev_s *dev, unsigned int *status);
 static void up_dma_rxint(struct uart_dev_s *dev, bool enable);
 static bool up_dma_rxavailable(struct uart_dev_s *dev);
 static void up_dma_rxcallback(DMA_HANDLE handle, uint8_t status, void *arg);
-static void up_dma_rxharvest(struct uart_dev_s *dev);
-static void up_dma_rxfree(struct uart_dev_s *dev);
+static uint32_t up_dma_nextrx(struct up_dev_s *priv);
 #endif
 
 #if defined(SERIAL_HAVE_RXDMA) || defined(SERIAL_HAVE_TXDMA)
@@ -328,9 +362,7 @@ static const struct uart_ops_s g_uart_rxdma_ops =
   .attach         = up_attach,
   .detach         = up_detach,
   .ioctl          = up_ioctl,
-  .receive        = up_receive,
-  .dmareceive     = up_dma_receive,
-  .dmarxfree      = up_dma_rxfree,
+  .receive        = up_dma_receive,
   .rxint          = up_dma_rxint,
   .rxavailable    = up_dma_rxavailable,
 #ifdef CONFIG_SERIAL_IFLOWCONTROL
@@ -374,9 +406,7 @@ static const struct uart_ops_s g_uart_rxtxdma_ops =
   .attach         = up_attach,
   .detach         = up_detach,
   .ioctl          = up_ioctl,
-  .receive        = up_receive,
-  .dmareceive     = up_dma_receive,
-  .dmarxfree      = up_dma_rxfree,
+  .receive        = up_dma_receive,
   .rxint          = up_dma_rxint,
   .rxavailable    = up_dma_rxavailable,
 #ifdef CONFIG_SERIAL_IFLOWCONTROL
@@ -561,6 +591,12 @@ static char locate_data(".axi_ram") g_usart1rxbuffer[CONFIG_USART1_RXBUFSIZE]
   aligned_data(ARMV7M_DCACHE_LINESIZE);
 static char locate_data(".axi_ram") g_usart1txbuffer[CONFIG_USART1_TXBUFSIZE]
   aligned_data(ARMV7M_DCACHE_LINESIZE);
+#ifdef CONFIG_USART1_RXDMA
+static char locate_data(".axi_ram") g_usart1rxfifo[RXDMA_BUFFER_SIZE]
+  aligned_data(ARMV7M_DCACHE_LINESIZE);
+static struct up_rxlli_s locate_data(".axi_ram") g_usart1rxlli[RXDMA_NBLOCKS]
+  aligned_data(4);
+#endif
 
 static struct up_dev_s g_usart1priv =
 {
@@ -604,6 +640,8 @@ static struct up_dev_s g_usart1priv =
 #endif
 #ifdef CONFIG_USART1_RXDMA
   .rxdma_channel = DMAMAP_USART1_RX,
+  .rxfifo        = g_usart1rxfifo,
+  .rxlli         = g_usart1rxlli,
 #endif
   .lock = SP_UNLOCKED,
 };
@@ -614,6 +652,12 @@ static char locate_data(".axi_ram") g_usart2rxbuffer[CONFIG_USART2_RXBUFSIZE]
   aligned_data(ARMV7M_DCACHE_LINESIZE);
 static char locate_data(".axi_ram") g_usart2txbuffer[CONFIG_USART2_TXBUFSIZE]
   aligned_data(ARMV7M_DCACHE_LINESIZE);
+#ifdef CONFIG_USART2_RXDMA
+static char locate_data(".axi_ram") g_usart2rxfifo[RXDMA_BUFFER_SIZE]
+  aligned_data(ARMV7M_DCACHE_LINESIZE);
+static struct up_rxlli_s locate_data(".axi_ram") g_usart2rxlli[RXDMA_NBLOCKS]
+  aligned_data(4);
+#endif
 
 static struct up_dev_s g_usart2priv =
 {
@@ -657,6 +701,8 @@ static struct up_dev_s g_usart2priv =
 #endif
 #ifdef CONFIG_USART2_RXDMA
   .rxdma_channel = DMAMAP_USART2_RX,
+  .rxfifo        = g_usart2rxfifo,
+  .rxlli         = g_usart2rxlli,
 #endif
   .lock = SP_UNLOCKED,
 };
@@ -667,6 +713,12 @@ static char locate_data(".axi_ram") g_usart3rxbuffer[CONFIG_USART3_RXBUFSIZE]
   aligned_data(ARMV7M_DCACHE_LINESIZE);
 static char locate_data(".axi_ram") g_usart3txbuffer[CONFIG_USART3_TXBUFSIZE]
   aligned_data(ARMV7M_DCACHE_LINESIZE);
+#ifdef CONFIG_USART3_RXDMA
+static char locate_data(".axi_ram") g_usart3rxfifo[RXDMA_BUFFER_SIZE]
+  aligned_data(ARMV7M_DCACHE_LINESIZE);
+static struct up_rxlli_s locate_data(".axi_ram") g_usart3rxlli[RXDMA_NBLOCKS]
+  aligned_data(4);
+#endif
 
 static struct up_dev_s g_usart3priv =
 {
@@ -710,6 +762,8 @@ static struct up_dev_s g_usart3priv =
 #endif
 #ifdef CONFIG_USART3_RXDMA
   .rxdma_channel = DMAMAP_USART3_RX,
+  .rxfifo        = g_usart3rxfifo,
+  .rxlli         = g_usart3rxlli,
 #endif
   .lock = SP_UNLOCKED,
 };
@@ -720,6 +774,12 @@ static char locate_data(".axi_ram") g_usart4rxbuffer[CONFIG_USART4_RXBUFSIZE]
   aligned_data(ARMV7M_DCACHE_LINESIZE);
 static char locate_data(".axi_ram") g_usart4txbuffer[CONFIG_USART4_TXBUFSIZE]
   aligned_data(ARMV7M_DCACHE_LINESIZE);
+#ifdef CONFIG_USART4_RXDMA
+static char locate_data(".axi_ram") g_usart4rxfifo[RXDMA_BUFFER_SIZE]
+  aligned_data(ARMV7M_DCACHE_LINESIZE);
+static struct up_rxlli_s locate_data(".axi_ram") g_usart4rxlli[RXDMA_NBLOCKS]
+  aligned_data(4);
+#endif
 
 static struct up_dev_s g_usart4priv =
 {
@@ -763,6 +823,8 @@ static struct up_dev_s g_usart4priv =
 #endif
 #ifdef CONFIG_USART4_RXDMA
   .rxdma_channel = DMAMAP_USART4_RX,
+  .rxfifo        = g_usart4rxfifo,
+  .rxlli         = g_usart4rxlli,
 #endif
   .lock = SP_UNLOCKED,
 };
@@ -773,6 +835,12 @@ static char locate_data(".axi_ram") g_usart5rxbuffer[CONFIG_USART5_RXBUFSIZE]
   aligned_data(ARMV7M_DCACHE_LINESIZE);
 static char locate_data(".axi_ram") g_usart5txbuffer[CONFIG_USART5_TXBUFSIZE]
   aligned_data(ARMV7M_DCACHE_LINESIZE);
+#ifdef CONFIG_USART5_RXDMA
+static char locate_data(".axi_ram") g_usart5rxfifo[RXDMA_BUFFER_SIZE]
+  aligned_data(ARMV7M_DCACHE_LINESIZE);
+static struct up_rxlli_s locate_data(".axi_ram") g_usart5rxlli[RXDMA_NBLOCKS]
+  aligned_data(4);
+#endif
 
 static struct up_dev_s g_usart5priv =
 {
@@ -816,6 +884,8 @@ static struct up_dev_s g_usart5priv =
 #endif
 #ifdef CONFIG_USART5_RXDMA
   .rxdma_channel = DMAMAP_USART5_RX,
+  .rxfifo        = g_usart5rxfifo,
+  .rxlli         = g_usart5rxlli,
 #endif
   .lock = SP_UNLOCKED,
 };
@@ -826,6 +896,12 @@ static char locate_data(".axi_ram") g_usart6rxbuffer[CONFIG_USART6_RXBUFSIZE]
   aligned_data(ARMV7M_DCACHE_LINESIZE);
 static char locate_data(".axi_ram") g_usart6txbuffer[CONFIG_USART6_TXBUFSIZE]
   aligned_data(ARMV7M_DCACHE_LINESIZE);
+#ifdef CONFIG_USART6_RXDMA
+static char locate_data(".axi_ram") g_usart6rxfifo[RXDMA_BUFFER_SIZE]
+  aligned_data(ARMV7M_DCACHE_LINESIZE);
+static struct up_rxlli_s locate_data(".axi_ram") g_usart6rxlli[RXDMA_NBLOCKS]
+  aligned_data(4);
+#endif
 
 static struct up_dev_s g_usart6priv =
 {
@@ -869,6 +945,8 @@ static struct up_dev_s g_usart6priv =
 #endif
 #ifdef CONFIG_USART6_RXDMA
   .rxdma_channel = DMAMAP_USART6_RX,
+  .rxfifo        = g_usart6rxfifo,
+  .rxlli         = g_usart6rxlli,
 #endif
   .lock = SP_UNLOCKED,
 };
@@ -879,6 +957,12 @@ static char locate_data(".axi_ram") g_usart7rxbuffer[CONFIG_USART7_RXBUFSIZE]
   aligned_data(ARMV7M_DCACHE_LINESIZE);
 static char locate_data(".axi_ram") g_usart7txbuffer[CONFIG_USART7_TXBUFSIZE]
   aligned_data(ARMV7M_DCACHE_LINESIZE);
+#ifdef CONFIG_USART7_RXDMA
+static char locate_data(".axi_ram") g_usart7rxfifo[RXDMA_BUFFER_SIZE]
+  aligned_data(ARMV7M_DCACHE_LINESIZE);
+static struct up_rxlli_s locate_data(".axi_ram") g_usart7rxlli[RXDMA_NBLOCKS]
+  aligned_data(4);
+#endif
 
 static struct up_dev_s g_usart7priv =
 {
@@ -922,6 +1006,8 @@ static struct up_dev_s g_usart7priv =
 #endif
 #ifdef CONFIG_USART7_RXDMA
   .rxdma_channel = DMAMAP_USART7_RX,
+  .rxfifo        = g_usart7rxfifo,
+  .rxlli         = g_usart7rxlli,
 #endif
   .lock = SP_UNLOCKED,
 };
@@ -932,6 +1018,12 @@ static char locate_data(".axi_ram") g_usart8rxbuffer[CONFIG_USART8_RXBUFSIZE]
   aligned_data(ARMV7M_DCACHE_LINESIZE);
 static char locate_data(".axi_ram") g_usart8txbuffer[CONFIG_USART8_TXBUFSIZE]
   aligned_data(ARMV7M_DCACHE_LINESIZE);
+#ifdef CONFIG_USART8_RXDMA
+static char locate_data(".axi_ram") g_usart8rxfifo[RXDMA_BUFFER_SIZE]
+  aligned_data(ARMV7M_DCACHE_LINESIZE);
+static struct up_rxlli_s locate_data(".axi_ram") g_usart8rxlli[RXDMA_NBLOCKS]
+  aligned_data(4);
+#endif
 
 static struct up_dev_s g_usart8priv =
 {
@@ -975,6 +1067,8 @@ static struct up_dev_s g_usart8priv =
 #endif
 #ifdef CONFIG_USART8_RXDMA
   .rxdma_channel = DMAMAP_USART8_RX,
+  .rxfifo        = g_usart8rxfifo,
+  .rxlli         = g_usart8rxlli,
 #endif
   .lock = SP_UNLOCKED,
 };
@@ -985,6 +1079,12 @@ static char locate_data(".axi_ram") g_uart9rxbuffer[CONFIG_UART9_RXBUFSIZE]
   aligned_data(ARMV7M_DCACHE_LINESIZE);
 static char locate_data(".axi_ram") g_uart9txbuffer[CONFIG_UART9_TXBUFSIZE]
   aligned_data(ARMV7M_DCACHE_LINESIZE);
+#ifdef CONFIG_UART9_RXDMA
+static char locate_data(".axi_ram") g_uart9rxfifo[RXDMA_BUFFER_SIZE]
+  aligned_data(ARMV7M_DCACHE_LINESIZE);
+static struct up_rxlli_s locate_data(".axi_ram") g_uart9rxlli[RXDMA_NBLOCKS]
+  aligned_data(4);
+#endif
 
 static struct up_dev_s g_uart9priv =
 {
@@ -1028,6 +1128,8 @@ static struct up_dev_s g_uart9priv =
 #endif
 #ifdef CONFIG_UART9_RXDMA
   .rxdma_channel = DMAMAP_UART9_RX,
+  .rxfifo        = g_uart9rxfifo,
+  .rxlli         = g_uart9rxlli,
 #endif
   .lock = SP_UNLOCKED,
 };
@@ -1038,6 +1140,12 @@ static char locate_data(".axi_ram") g_uart10rxbuffer[CONFIG_UART10_RXBUFSIZE]
   aligned_data(ARMV7M_DCACHE_LINESIZE);
 static char locate_data(".axi_ram") g_uart10txbuffer[CONFIG_UART10_TXBUFSIZE]
   aligned_data(ARMV7M_DCACHE_LINESIZE);
+#ifdef CONFIG_UART10_RXDMA
+static char locate_data(".axi_ram") g_uart10rxfifo[RXDMA_BUFFER_SIZE]
+  aligned_data(ARMV7M_DCACHE_LINESIZE);
+static struct up_rxlli_s locate_data(".axi_ram") g_uart10rxlli[RXDMA_NBLOCKS]
+  aligned_data(4);
+#endif
 
 static struct up_dev_s g_uart10priv =
 {
@@ -1081,6 +1189,8 @@ static struct up_dev_s g_uart10priv =
 #endif
 #ifdef CONFIG_UART10_RXDMA
   .rxdma_channel = DMAMAP_UART10_RX,
+  .rxfifo        = g_uart10rxfifo,
+  .rxlli         = g_uart10rxlli,
 #endif
   .lock = SP_UNLOCKED,
 };
@@ -1091,6 +1201,12 @@ static char locate_data(".axi_ram") g_uart11rxbuffer[CONFIG_UART11_RXBUFSIZE]
   aligned_data(ARMV7M_DCACHE_LINESIZE);
 static char locate_data(".axi_ram") g_uart11txbuffer[CONFIG_UART11_TXBUFSIZE]
   aligned_data(ARMV7M_DCACHE_LINESIZE);
+#ifdef CONFIG_UART11_RXDMA
+static char locate_data(".axi_ram") g_uart11rxfifo[RXDMA_BUFFER_SIZE]
+  aligned_data(ARMV7M_DCACHE_LINESIZE);
+static struct up_rxlli_s locate_data(".axi_ram") g_uart11rxlli[RXDMA_NBLOCKS]
+  aligned_data(4);
+#endif
 
 static struct up_dev_s g_uart11priv =
 {
@@ -1134,6 +1250,8 @@ static struct up_dev_s g_uart11priv =
 #endif
 #ifdef CONFIG_UART11_RXDMA
   .rxdma_channel = DMAMAP_UART11_RX,
+  .rxfifo        = g_uart11rxfifo,
+  .rxlli         = g_uart11rxlli,
 #endif
   .lock = SP_UNLOCKED,
 };
@@ -1144,6 +1262,12 @@ static char locate_data(".axi_ram") g_uart12rxbuffer[CONFIG_UART12_RXBUFSIZE]
   aligned_data(ARMV7M_DCACHE_LINESIZE);
 static char locate_data(".axi_ram") g_uart12txbuffer[CONFIG_UART12_TXBUFSIZE]
   aligned_data(ARMV7M_DCACHE_LINESIZE);
+#ifdef CONFIG_UART12_RXDMA
+static char locate_data(".axi_ram") g_uart12rxfifo[RXDMA_BUFFER_SIZE]
+  aligned_data(ARMV7M_DCACHE_LINESIZE);
+static struct up_rxlli_s locate_data(".axi_ram") g_uart12rxlli[RXDMA_NBLOCKS]
+  aligned_data(4);
+#endif
 
 static struct up_dev_s g_uart12priv =
 {
@@ -1187,6 +1311,8 @@ static struct up_dev_s g_uart12priv =
 #endif
 #ifdef CONFIG_UART12_RXDMA
   .rxdma_channel = DMAMAP_UART12_RX,
+  .rxfifo        = g_uart12rxfifo,
+  .rxlli         = g_uart12rxlli,
 #endif
   .lock = SP_UNLOCKED,
 };
@@ -1197,6 +1323,12 @@ static char locate_data(".axi_ram") g_uart13rxbuffer[CONFIG_UART13_RXBUFSIZE]
   aligned_data(ARMV7M_DCACHE_LINESIZE);
 static char locate_data(".axi_ram") g_uart13txbuffer[CONFIG_UART13_TXBUFSIZE]
   aligned_data(ARMV7M_DCACHE_LINESIZE);
+#ifdef CONFIG_UART13_RXDMA
+static char locate_data(".axi_ram") g_uart13rxfifo[RXDMA_BUFFER_SIZE]
+  aligned_data(ARMV7M_DCACHE_LINESIZE);
+static struct up_rxlli_s locate_data(".axi_ram") g_uart13rxlli[RXDMA_NBLOCKS]
+  aligned_data(4);
+#endif
 
 static struct up_dev_s g_uart13priv =
 {
@@ -1240,6 +1372,8 @@ static struct up_dev_s g_uart13priv =
 #endif
 #ifdef CONFIG_UART13_RXDMA
   .rxdma_channel = DMAMAP_UART13_RX,
+  .rxfifo        = g_uart13rxfifo,
+  .rxlli         = g_uart13rxlli,
 #endif
   .lock = SP_UNLOCKED,
 };
@@ -1250,6 +1384,12 @@ static char locate_data(".axi_ram") g_uart14rxbuffer[CONFIG_UART14_RXBUFSIZE]
   aligned_data(ARMV7M_DCACHE_LINESIZE);
 static char locate_data(".axi_ram") g_uart14txbuffer[CONFIG_UART14_TXBUFSIZE]
   aligned_data(ARMV7M_DCACHE_LINESIZE);
+#ifdef CONFIG_UART14_RXDMA
+static char locate_data(".axi_ram") g_uart14rxfifo[RXDMA_BUFFER_SIZE]
+  aligned_data(ARMV7M_DCACHE_LINESIZE);
+static struct up_rxlli_s locate_data(".axi_ram") g_uart14rxlli[RXDMA_NBLOCKS]
+  aligned_data(4);
+#endif
 
 static struct up_dev_s g_uart14priv =
 {
@@ -1293,6 +1433,8 @@ static struct up_dev_s g_uart14priv =
 #endif
 #ifdef CONFIG_UART14_RXDMA
   .rxdma_channel = DMAMAP_UART14_RX,
+  .rxfifo        = g_uart14rxfifo,
+  .rxlli         = g_uart14rxlli,
 #endif
   .lock = SP_UNLOCKED,
 };
@@ -1303,6 +1445,12 @@ static char locate_data(".axi_ram") g_uart15rxbuffer[CONFIG_UART15_RXBUFSIZE]
   aligned_data(ARMV7M_DCACHE_LINESIZE);
 static char locate_data(".axi_ram") g_uart15txbuffer[CONFIG_UART15_TXBUFSIZE]
   aligned_data(ARMV7M_DCACHE_LINESIZE);
+#ifdef CONFIG_UART15_RXDMA
+static char locate_data(".axi_ram") g_uart15rxfifo[RXDMA_BUFFER_SIZE]
+  aligned_data(ARMV7M_DCACHE_LINESIZE);
+static struct up_rxlli_s locate_data(".axi_ram") g_uart15rxlli[RXDMA_NBLOCKS]
+  aligned_data(4);
+#endif
 
 static struct up_dev_s g_uart15priv =
 {
@@ -1346,6 +1494,8 @@ static struct up_dev_s g_uart15priv =
 #endif
 #ifdef CONFIG_UART15_RXDMA
   .rxdma_channel = DMAMAP_UART15_RX,
+  .rxfifo        = g_uart15rxfifo,
+  .rxlli         = g_uart15rxlli,
 #endif
   .lock = SP_UNLOCKED,
 };
@@ -1900,20 +2050,52 @@ static int up_dma_setup(struct uart_dev_s *dev)
 #ifdef SERIAL_HAVE_RXDMA
   if (priv->rxdma_channel != 0)
     {
-      uart_recvchars_dma(&priv->dev);
       priv->rxdma = n32_dmachannel(priv->rxdma_channel);
       if (!priv->rxdma)
         {
           return -ENODEV;
         }
 
-      /* Configure DMA for circular reception */
+      /* Every item of the list describes one cache line of the receive
+       * buffer and names the next one in a ring, so the channel fills the
+       * buffer until it is stopped.
+       */
 
-      rxcfg.src_addr = priv->usartbase + N32_USART_DAT_OFFSET;
-      rxcfg.dst_addr = (uint32_t)priv->dev.dmarx.buffer;
-      rxcfg.block_size = priv->dev.dmarx.length;
+      uint32_t srcreg = priv->usartbase + N32_USART_DAT_OFFSET;
+      uint64_t ctrl =
+        rxcfg.ctrl | DMA_CHCTRL_BTS((uint64_t)RXDMA_BLOCK_SIZE);
+      uint32_t i;
+
+      for (i = 0; i < RXDMA_NBLOCKS; i++)
+        {
+          priv->rxlli[i].src  = srcreg;
+          priv->rxlli[i].dst  = (uint32_t)(uintptr_t)priv->rxfifo +
+                                i * RXDMA_BLOCK_SIZE;
+          priv->rxlli[i].next =
+            (uint32_t)(uintptr_t)&priv->rxlli[(i + 1) % RXDMA_NBLOCKS];
+          priv->rxlli[i].ctrl = (uint32_t)ctrl;
+          priv->rxlli[i].ctlh = (uint32_t)(ctrl >> 32);
+        }
+
+#ifdef CONFIG_ARMV7M_DCACHE
+      /* The channel reads the list from memory */
+
+      up_clean_dcache((uintptr_t)priv->rxlli,
+                      (uintptr_t)(priv->rxlli + RXDMA_NBLOCKS));
+#endif
+
+      rxcfg.src_addr = srcreg;
+      rxcfg.dst_addr = (uint32_t)(uintptr_t)priv->rxfifo;
+      rxcfg.block_size = RXDMA_BLOCK_SIZE;
       rxcfg.src_hs_if = n32_getchannel(priv->rxdma);
       rxcfg.dst_hs_if = n32_getchannel(priv->rxdma);
+      rxcfg.link_list = priv->rxlli;
+
+      priv->rxenable = false;
+      priv->rxdmanext = 0;
+#ifdef CONFIG_ARMV7M_DCACHE
+      priv->rxdmaavail = 0;
+#endif
 
       n32_dmasetup(priv->rxdma, &rxcfg);
       n32_dmastart(priv->rxdma, up_dma_rxcallback, priv);
@@ -1984,44 +2166,6 @@ static void up_detach(struct uart_dev_s *dev)
 }
 
 /****************************************************************************
- * Name: up_dma_rxharvest
- *
- * Stop the RX DMA channel, deliver the received block to the serial
- * framework, and re-arm the channel with a fresh descriptor.  Shared by
- * the IDLE interrupt path (partial frame delivery) and the DMA transfer
- * complete callback (full block delivery).
- *
- * Re-arm only happens with a real block size: a zero-length block would
- * complete instantly and disable the channel with no re-arm path left
- * (the ring-full corner).
- *
- ****************************************************************************/
-
-#ifdef SERIAL_HAVE_RXDMA
-static void up_dma_rxharvest(struct uart_dev_s *dev)
-{
-  struct up_dev_s *priv = (struct up_dev_s *)dev->priv;
-
-  n32_dmastop(priv->rxdma);
-  priv->dev.dmarx.nbytes = n32_getcount(priv->rxdma);
-  uart_recvchars_done(&priv->dev);
-  uart_recvchars_dma(&priv->dev);
-
-  if (priv->dev.dmarx.length > 0)
-    {
-      rxcfg.src_addr = priv->usartbase + N32_USART_DAT_OFFSET;
-      rxcfg.dst_addr = (uint32_t)priv->dev.dmarx.buffer;
-      rxcfg.block_size = priv->dev.dmarx.length;
-      rxcfg.src_hs_if = n32_getchannel(priv->rxdma);
-      rxcfg.dst_hs_if = n32_getchannel(priv->rxdma);
-
-      n32_dmasetup(priv->rxdma, &rxcfg);
-      n32_dmastart(priv->rxdma, up_dma_rxcallback, priv);
-    }
-}
-#endif
-
-/****************************************************************************
  * Name: up_interrupt
  ****************************************************************************/
 
@@ -2047,24 +2191,25 @@ static int up_interrupt(int irq, void *context, void *arg)
       UNUSED(dat);
     }
 
-  /* Handle IDLE interrupt (DMA reception complete) */
+  /* Handle IDLE interrupt: the DMA receive channel has collected the
+   * tail of a burst.
+   */
 
 #ifdef SERIAL_HAVE_RXDMA
   if ((sts & USART_STS_IDLEF) && (priv->rxdma) &&
       (priv->ie & USART_CTRL1_IDLEIEN))
     {
-      if (up_dma_rxavailable(&priv->dev))
-        {
-          /* Clear IDLEF by reading STS (already done at entry) then DAT */
+      /* Clear IDLEF by reading STS (already done at entry) then DAT.  The
+       * flag has to go whether or not anything is waiting: left set, it
+       * would bring the handler back for as long as the interrupt stays
+       * enabled.
+       */
 
-          uint32_t dat = up_serialin(priv, N32_USART_DAT_OFFSET);
+      uint32_t dat = up_serialin(priv, N32_USART_DAT_OFFSET);
 
-          UNUSED(dat);
+      UNUSED(dat);
 
-          up_dma_rxharvest(&priv->dev);
-
-          return OK;
-        }
+      up_dma_rxcallback(priv->rxdma, 0, priv);
     }
 #endif
 
@@ -2279,68 +2424,109 @@ static bool up_txempty(struct uart_dev_s *dev)
 }
 
 /****************************************************************************
+ * Name: up_dma_nextrx
+ *
+ * Description:
+ *   Offset in the receive buffer of the next byte the channel will write.
+ *   The channel keeps its destination address current, so that address is
+ *   where it has got to.
+ *
+ ****************************************************************************/
+
+#ifdef SERIAL_HAVE_RXDMA
+static uint32_t up_dma_nextrx(struct up_dev_s *priv)
+{
+  uint32_t next = n32_dmaptr_dst(priv->rxdma) -
+                  (uint32_t)(uintptr_t)priv->rxfifo;
+
+  /* Between the last byte of the buffer and the reload of the first list
+   * item the address points one past the buffer.
+   */
+
+  return next < RXDMA_BUFFER_SIZE ? next : 0;
+}
+#endif
+
+/****************************************************************************
  * Name: up_dma_rxcallback
+ *
+ * Description:
+ *   Called from the DMA interrupt when a block of the list is complete and
+ *   from the USART interrupt when the line went idle.  What the channel has
+ *   written is handed to the serial framework; the channel runs on and
+ *   comes round to the buffer from where the reading stopped.
+ *
  ****************************************************************************/
 
 #ifdef SERIAL_HAVE_RXDMA
 static void up_dma_rxcallback(DMA_HANDLE handle, uint8_t status, void *arg)
 {
   struct up_dev_s *priv = arg;
-  if(status & DMA_INT_ERROR)
+
+  /* The list never ends, so after an error the channel would run on by
+   * itself.
+   */
+
+  if (status & DMA_INT_ERROR)
     {
       PANIC();
     }
-  else if (status & DMA_INT_TFR)
-    {
-      /* Deliver the completed block immediately and re-arm; without
-       * this the bytes would sit undelivered until the next IDLE event
-       * and the channel would stay disabled in between.
-       */
 
-      up_dma_rxharvest(&priv->dev);
+  if (priv->rxenable && up_dma_rxavailable(&priv->dev))
+    {
+      uart_recvchars(&priv->dev);
     }
 }
 #endif
 
 /****************************************************************************
  * Name: up_dma_receive / up_dma_rxint / up_dma_rxavailable
+ *
+ * Description:
+ *   Take the next byte out of the receive buffer, and tell the framework
+ *   whether there is one.
+ *
  ****************************************************************************/
 
 #ifdef SERIAL_HAVE_RXDMA
-static void up_dma_receive(struct uart_dev_s *dev)
+static int up_dma_receive(struct uart_dev_s *dev, unsigned int *status)
 {
   struct up_dev_s *priv = (struct up_dev_s *)dev->priv;
-  uint32_t nextrx;
+  uint32_t nextrx = up_dma_nextrx(priv);
+  int ch;
 
-  /* The RX DMA channel does not exist until up_dma_setup() created it;
-   * reading its count register through a NULL handle bus-faults.
+  *status = 0;
+
+#ifdef CONFIG_ARMV7M_DCACHE
+  /* The channel writes the buffer behind the cache.  Bring in the cache
+   * line that holds the next byte, as far as the channel has filled it;
+   * the rest of that line is then read without invalidating again.
    */
 
-  if (priv->rxdma == NULL)
+  if (priv->rxdmaavail == 0)
     {
-      return;
+      uintptr_t addr = (uintptr_t)&priv->rxfifo[priv->rxdmanext];
+      uintptr_t line = rounddown2(addr, ARMV7M_DCACHE_LINESIZE);
+      uint32_t avail = nextrx >= priv->rxdmanext ?
+                       nextrx - priv->rxdmanext :
+                       nextrx + RXDMA_BUFFER_SIZE - priv->rxdmanext;
+
+      up_invalidate_dcache(line, line + ARMV7M_DCACHE_LINESIZE);
+      priv->rxdmaavail = MIN(avail, line + ARMV7M_DCACHE_LINESIZE - addr);
     }
 
-  nextrx = n32_getcount(priv->rxdma);
-
-  /* Check if more data is available */
-
-  if (nextrx != 0)
-    {
-#ifdef CONFIG_ARMV7M_DCACHE
-      /* If the data cache is enabled, then we will also need to manage
-       * cache coherency.  Are any bytes available in the currently coherent
-       * region of the data cache?
-       */
-
-      uintptr_t addr;
-
-      /* Invalidate the DMA buffer range */
-
-      addr = (uintptr_t)&dev->recv.buffer[dev->recv.tail];
-      up_invalidate_dcache(addr, addr + nextrx);
+  priv->rxdmaavail--;
 #endif
+
+  ch = priv->rxfifo[priv->rxdmanext];
+
+  priv->rxdmanext++;
+  if (priv->rxdmanext == RXDMA_BUFFER_SIZE)
+    {
+      priv->rxdmanext = 0;
     }
+
+  return ch;
 }
 
 static void up_dma_rxint(struct uart_dev_s *dev, bool enable)
@@ -2356,18 +2542,14 @@ static void up_dma_rxint(struct uart_dev_s *dev, bool enable)
     }
 
   flags = enter_critical_section();
-  if (enable)
-    {
-      uint16_t ie = priv->ie | USART_CTRL1_IDLEIEN;
 
-      up_setusartint(priv, ie);
-    }
-  else
-    {
-      uint16_t ie = priv->ie & ~USART_CTRL1_IDLEIEN;
+  /* The idle line interrupt hands over what the channel collected, so it
+   * is on exactly while the framework takes characters.
+   */
 
-      up_setusartint(priv, ie);
-    }
+  priv->rxenable = enable;
+  up_setusartint(priv, enable ? priv->ie | USART_CTRL1_IDLEIEN :
+                                priv->ie & ~USART_CTRL1_IDLEIEN);
 
   leave_critical_section(flags);
 }
@@ -2376,46 +2558,7 @@ static bool up_dma_rxavailable(struct uart_dev_s *dev)
 {
   struct up_dev_s *priv = (struct up_dev_s *)dev->priv;
 
-  return n32_getcount(priv->rxdma) != 0;
-}
-
-/****************************************************************************
- * Name: up_dma_rxfree
- *
- * The framework calls here after the reader freed space in the RX ring.
- * If the channel was left stopped by a full ring (zero-length descriptor,
- * nobody left to re-arm it), fill a fresh descriptor and restart it.
- *
- ****************************************************************************/
-
-static void up_dma_rxfree(struct uart_dev_s *dev)
-{
-  struct up_dev_s *priv = (struct up_dev_s *)dev->priv;
-  irqstate_t flags;
-
-  if (!priv->rxdma)
-    {
-      return;
-    }
-
-  flags = enter_critical_section();
-  if (priv->dev.dmarx.length == 0)
-    {
-      uart_recvchars_dma(dev);
-      if (priv->dev.dmarx.length > 0)
-        {
-          rxcfg.src_addr = priv->usartbase + N32_USART_DAT_OFFSET;
-          rxcfg.dst_addr = (uint32_t)priv->dev.dmarx.buffer;
-          rxcfg.block_size = priv->dev.dmarx.length;
-          rxcfg.src_hs_if = n32_getchannel(priv->rxdma);
-          rxcfg.dst_hs_if = n32_getchannel(priv->rxdma);
-
-          n32_dmasetup(priv->rxdma, &rxcfg);
-          n32_dmastart(priv->rxdma, up_dma_rxcallback, priv);
-        }
-    }
-
-  leave_critical_section(flags);
+  return up_dma_nextrx(priv) != priv->rxdmanext;
 }
 #endif
 

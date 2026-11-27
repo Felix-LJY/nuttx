@@ -168,6 +168,7 @@
 
 #define BFT_V1_PWM0TIMER 1
 #define BFT_V1_PWM1TIMER 12
+#define BFT_V1_PWM2TIMER 13 /* Channel 3 drives the buzzer */
 
 /****************************************************************************
  * Public Function Prototypes

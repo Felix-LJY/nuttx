@@ -145,8 +145,6 @@
 #  undef HAVE_CONSOLE
 #endif
 
-#define CONFIG_N32H7_SERIAL_RXDMA_BUFFER_SIZE 64
-
 /****************************************************************************
  * Public Functions Prototypes
  ****************************************************************************/

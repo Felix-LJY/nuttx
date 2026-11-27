@@ -47,6 +47,14 @@ if(CONFIG_PWM)
   list(APPEND SRCS n32_pwm.c)
 endif()
 
+if(CONFIG_ADC)
+  list(APPEND SRCS n32_adc.c)
+endif()
+
+if(CONFIG_SENSORS AND CONFIG_N32H7_ADC3)
+  list(APPEND SRCS n32_temp.c)
+endif()
+
 if(CONFIG_N32H7_PROGMEM)
   list(APPEND SRCS n32_progmem.c)
 endif()

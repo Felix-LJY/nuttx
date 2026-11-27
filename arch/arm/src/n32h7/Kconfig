@@ -216,6 +216,706 @@ config N32H7_SDMMC2
 	default n
 	select N32H7_SDMMC
 
+config N32H7_I2C
+	bool "I2C"
+	select I2C
+	default n
+
+if N32H7_I2C
+
+config N32H7_I2C_DYNTIMEO
+	bool "Use dynamic timeouts"
+	default n
+
+config N32H7_I2C_DYNTIMEO_USECPERBYTE
+	int "Timeout Microseconds per Byte"
+	depends on N32H7_I2C_DYNTIMEO
+	default 500
+
+config N32H7_I2C_DYNTIMEO_STARTSTOP
+	int "Timeout for Start/Stop (Milliseconds)"
+	depends on N32H7_I2C_DYNTIMEO
+	default 1000
+
+config N32H7_I2CTIMEOMS
+	int "Timeout per message in ms"
+	depends on !N32H7_I2C_DYNTIMEO
+	default 500
+
+config N32H7_I2CTIMEOTICKS
+	int
+	depends on !N32H7_I2C_DYNTIMEO
+
+config N32H7_I2C1
+	bool "I2C1"
+	default n
+
+config N32H7_I2C2
+	bool "I2C2"
+	default n
+
+config N32H7_I2C3
+	bool "I2C3"
+	default n
+
+config N32H7_I2C4
+	bool "I2C4"
+	default n
+
+config N32H7_I2C5
+	bool "I2C5"
+	default n
+
+config N32H7_I2C6
+	bool "I2C6"
+	default n
+
+config N32H7_I2C7
+	bool "I2C7"
+	default n
+
+config N32H7_I2C8
+	bool "I2C8"
+	default n
+
+endif # N32H7_I2C
+
+config N32H7_ADC
+	bool "ADC"
+	select ANALOG
+	select ADC
+	default n
+	---help---
+		Driver for ADC1 to ADC3 (n32_adc.c).  A sequence of up to 20 channels
+		is converted on a software trigger (ANIOC_TRIGGER) or periodically
+		on a timer event.  The results reach the upper half one by one, or in
+		batches through DMA.
+
+		ADC3 also converts the battery monitor (channel 17), the temperature
+		sensor (18) and VREFINT (19).
+
+if N32H7_ADC
+
+config N32H7_ADC_MAX_SAMPLES
+	int "Maximum number of channels in a sequence"
+	default 20
+	range 1 20
+	---help---
+		Size of the channel list of each ADC.  A sequence holds at most 20
+		conversions.
+
+config N32H7_ADC_SAMPLETIME
+	int "Sampling time of external channels (ADC clock cycles)"
+	default 83
+	range 1 397
+	---help---
+		Sampling time of every channel that is not internal.  One of 1, 2,
+		3, 4, 5, 6, 7, 10, 13, 17, 24, 32, 83, 93, 215 or 397 ADC clock
+		cycles; 83 cycles sample a source of up to 10 kOhm accurately.
+		The internal channels always sample for 397 cycles, which covers
+		the 17.1 us the temperature sensor needs.
+
+config N32H7_ADC_BYPASSCAL
+	bool "Bypass calibration"
+	default n
+	---help---
+		Skip the calibration the driver runs after the ADC is switched on.
+
+config N32H7_ADC1
+	bool "ADC1"
+	default n
+
+if N32H7_ADC1
+
+config N32H7_ADC1_CLK
+	int "Kernel clock of ADC1"
+	default 0
+	range 0 4
+	---help---
+		0: the AHB clock through a divider, down to at most 20 MHz, the
+		highest clock the data sheet allows.
+		1: the B output of PLL1, 2: the B output of PLL2, 3: the B output
+		of PLL3, 4: the C output of PLL3.  A PLL output is asynchronous
+		to the bus clock, which keeps the bus activity out of the
+		conversions.  The driver does not divide it, so the selected
+		output itself must not exceed 20 MHz.
+
+choice
+	prompt "Timer that triggers ADC1"
+	default N32H7_ADC1_NOTIMER
+	---help---
+		The timer starts ADC1 at the sampling frequency and is not
+		available to the timer driver.  Several ADCs may select the same
+		timer and then convert simultaneously.
+
+config N32H7_ADC1_NOTIMER
+	bool "None, software trigger"
+
+
+config N32H7_ATIM1_ADC1
+	bool "ATIM1"
+
+
+config N32H7_ATIM2_ADC1
+	bool "ATIM2"
+
+
+config N32H7_ATIM3_ADC1
+	bool "ATIM3"
+
+
+config N32H7_ATIM4_ADC1
+	bool "ATIM4"
+
+
+config N32H7_GTIMA1_ADC1
+	bool "GTIMA1"
+
+
+config N32H7_GTIMB1_ADC1
+	bool "GTIMB1"
+
+
+config N32H7_GTIMB2_ADC1
+	bool "GTIMB2"
+
+
+config N32H7_GTIMB3_ADC1
+	bool "GTIMB3"
+
+
+endchoice
+
+config N32H7_ADC1_TIMTRIG
+	int "ADC1 timer trigger"
+	depends on !N32H7_ADC1_NOTIMER
+	default 4
+	range 0 5
+	---help---
+		Timer event that starts a sequence: 0 CC1, 1 CC2, 2 CC3, 3 CC4,
+		4 TRGO, 5 TRGO2.  TRGO and TRGO2 fire once per timer period, a
+		channel at its compare match, in the middle of the period.  Every
+		timer has TRGO, the ATIMs also TRGO2, and channels on the ATIMs
+		and the GTIMBs can be compared; the GTIMAs only have TRGO.
+
+config N32H7_ADC1_SAMPLE_FREQUENCY
+	int "ADC1 sampling frequency"
+	depends on !N32H7_ADC1_NOTIMER
+	default 100
+	---help---
+		Sequences per second while a timer triggers ADC1.
+
+config N32H7_ADC1_DMA
+	bool "ADC1 DMA"
+	depends on N32H7_DMA
+	default n
+	---help---
+		Let a DMA channel carry the results instead of an interrupt per
+		sequence.  The channel comes from the controller board.h names in
+		DMAMAP_ADC1, DMA1 unless it says otherwise, and is occupied
+		while the device is open.  The FIFO of the converter holds 16
+		results while the channel is delayed.  Conversions lost anyway
+		are counted and reported when the device is closed.
+
+config N32H7_ADC1_DMA_BATCH
+	int "ADC1 DMA number of sequences"
+	depends on N32H7_ADC1_DMA
+	default 1
+	---help---
+		Sequences the DMA collects before it hands their results to the
+		upper half.  This number times the number of channels must not
+		exceed 4095.
+
+config N32H7_ADC1_RESOLUTION
+	int "ADC1 resolution"
+	default 12
+	range 10 12
+	---help---
+		10 or 12 bits.  Results are right aligned in both cases.
+
+config N32H7_ADC1_OVSR
+	int "ADC1 oversampling ratio, log2"
+	default 0
+	range 0 10
+	---help---
+		Every conversion of a channel sums 2^OVSR consecutive samples,
+		which averages out noise and gives up to 22 bits.  0 switches
+		oversampling off.  Each conversion then takes 2^OVSR times longer,
+		and the offsets and the alignment do not apply to the sum.
+
+config N32H7_ADC1_OVSS
+	int "ADC1 oversampling shift"
+	default N32H7_ADC1_OVSR
+	range 0 10
+	---help---
+		Bits the sum is shifted right before rounding to 16 bits.  The
+		default turns the sum into a 12-bit average.  OVSR minus OVSS
+		may be at most 4, or the larger sums do not fit in 16 bits.
+
+config N32H7_ADC1_GCOMPDAT
+	int "ADC1 gain compensation coefficient"
+	default 4096
+	range 0 16383
+	---help---
+		Every result is multiplied by GCOMPDAT / 4096, rounded.  4096
+		leaves the results unchanged and switches the compensation off.
+
+config N32H7_ADC1_DLYSAMP
+	int "ADC1 delayed sampling (ADC clock cycles)"
+	default 0
+	range 0 16
+	---help---
+		ADC1 waits this many ADC clock cycles between the trigger and
+		the start of sampling.  0 switches the delay off.
+
+config N32H7_ADC1_DIFFCHAN
+	hex "ADC1 differential channels"
+	default 0x0
+	---help---
+		Bit n makes channel n + 1 differential, taken against its negative
+		input instead of VREF-.  Channels 1 to 19 can be differential.
+
+config N32H7_ADC1_WDG1_HIGH
+	int "ADC1 watchdog 1 high threshold"
+	default 4095
+	range 0 4095
+	---help---
+		A conversion below the low or above the high threshold raises
+		the watchdog 1 flag; the driver stops converting when it
+		interrupts.  The default thresholds are the full range, which
+		leaves the watchdog off.
+
+config N32H7_ADC1_WDG1_LOW
+	int "ADC1 watchdog 1 low threshold"
+	default 0
+	range 0 4095
+
+config N32H7_ADC1_WDG1_CHAN
+	int "ADC1 watchdog 1 channel"
+	default -1
+	range -1 19
+	---help---
+		The channel watchdog 1 watches, -1 for every converted channel.
+
+config N32H7_ADC1_WDG1_FLT
+	int "ADC1 watchdog 1 filter"
+	default 0
+	range 0 7
+	---help---
+		Conversions in a row outside the thresholds before the flag is
+		raised, 1 to 8.  Only for a single channel.
+
+endif # N32H7_ADC1
+
+config N32H7_ADC2
+	bool "ADC2"
+	default n
+
+if N32H7_ADC2
+
+config N32H7_ADC2_CLK
+	int "Kernel clock of ADC2"
+	default 0
+	range 0 4
+	---help---
+		0: the AHB clock through a divider, down to at most 20 MHz, the
+		highest clock the data sheet allows.
+		1: the B output of PLL1, 2: the B output of PLL2, 3: the B output
+		of PLL3, 4: the C output of PLL3.  A PLL output is asynchronous
+		to the bus clock, which keeps the bus activity out of the
+		conversions.  The driver does not divide it, so the selected
+		output itself must not exceed 20 MHz.
+
+choice
+	prompt "Timer that triggers ADC2"
+	default N32H7_ADC2_NOTIMER
+	---help---
+		The timer starts ADC2 at the sampling frequency and is not
+		available to the timer driver.  Several ADCs may select the same
+		timer and then convert simultaneously.
+
+config N32H7_ADC2_NOTIMER
+	bool "None, software trigger"
+
+
+config N32H7_ATIM1_ADC2
+	bool "ATIM1"
+
+
+config N32H7_ATIM2_ADC2
+	bool "ATIM2"
+
+
+config N32H7_ATIM3_ADC2
+	bool "ATIM3"
+
+
+config N32H7_ATIM4_ADC2
+	bool "ATIM4"
+
+
+config N32H7_GTIMA1_ADC2
+	bool "GTIMA1"
+
+
+config N32H7_GTIMB1_ADC2
+	bool "GTIMB1"
+
+
+config N32H7_GTIMB2_ADC2
+	bool "GTIMB2"
+
+
+config N32H7_GTIMB3_ADC2
+	bool "GTIMB3"
+
+
+endchoice
+
+config N32H7_ADC2_TIMTRIG
+	int "ADC2 timer trigger"
+	depends on !N32H7_ADC2_NOTIMER
+	default 4
+	range 0 5
+	---help---
+		Timer event that starts a sequence: 0 CC1, 1 CC2, 2 CC3, 3 CC4,
+		4 TRGO, 5 TRGO2.  TRGO and TRGO2 fire once per timer period, a
+		channel at its compare match, in the middle of the period.  Every
+		timer has TRGO, the ATIMs also TRGO2, and channels on the ATIMs
+		and the GTIMBs can be compared; the GTIMAs only have TRGO.
+
+config N32H7_ADC2_SAMPLE_FREQUENCY
+	int "ADC2 sampling frequency"
+	depends on !N32H7_ADC2_NOTIMER
+	default 100
+	---help---
+		Sequences per second while a timer triggers ADC2.
+
+config N32H7_ADC2_DMA
+	bool "ADC2 DMA"
+	depends on N32H7_DMA
+	default n
+	---help---
+		Let a DMA channel carry the results instead of an interrupt per
+		sequence.  The channel comes from the controller board.h names in
+		DMAMAP_ADC2, DMA1 unless it says otherwise, and is occupied
+		while the device is open.  The FIFO of the converter holds 16
+		results while the channel is delayed.  Conversions lost anyway
+		are counted and reported when the device is closed.
+
+config N32H7_ADC2_DMA_BATCH
+	int "ADC2 DMA number of sequences"
+	depends on N32H7_ADC2_DMA
+	default 1
+	---help---
+		Sequences the DMA collects before it hands their results to the
+		upper half.  This number times the number of channels must not
+		exceed 4095.
+
+config N32H7_ADC2_RESOLUTION
+	int "ADC2 resolution"
+	default 12
+	range 10 12
+	---help---
+		10 or 12 bits.  Results are right aligned in both cases.
+
+config N32H7_ADC2_OVSR
+	int "ADC2 oversampling ratio, log2"
+	default 0
+	range 0 10
+	---help---
+		Every conversion of a channel sums 2^OVSR consecutive samples,
+		which averages out noise and gives up to 22 bits.  0 switches
+		oversampling off.  Each conversion then takes 2^OVSR times longer,
+		and the offsets and the alignment do not apply to the sum.
+
+config N32H7_ADC2_OVSS
+	int "ADC2 oversampling shift"
+	default N32H7_ADC2_OVSR
+	range 0 10
+	---help---
+		Bits the sum is shifted right before rounding to 16 bits.  The
+		default turns the sum into a 12-bit average.  OVSR minus OVSS
+		may be at most 4, or the larger sums do not fit in 16 bits.
+
+config N32H7_ADC2_GCOMPDAT
+	int "ADC2 gain compensation coefficient"
+	default 4096
+	range 0 16383
+	---help---
+		Every result is multiplied by GCOMPDAT / 4096, rounded.  4096
+		leaves the results unchanged and switches the compensation off.
+
+config N32H7_ADC2_DLYSAMP
+	int "ADC2 delayed sampling (ADC clock cycles)"
+	default 0
+	range 0 16
+	---help---
+		ADC2 waits this many ADC clock cycles between the trigger and
+		the start of sampling.  0 switches the delay off.
+
+config N32H7_ADC2_DIFFCHAN
+	hex "ADC2 differential channels"
+	default 0x0
+	---help---
+		Bit n makes channel n + 1 differential, taken against its negative
+		input instead of VREF-.  Channels 1 to 19 can be differential.
+
+config N32H7_ADC2_WDG1_HIGH
+	int "ADC2 watchdog 1 high threshold"
+	default 4095
+	range 0 4095
+	---help---
+		A conversion below the low or above the high threshold raises
+		the watchdog 1 flag; the driver stops converting when it
+		interrupts.  The default thresholds are the full range, which
+		leaves the watchdog off.
+
+config N32H7_ADC2_WDG1_LOW
+	int "ADC2 watchdog 1 low threshold"
+	default 0
+	range 0 4095
+
+config N32H7_ADC2_WDG1_CHAN
+	int "ADC2 watchdog 1 channel"
+	default -1
+	range -1 19
+	---help---
+		The channel watchdog 1 watches, -1 for every converted channel.
+
+config N32H7_ADC2_WDG1_FLT
+	int "ADC2 watchdog 1 filter"
+	default 0
+	range 0 7
+	---help---
+		Conversions in a row outside the thresholds before the flag is
+		raised, 1 to 8.  Only for a single channel.
+
+endif # N32H7_ADC2
+
+config N32H7_ADC3
+	bool "ADC3"
+	default n
+
+if N32H7_ADC3
+
+config N32H7_ADC3_CLK
+	int "Kernel clock of ADC3"
+	default 0
+	range 0 4
+	---help---
+		0: the AHB clock through a divider, down to at most 20 MHz, the
+		highest clock the data sheet allows.
+		1: the B output of PLL1, 2: the B output of PLL2, 3: the B output
+		of PLL3, 4: the C output of PLL3.  A PLL output is asynchronous
+		to the bus clock, which keeps the bus activity out of the
+		conversions.  The driver does not divide it, so the selected
+		output itself must not exceed 20 MHz.
+
+choice
+	prompt "Timer that triggers ADC3"
+	default N32H7_ADC3_NOTIMER
+	---help---
+		The timer starts ADC3 at the sampling frequency and is not
+		available to the timer driver.  Several ADCs may select the same
+		timer and then convert simultaneously.
+
+config N32H7_ADC3_NOTIMER
+	bool "None, software trigger"
+
+
+config N32H7_ATIM1_ADC3
+	bool "ATIM1"
+
+
+config N32H7_ATIM2_ADC3
+	bool "ATIM2"
+
+
+config N32H7_ATIM3_ADC3
+	bool "ATIM3"
+
+
+config N32H7_ATIM4_ADC3
+	bool "ATIM4"
+
+
+config N32H7_GTIMA1_ADC3
+	bool "GTIMA1"
+
+
+config N32H7_GTIMB1_ADC3
+	bool "GTIMB1"
+
+
+config N32H7_GTIMB2_ADC3
+	bool "GTIMB2"
+
+
+config N32H7_GTIMB3_ADC3
+	bool "GTIMB3"
+
+
+endchoice
+
+config N32H7_ADC3_TIMTRIG
+	int "ADC3 timer trigger"
+	depends on !N32H7_ADC3_NOTIMER
+	default 4
+	range 0 5
+	---help---
+		Timer event that starts a sequence: 0 CC1, 1 CC2, 2 CC3, 3 CC4,
+		4 TRGO, 5 TRGO2.  TRGO and TRGO2 fire once per timer period, a
+		channel at its compare match, in the middle of the period.  Every
+		timer has TRGO, the ATIMs also TRGO2, and channels on the ATIMs
+		and the GTIMBs can be compared; the GTIMAs only have TRGO.
+
+config N32H7_ADC3_SAMPLE_FREQUENCY
+	int "ADC3 sampling frequency"
+	depends on !N32H7_ADC3_NOTIMER
+	default 100
+	---help---
+		Sequences per second while a timer triggers ADC3.
+
+config N32H7_ADC3_DMA
+	bool "ADC3 DMA"
+	depends on N32H7_DMA
+	default n
+	---help---
+		Let a DMA channel carry the results instead of an interrupt per
+		sequence.  The channel comes from the controller board.h names in
+		DMAMAP_ADC3, DMA1 unless it says otherwise, and is occupied
+		while the device is open.  The FIFO of the converter holds 16
+		results while the channel is delayed.  Conversions lost anyway
+		are counted and reported when the device is closed.
+
+config N32H7_ADC3_DMA_BATCH
+	int "ADC3 DMA number of sequences"
+	depends on N32H7_ADC3_DMA
+	default 1
+	---help---
+		Sequences the DMA collects before it hands their results to the
+		upper half.  This number times the number of channels must not
+		exceed 4095.
+
+config N32H7_ADC3_RESOLUTION
+	int "ADC3 resolution"
+	default 12
+	range 10 12
+	---help---
+		10 or 12 bits.  Results are right aligned in both cases.
+
+config N32H7_ADC3_OVSR
+	int "ADC3 oversampling ratio, log2"
+	default 0
+	range 0 10
+	---help---
+		Every conversion of a channel sums 2^OVSR consecutive samples,
+		which averages out noise and gives up to 22 bits.  0 switches
+		oversampling off.  Each conversion then takes 2^OVSR times longer,
+		and the offsets and the alignment do not apply to the sum.
+
+config N32H7_ADC3_OVSS
+	int "ADC3 oversampling shift"
+	default N32H7_ADC3_OVSR
+	range 0 10
+	---help---
+		Bits the sum is shifted right before rounding to 16 bits.  The
+		default turns the sum into a 12-bit average.  OVSR minus OVSS
+		may be at most 4, or the larger sums do not fit in 16 bits.
+
+config N32H7_ADC3_GCOMPDAT
+	int "ADC3 gain compensation coefficient"
+	default 4096
+	range 0 16383
+	---help---
+		Every result is multiplied by GCOMPDAT / 4096, rounded.  4096
+		leaves the results unchanged and switches the compensation off.
+
+config N32H7_ADC3_DLYSAMP
+	int "ADC3 delayed sampling (ADC clock cycles)"
+	default 0
+	range 0 16
+	---help---
+		ADC3 waits this many ADC clock cycles between the trigger and
+		the start of sampling.  0 switches the delay off.
+
+config N32H7_ADC3_DIFFCHAN
+	hex "ADC3 differential channels"
+	default 0x0
+	---help---
+		Bit n makes channel n + 1 differential, taken against its negative
+		input instead of VREF-.  Channels 1 to 19 can be differential.
+
+config N32H7_ADC3_WDG1_HIGH
+	int "ADC3 watchdog 1 high threshold"
+	default 4095
+	range 0 4095
+	---help---
+		A conversion below the low or above the high threshold raises
+		the watchdog 1 flag; the driver stops converting when it
+		interrupts.  The default thresholds are the full range, which
+		leaves the watchdog off.
+
+config N32H7_ADC3_WDG1_LOW
+	int "ADC3 watchdog 1 low threshold"
+	default 0
+	range 0 4095
+
+config N32H7_ADC3_WDG1_CHAN
+	int "ADC3 watchdog 1 channel"
+	default -1
+	range -1 19
+	---help---
+		The channel watchdog 1 watches, -1 for every converted channel.
+
+config N32H7_ADC3_WDG1_FLT
+	int "ADC3 watchdog 1 filter"
+	default 0
+	range 0 7
+	---help---
+		Conversions in a row outside the thresholds before the flag is
+		raised, 1 to 8.  Only for a single channel.
+
+endif # N32H7_ADC3
+
+
+endif # N32H7_ADC
+
+# Timers reserved for an ADC are not available to the timer driver
+
+config N32H7_ATIM1_ADC
+	bool
+	default y if N32H7_ATIM1_ADC1 || N32H7_ATIM1_ADC2 || N32H7_ATIM1_ADC3
+
+config N32H7_ATIM2_ADC
+	bool
+	default y if N32H7_ATIM2_ADC1 || N32H7_ATIM2_ADC2 || N32H7_ATIM2_ADC3
+
+config N32H7_ATIM3_ADC
+	bool
+	default y if N32H7_ATIM3_ADC1 || N32H7_ATIM3_ADC2 || N32H7_ATIM3_ADC3
+
+config N32H7_ATIM4_ADC
+	bool
+	default y if N32H7_ATIM4_ADC1 || N32H7_ATIM4_ADC2 || N32H7_ATIM4_ADC3
+
+config N32H7_GTIMA1_ADC
+	bool
+	default y if N32H7_GTIMA1_ADC1 || N32H7_GTIMA1_ADC2 || N32H7_GTIMA1_ADC3
+
+config N32H7_GTIMB1_ADC
+	bool
+	default y if N32H7_GTIMB1_ADC1 || N32H7_GTIMB1_ADC2 || N32H7_GTIMB1_ADC3
+
+config N32H7_GTIMB2_ADC
+	bool
+	default y if N32H7_GTIMB2_ADC1 || N32H7_GTIMB2_ADC2 || N32H7_GTIMB2_ADC3
+
+config N32H7_GTIMB3_ADC
+	bool
+	default y if N32H7_GTIMB3_ADC1 || N32H7_GTIMB3_ADC2 || N32H7_GTIMB3_ADC3
+
 config N32H7_PROGMEM
 	bool "Progmem MTD configuration"
 	default n
@@ -375,6 +1075,17 @@ config N32H7_UART15
 	bool "UART15"
 	default n
 	select UART15_SERIALDRIVER
+
+endif # N32H7_SERIAL
+if N32H7_SERIAL
+config N32H7_SERIAL_RXDMA_BUFFER_SIZE
+	int "Receive DMA buffer size"
+	default 256
+	---help---
+		Size of the buffer that the receive DMA channel of a UART
+		circles.  It is rounded up to whole cache lines.  It has to
+		hold what arrives while the processor is still busy with
+		earlier bytes.
 
 endif # N32H7_SERIAL
 

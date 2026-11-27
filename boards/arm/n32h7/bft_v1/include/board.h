@@ -264,6 +264,22 @@
 #define GPIO_USART3_RX    (GPIO_USART3_RX_1) /* PD9 */
 #define GPIO_USART3_TX    (GPIO_USART3_TX_1) /* PD8 */
 
+/* I2C1 and I2C2 GPIO pin definitions (external 10k pull-ups) */
+
+#define GPIO_I2C1_SCL       (GPIO_I2C1_SCL_2)   /* PB6  */
+#define GPIO_I2C1_SDA       (GPIO_I2C1_SDA_2)   /* PB7  */
+#define GPIO_I2C2_SCL       (GPIO_I2C2_SCL_2)   /* PB10 */
+#define GPIO_I2C2_SDA       (GPIO_I2C2_SDA_2)   /* PB11 */
+
+/* The same pins as open-drain GPIO outputs, used by the I2C driver to
+ * recover a stuck bus.
+ */
+
+#define GPIO_I2C1_SCL_GPIO  (GPIO_OUTPUT | GPIO_FLOAT | GPIO_OPENDRAIN | GPIO_PORTB | GPIO_PIN6)   /* PB6  */
+#define GPIO_I2C1_SDA_GPIO  (GPIO_OUTPUT | GPIO_FLOAT | GPIO_OPENDRAIN | GPIO_PORTB | GPIO_PIN7)   /* PB7  */
+#define GPIO_I2C2_SCL_GPIO  (GPIO_OUTPUT | GPIO_FLOAT | GPIO_OPENDRAIN | GPIO_PORTB | GPIO_PIN10)  /* PB10 */
+#define GPIO_I2C2_SDA_GPIO  (GPIO_OUTPUT | GPIO_FLOAT | GPIO_OPENDRAIN | GPIO_PORTB | GPIO_PIN11)  /* PB11 */
+
 /* DMA mappings */
 #define DMAMAP_USART1_TX (DMAMAP_DMA1_USART1_TX)
 #define DMAMAP_USART1_RX (DMAMAP_DMA1_USART1_RX)
@@ -283,6 +299,9 @@
 #define GPIO_GTIMB1_CH2OUT (GPIO_GTIMB1_CH2OUT_0)  /* PE6 */
 #define GPIO_GTIMB1_CH3OUT (GPIO_GTIMB1_CH3OUT_0)  /* PE0 */
 #define GPIO_GTIMB1_CH4OUT (GPIO_GTIMB1_CH4OUT_0)  /* PE1 */
+
+/* GTIMB2 (CH Output) */
+#define GPIO_GTIMB2_CH3OUT (GPIO_GTIMB2_CH3OUT_1) /* PD3 */
 
 /* GTIMA7 (CH Input) */
 #define GPIO_GTIMA7_CH1IN  (GPIO_GTIMA7_CH2IN_1) /* PB15 */
