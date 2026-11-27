@@ -20,32 +20,6 @@
 #
 # ##############################################################################
 
-set(SRCS
-    arm_exception.S
-    arm_saveusercontext.S
-    arm_cpuinfo.c
-    arm_doirq.c
-    arm_hardfault.c
-    arm_initialstate.c
-    arm_svcall.c
-    arm_systemreset.c
-    arm_trigger_irq.c)
-
-if(CONFIG_ENABLE_ALL_SIGNALS)
-  list(APPEND SRCS arm_schedulesigaction.c arm_sigdeliver.c)
-endif()
-
-if(NOT CONFIG_ARCH_HAVE_CUSTOM_VECTORS)
-  list(APPEND SRCS arm_vectors.c)
-endif()
-
-if((DEFINED CONFIG_DEBUG_FEATURES AND CONFIG_DEBUG_FEATURES)
-   OR (DEFINED CONFIG_ARM_COREDUMP_REGION AND CONFIG_ARM_COREDUMP_REGION))
-  list(APPEND SRCS arm_dumpnvic.c)
-endif()
-
-if(CONFIG_ARCH_RAMVECTORS)
-  list(APPEND SRCS arm_ramvec_initialize.c arm_ramvec_attach.c)
-endif()
+set(SRCS arm_doirq.c arm_cpuinfo.c)
 
 target_sources(arch PRIVATE ${SRCS})

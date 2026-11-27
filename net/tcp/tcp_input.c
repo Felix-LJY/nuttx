@@ -1195,6 +1195,15 @@ found:
 
   dev->d_len -= (len + iplen);
 
+  /* No data is queued for the response yet.  d_sndlen can still hold the
+   * length of the last segment that the device sent (over the loopback
+   * device: the segment that is this input).  The paths below that do not
+   * clear it (FIN_WAIT_1, FIN_WAIT_2, a FIN in ESTABLISHED) would then send
+   * that many bytes of the input buffer back to the peer as our data.
+   */
+
+  dev->d_sndlen = 0;
+
 #if defined(CONFIG_NET_STATISTICS) && \
     defined(CONFIG_NET_TCP_DEBUG_DROP_RECV)
 
@@ -1352,7 +1361,6 @@ found:
                     tcp_getsequence(conn->sndseq), ackseq, unackseq,
                     (uint32_t)conn->tx_unacked);
               tcp_setsequence(conn->sndseq, ackseq);
-              conn->nrtx = 0;
             }
         }
 #endif
@@ -1378,6 +1386,20 @@ found:
           m = m - (conn->sv >> 2);
           conn->sv += m;
           conn->rto = (conn->sa >> 3) + conn->sv;
+        }
+#endif
+
+#ifdef CONFIG_NET_TCP_WRITE_BUFFERS
+      /* The peer acknowledges new data: reset the retry count, also when
+       * it does not acknowledge all the data sent.  RFC 1122, section
+       * 4.2.3.5, counts the retransmissions of the same segment.  Do it
+       * after the RTT estimate: the ACK of a retransmission gives no RTT
+       * sample (Karn's algorithm).
+       */
+
+      if (conn->tx_unacked < lasttxunacked)
+        {
+          conn->nrtx = 0;
         }
 #endif
 
@@ -1466,8 +1488,21 @@ skip_rtt:
                   return;
                 }
             }
+          else if (((conn->tcpstateflags & TCP_STATE_MASK) <=
+                    TCP_FIN_WAIT_2) && dev->d_len == 0 &&
+                   (tcp->flags & (TCP_SYN | TCP_FIN)) == 0 &&
+                   TCP_SEQ_LT(seq, conn->rcv_adv))
+            {
+              /* A segment without data, SYN or FIN is acceptable if
+               * RCV.NXT =< SEG.SEQ < RCV.NXT+RCV.WND (RFC 9293, 3.10.7.4).
+               * It goes on to the window update and the state machine, and
+               * gets no ACK.
+               */
+            }
           else if ((conn->tcpstateflags & TCP_STATE_MASK) <= TCP_FIN_WAIT_2)
             {
+              tcp_recvwindow_loss(dev, conn);
+
 #ifdef CONFIG_NET_TCP_OUT_OF_ORDER
               /* Queue out-of-order segments. */
 

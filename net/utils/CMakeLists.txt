@@ -33,8 +33,7 @@ set(SRCS
     net_snoop.c
     net_cmsg.c
     net_iob_concat.c
-    net_mask2pref.c
-    net_bufpool.c)
+    net_mask2pref.c)
 
 # IPv6 utilities
 
@@ -56,9 +55,8 @@ endif()
 
 # ICMP utilities
 
-if(CONFIG_NET_ICMP AND NOT CONFIG_NET_ICMP_NO_STACK)
-  list(APPEND SRCS net_icmpchksum.c)
-elseif(CONFIG_NET_ICMPv6 AND NOT CONFIG_NET_ICMPv6_NO_STACK)
+if((CONFIG_NET_ICMP AND NOT CONFIG_NET_ICMP_NO_STACK)
+   OR (CONFIG_NET_ICMPv6 AND NOT CONFIG_NET_ICMPv6_NO_STACK))
   list(APPEND SRCS net_icmpchksum.c)
 endif()
 

@@ -1056,6 +1056,7 @@ config ARCH_ARM7TDMI
 	select ARCH_DCACHE
 	select ARCH_ICACHE
 	select LIBC_ATOMIC_IRQ
+	select ARCH_HAVE_DEBUG
 	---help---
 		The Arm7TDMI-S is an excellent workhorse processor capable of a wide
 		array of applications. Traditionally used in mobile handsets, the
@@ -1066,6 +1067,7 @@ config ARCH_ARM920T
 	default n
 	select ARCH_DCACHE
 	select ARCH_ICACHE
+	select ARCH_HAVE_DEBUG
 	select ARCH_HAVE_MMU
 	select ARCH_USE_MMU
 	---help---
@@ -1083,6 +1085,7 @@ config ARCH_ARM926EJS
 	default n
 	select ARCH_DCACHE
 	select ARCH_ICACHE
+	select ARCH_HAVE_DEBUG
 	select ARCH_HAVE_MMU
 	select ARCH_USE_MMU
 	select LIBC_ATOMIC_IRQ
@@ -1107,6 +1110,7 @@ config ARCH_ARM1136J
 	default n
 	select ARCH_DCACHE
 	select ARCH_ICACHE
+	select ARCH_HAVE_DEBUG
 	select ARCH_HAVE_MMU
 	select ARCH_USE_MMU
 	---help---
@@ -1119,6 +1123,7 @@ config ARCH_ARM1156T2
 	default n
 	select ARCH_DCACHE
 	select ARCH_ICACHE
+	select ARCH_HAVE_DEBUG
 	select ARCH_HAVE_MMU
 	select ARCH_USE_MMU
 	---help---
@@ -1130,6 +1135,7 @@ config ARCH_ARM1176JZ
 	default n
 	select ARCH_DCACHE
 	select ARCH_ICACHE
+	select ARCH_HAVE_DEBUG
 	select ARCH_HAVE_MMU
 	select ARCH_USE_MMU
 	---help---
@@ -1261,6 +1267,7 @@ config ARCH_ARMV7R
 	bool
 	default n
 	select ARCH_HAVE_CPUINFO
+	select ARCH_HAVE_DEBUG
 	select ARCH_HAVE_PERF_EVENTS
 	select ARCH_HAVE_PERF_EVENTS_USER_ACCESS
 	select ARM_HAVE_WFE_SEV
@@ -1400,6 +1407,7 @@ config ARCH_ARMV8R
 	select ONESHOT_COUNT
 	select ALARM_ARCH
 	select ARM_HAVE_WFE_SEV
+	select ARCH_HAVE_DEBUG
 
 config ARM_GIC_VERSION
 	int "GIC version"
@@ -1410,6 +1418,18 @@ config ARM_GIC_VERSION
 	---help---
 		Version of Generic Interrupt Controller (GIC) supported.
 
+config ARCH_ARM_A_R
+	bool
+	default ARCH_ARM7TDMI || ARCH_ARM920T || ARCH_ARM926EJS || ARCH_ARM1136J || ARCH_ARM1156T2 || ARCH_ARM1176JZ || ARCH_ARMV7A || ARCH_ARMV7R || ARCH_ARMV8R
+	---help---
+		General ARM Cortex A/R
+
+config ARCH_ARM_M
+	bool
+	default ARCH_ARMV6M || ARCH_ARMV7M || ARCH_ARMV8M
+	---help---
+		General ARM Cortex M
+
 config ARCH_FAMILY
 	string
 	default "arm"		if ARCH_ARM7TDMI || ARCH_ARM920T || ARCH_ARM926EJS || ARCH_ARM1136J || ARCH_ARM1156T2 || ARCH_ARM1176JZ
@@ -1419,6 +1439,11 @@ config ARCH_FAMILY
 	default "armv7-r"	if ARCH_ARMV7R
 	default "armv8-m"	if ARCH_ARMV8M
 	default "armv8-r"	if ARCH_ARMV8R
+
+config ARCH_FAMILY_COMMON
+	string
+	default "arm_a_r"	if ARCH_ARM_A_R
+	default "arm_m"		if ARCH_ARM_M
 
 config ARCH_CHIP
 	string
@@ -1844,8 +1869,38 @@ config UNWINDER_ARM
 
 endchoice # Choose ARM unwinder
 
-endif
+endif # SCHED_BACKTRACE
 
+config ARM_STACKCHECK
+	bool
+	default n
+	---help---
+		This check uses R10 to check for a stack overflow within each
+		function call. This has performances and code size impacts, but it
+		will be able to catch hard to find stack overflows.
+
+		Currently only available only for the STM32, SAM3/4 and SAMA5D
+		architectures.  The changes are not complex and patches for
+		other architectures will be accepted.
+
+		This option requires that you are using a GCC toolchain and that
+		you also include -finstrument-functions in your CFLAGS when you
+		compile.  This addition to your CFLAGS should probably be added
+		to the definition of the CFFLAGS in your board Make.defs file.
+
+config ARM_STACKCHECK_BREAKPOINT
+	bool
+	default n
+	depends on ARM_STACKCHECK
+	---help---
+		If enabled, a hard-coded breakpoint will be inserted to the stack
+		overflow trap. This is useful to stop the execution of the program
+		and diagnose the issue before the hardfault handler is called (and
+		context information is lost).
+
+if ARCH_ARM_M
+source "arch/arm/src/arm_m/Kconfig"
+endif
 if ARCH_ARMV6M
 source "arch/arm/src/armv6-m/Kconfig"
 endif

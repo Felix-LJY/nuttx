@@ -85,7 +85,7 @@
  */
 
 #if !defined(EXTRA_FMT) && !defined(EXTRA_ARG) && \
-    defined(CONFIG_HAVE_FUNCTIONNAME) && !defined(CONFIG_DEFAULT_SMALL)
+    defined(CONFIG_HAVE_FUNCTIONNAME) && defined(CONFIG_DEBUG_FUNCTIONNAME)
 #  define EXTRA_FMT "%s: "
 #  define EXTRA_ARG ,__FUNCTION__
 #endif
@@ -117,6 +117,11 @@
 
 #ifndef __arch_syslog
 #  define __arch_syslog syslog
+#endif
+
+#ifdef CONFIG_CPP_HAVE_VARARGS
+#  define _emerg(format, ...) \
+   __arch_syslog(LOG_EMERG, EXTRA_FMT format EXTRA_ARG, ##__VA_ARGS__)
 #endif
 
 #if !defined(CONFIG_DEBUG_ALERT)
@@ -1470,6 +1475,8 @@ void lib_dumpvfile(int fd, FAR const char *msg, FAR const struct iovec *iov,
  */
 
 #ifndef CONFIG_CPP_HAVE_VARARGS
+void _emerg(FAR const char *format, ...) syslog_like(1, 2);
+
 #ifdef CONFIG_DEBUG_ALERT
 void _alert(FAR const char *format, ...) syslog_like(1, 2);
 #endif

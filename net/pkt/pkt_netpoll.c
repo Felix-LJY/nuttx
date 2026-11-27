@@ -128,17 +128,33 @@ static uint32_t pkt_poll_eventhandler(FAR struct net_driver_s *dev,
           eventset |= POLLHUP | POLLERR;
         }
 
-      /* A poll is a sign that we are free to send data. */
+      /* A poll is a sign that we are free to send data.  Without write
+       * buffers the device polls every packet connection when one of them
+       * sends: an epoll set (POLLALWAYS) gets POLLOUT only from its own,
+       * or when the last check found no free IOB.
+       */
 
       else if (psock_pkt_cansend(info->conn) >= 0)
         {
-          eventset |= POLLOUT;
+#ifndef CONFIG_NET_PKT_WRITE_BUFFERS
+          if ((info->fds->events & POLLALWAYS) == 0 || info->full ||
+              info->conn->sending > 0)
+#endif
+            {
+              eventset |= POLLOUT;
+            }
+
+          info->full = false;
+        }
+      else
+        {
+          info->full = true;
         }
 
 #ifdef CONFIG_NET_TIMESTAMP
       /* Check for timestamping data */
 
-      if (!IOB_QEMPTY(&info->conn->errahead))
+      if (!IOB_QEMPTY(&info->conn->sconn.s_errahead))
         {
           eventset |= POLLPRI | POLLERR;
         }
@@ -271,7 +287,8 @@ int pkt_pollsetup(FAR struct socket *psock, FAR struct pollfd_s *fds)
 
   /* Check for write data availability now */
 
-  if (psock_pkt_cansend(conn) >= 0)
+  info->full = psock_pkt_cansend(conn) < 0;
+  if (!info->full)
     {
       /* Normal data may be sent without blocking (at least one byte). */
 
@@ -281,7 +298,7 @@ int pkt_pollsetup(FAR struct socket *psock, FAR struct pollfd_s *fds)
   /* Check for timestamping data */
 
 #ifdef CONFIG_NET_TIMESTAMP
-  if (!IOB_QEMPTY(&conn->errahead))
+  if (!IOB_QEMPTY(&conn->sconn.s_errahead))
     {
       eventset |= POLLPRI | POLLERR;
     }

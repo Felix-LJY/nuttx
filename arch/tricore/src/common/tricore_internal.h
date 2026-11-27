@@ -89,7 +89,7 @@
 #  define CONFIG_ARCH_INTERRUPTSTACK 0
 #endif
 
-#define INTSTACK_SIZE (CONFIG_ARCH_INTERRUPTSTACK & ~STACKFRAME_ALIGN_MASK)
+#define INTSTACK_SIZE STACKFRAME_ALIGN_DOWN(CONFIG_ARCH_INTERRUPTSTACK)
 
 /* This is the value used to mark the stack for subsequent stack monitoring
  * logic.
@@ -117,31 +117,24 @@
 
 #define tricore_fullcontextrestore() sys_call0(SYS_restore_context)
 
+/* Update tls_info when task switches */
+
+#define tricore_set_tls_info(val)                                      \
+  do                                                                   \
+    {                                                                  \
+      tricore_mtcr(TRICORE_CPU_PSW,                                    \
+                   tricore_mfcr(TRICORE_CPU_PSW) | PSW_GW);            \
+      write_sysreg(val, a8);                                           \
+      tricore_mtcr(TRICORE_CPU_PSW,                                    \
+                   tricore_mfcr(TRICORE_CPU_PSW) & (~PSW_GW));         \
+    } while (0)
+
 /****************************************************************************
  * Public Types
  ****************************************************************************/
 
 #ifndef __ASSEMBLY__
 typedef void (*up_vector_t)(void);
-
-/* Bus trap hook function type for safety test modules.
- * Returns OK if the trap was handled, ERROR otherwise.
- */
-
-typedef int (*tricore_bustrap_hook_t)(uint32_t tid, void *context);
-
-/* Trap information that tricore_vectors.S/.asm builds on the stack and
- * passes to tricore_trapcall and tricore_svcall; keep the layout in
- * sync with the vectors.
- */
-
-struct tricore_trap_s
-{
-  uintptr_t taddr;  /* Trap return address (A11) */
-  uint8_t   tid;    /* Trap identification number (TIN) */
-  uint8_t   tclass; /* Trap class */
-  uint8_t   tcpu;   /* Core that took the trap */
-};
 #endif
 
 /****************************************************************************
@@ -182,13 +175,31 @@ extern uintptr_t        _eheap[]; /* End+1 of .heap */
  ****************************************************************************/
 
 /****************************************************************************
+ * Name: tricore_irq_from_lasr
+ *
+ * Description:
+ *   Get irq number from ICU's last acknowledged SRN register
+ *
+ ****************************************************************************/
+
+static inline_function int tricore_irq_from_lasr(void)
+{
+  uintptr_t addr = TRICORE_INT_LASR_BASE +
+                   up_cpu_index() * TRICORE_INT_LASR_SPACING;
+
+  return (getreg32(addr) >> 16) & 0x7ff;
+}
+
+/****************************************************************************
  * Public Function Prototypes
  ****************************************************************************/
 
 /* Interrupt ****************************************************************/
 
 void tricore_ack_irq(int irq);
-void tricore_doirq(void);
+int tricore_srpn_to_irq(int srpn);
+int tricore_irq_to_srpn(int irq);
+void tricore_src_init(int irq, uint8_t tos, uint8_t srpn);
 
 /* Startup ******************************************************************/
 
@@ -212,15 +223,6 @@ uint32_t tricore_clock_asclinf(void);
 /* Signal handling **********************************************************/
 
 void tricore_sigdeliver(void);
-
-/* Exception Handler ********************************************************/
-
-void tricore_svcall(volatile void *trap);
-void tricore_trapcall(volatile void *trap);
-void tricore_trapinit(void);
-void tricore_bustrap_register_hook(tricore_bustrap_hook_t hook);
-void tricore_fcu_register_pool(void *base, size_t num);
-void tricore_fcu_recover(void);
 
 /* Context Save Areas *******************************************************/
 
@@ -262,7 +264,8 @@ void tricore_mpuinit(void);
 /* System Timer *************************************************************/
 
 struct oneshot_lowerhalf_s *
-tricore_systimer_initialize(uintptr_t tbase, int irq, uint64_t freq);
+tricore_systimer_initialize(uintptr_t tbase, uintptr_t fr_tbase,
+                            int irq, uint64_t freq);
 
 /* Debug ********************************************************************/
 

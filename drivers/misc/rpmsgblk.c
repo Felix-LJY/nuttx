@@ -24,6 +24,7 @@
  * Included Files
  ****************************************************************************/
 
+#include <sys/mount.h>
 #include <sys/types.h>
 
 #include <stdio.h>
@@ -53,8 +54,13 @@ struct rpmsgblk_s
 {
   struct block_operations blk;         /* Rpmsg-Block device operation */
   struct rpmsg_endpoint   ept;         /* Rpmsg endpoint */
-  FAR const char         *remotecpu;   /* The server cpu name */
-  FAR const char         *remotepath;  /* The device path in the server cpu */
+
+  /* The server cpu name and the device path in the server cpu */
+
+  char                    remotecpu[RPMSG_NAME_SIZE];
+  char                    remotepath[RPMSG_NAME_SIZE -
+                                     RPMSGBLK_NAME_PREFIX_LEN];
+
   sem_t                   wait;        /* Wait sem, used for preventing any
                                         * operation until the connection
                                         * between two cpu established.
@@ -702,13 +708,14 @@ static int rpmsgblk_default_ioctl(FAR struct inode *inode, int cmd,
   msg->arg     = arg;
   msg->arglen  = arglen;
 
-  if (arglen > 0)
+  if (arg != 0 && arglen > 0)
     {
       memcpy(msg->buf, (FAR void *)(uintptr_t)arg, arglen);
     }
 
   return rpmsgblk_send_recv(priv, RPMSGBLK_IOCTL, false, &msg->header,
-                            msglen, arglen > 0 ? (FAR void *)arg : NULL);
+                            msglen, arglen > 0 && arg != 0 ?
+                            (FAR void *)arg : NULL);
 }
 
 /****************************************************************************
@@ -853,20 +860,25 @@ static int rpmsgblk_send_recv(FAR struct rpmsgblk_s *priv,
 
   if (copy)
     {
-      ret = rpmsg_send(&priv->ept, msg, len);
-    }
-  else
-    {
-      ret = rpmsg_send_nocopy(&priv->ept, msg, len);
-    }
+      uint32_t buflen;
+      FAR void *buf;
 
-  if (ret < 0)
-    {
-      if (copy == false)
+      buf = rpmsgblk_get_tx_payload_buffer(priv, &buflen);
+      if (buf == NULL)
         {
-          rpmsg_release_tx_buffer(&priv->ept, msg);
+          ret = -ENOMEM;
+          goto fail;
         }
 
+      DEBUGASSERT(len <= buflen);
+      memcpy(buf, msg, len);
+      msg = buf;
+    }
+
+  ret = rpmsg_send_nocopy(&priv->ept, msg, len);
+  if (ret < 0)
+    {
+      rpmsg_release_tx_buffer(&priv->ept, msg);
       goto fail;
     }
 
@@ -1152,6 +1164,7 @@ static void rpmsgblk_device_created(FAR struct rpmsg_device *rdev,
       priv->ept.ns_bound_cb = rpmsgblk_ns_bound;
       snprintf(buf, sizeof(buf), "%s%s", RPMSGBLK_NAME_PREFIX,
                priv->remotepath);
+      rpmsg_set_priority(&priv->ept, RPMSG_PRIO_RT);
       rpmsg_create_ept(&priv->ept, rdev, buf,
                        RPMSG_ADDR_ANY, RPMSG_ADDR_ANY,
                        rpmsgblk_ept_cb, NULL);
@@ -1281,8 +1294,8 @@ int rpmsgblk_register(FAR const char *remotecpu, FAR const char *remotepath,
 
   /* Initialize the rpmsg device */
 
-  dev->remotecpu  = remotecpu;
-  dev->remotepath = remotepath;
+  strlcpy(dev->remotecpu, remotecpu, sizeof(dev->remotecpu));
+  strlcpy(dev->remotepath, remotepath, sizeof(dev->remotepath));
 
   nxsem_init(&dev->wait, 0, 0);
   nxmutex_init(&dev->lock);
@@ -1324,6 +1337,63 @@ fail_with_rpmsg:
                             NULL);
 
 fail:
+  nxsem_destroy(&dev->wait);
+  nxmutex_destroy(&dev->lock);
+  kmm_free(dev);
+  return ret;
+}
+
+/****************************************************************************
+ * Name: rpmsgblk_unregister
+ *
+ * Description:
+ *   Rpmsg-blk client uninitialize function, the client cpu should call
+ *   this function in the board uninitialize process.
+ *
+ * Parameters:
+ *   localpath - the device you want to unregister in the local cpu
+ *
+ * Returned Values:
+ *   OK on success; A negated errno value is returned on any failure.
+ *
+ ****************************************************************************/
+
+int rpmsgblk_unregister(FAR const char *localpath)
+{
+  FAR struct rpmsgblk_s *dev;
+  FAR struct inode *inode;
+  int ret;
+
+  ret = find_blockdriver(localpath, MS_RDONLY, &inode);
+  if (ret < 0)
+    {
+      ferr("ERROR: Failed to find blkdriver, ret=%d\n", ret);
+      return ret;
+    }
+
+  dev = inode->i_private;
+  ret = close_blockdriver(inode);
+  if (ret < 0)
+    {
+      ferr("ERROR: Failed to close blkdriver, ret=%d\n", ret);
+      return ret;
+    }
+
+  ret = unregister_blockdriver(localpath);
+  if (ret < 0)
+    {
+      ferr("ERROR: unregister driver failed, ret=%d\n", ret);
+      return ret;
+    }
+
+  /* Unregister the rpmsg callback */
+
+  rpmsg_unregister_callback(dev,
+                            rpmsgblk_device_created,
+                            rpmsgblk_device_destroy,
+                            NULL,
+                            NULL);
+
   nxsem_destroy(&dev->wait);
   nxmutex_destroy(&dev->lock);
   kmm_free(dev);

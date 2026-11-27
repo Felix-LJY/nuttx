@@ -35,6 +35,7 @@ if RPTUN
 
 choice RPTUN_AUTO_RESET
 	prompt "rptun auto reset peer"
+	default RPTUN_AUTO_RESET_IN_REBOOT_NOTIFIER if BMP
 	default RPTUN_AUTO_RESET_IN_PANIC_NOTIFIER
 
 config RPTUN_AUTO_RESET_DISABLE
@@ -56,6 +57,15 @@ config RPTUN_AUTO_RESET_IN_REBOOT_NOTIFIER
 
 endchoice # RPTUN_AUTO_RESET
 
+config RPTUN_REMOTE_PANIC_SILENT
+	bool "Silence syslog on remote-triggered panic"
+	default n
+	---help---
+		When a remote core asks this core to panic, set the system
+		wide log mask to LOG_NONE first, so that only the core that
+		crashed prints its crash log. The mask is not restored; a
+		coredump to syslog still prints, as it raises the mask itself.
+
 config RPTUN_BMP
 	bool "rptun bmp support"
 	default n
@@ -68,9 +78,9 @@ config RPTUN_BMP
 config RPTUN_IVSHMEM
 	bool "rptun ivshmem support"
 	default n
-	depends on PCI_IVSHMEM && DEV_SIMPLE_ADDRENV
+	depends on IVSHMEM && DEV_SIMPLE_ADDRENV
 	---help---
-		This is rptun driver based on pci ivshmem.
+		This is rptun driver based on ivshmem.
 
 if RPTUN_IVSHMEM
 
@@ -110,6 +120,31 @@ config RPTUN_IVSHMEM_RPMB_PATH
 
 endif
 
+config RPTUN_START_SYNC
+	bool "rptun start devices synchronously"
+	default n
+	---help---
+		By default rptun spawns a short lived "rptun" kernel thread on every
+		start to bring the remote proc up and to wait for the peer to publish
+		VIRTIO_CONFIG_STATUS_DRIVER_OK.  Each start/stop cycle therefore
+		allocates and releases a TCB and a stack, and the stop path has to
+		SIGKILL the thread out of its peer wait.
+
+		Enable this option to run the whole sequence inline in the caller's
+		context instead.  No thread is created and a start/stop cycle performs
+		no dynamic allocation at all.
+
+		Be aware of the trade-off: the caller blocks until the peer has
+		driven every virtio device in the resource table, forever if the
+		peer has no driver for one of them.
+		With RPTUN_IS_AUTOSTART this stalls board bring-up, and when entered
+		through RPTUNIOC_START (rptun_boot()) the global rptun lock is held for
+		the whole wait, which blocks rptun_reset()/rptun_poweroff() on every
+		rptun instance, including from the panic notifier.
+
+		Only select this when the peer is known to be up before this side
+		starts, or when stalling the caller is acceptable.
+
 config RPTUN_PRIORITY
 	int "rptun thread priority"
 	default 224
@@ -125,5 +160,20 @@ config RPTUN_STATUS_TIMEOUT_MS
 config RPTUN_LOADER
 	bool "rptun loader support"
 	default n
+
+config RPTUN_TRACE_DUMP
+	bool "rptun dump remote core's syslog"
+	default y
+	depends on SYSLOG_RPMSG_SERVER
+	---help---
+		Print the remote core's syslog buffer (its RSC_TRACE entry) on
+		halt and on RPTUNIOC_DUMP.
+
+config RPTUN_RSC_DUMP
+	bool "rptun dump the resource table"
+	default n
+	---help---
+		Let RPTUNIOC_DUMP with RPTUN_DUMP_RSC print the resource table
+		through rptun_dump_resource().
 
 endif # RPTUN

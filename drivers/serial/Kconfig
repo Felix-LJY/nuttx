@@ -74,7 +74,7 @@ config SERIAL_CONSOLE
 
 config SERIAL_GDBSTUB
 	bool "GDBSTUB Serial support"
-	depends on LIB_GDBSTUB
+	depends on LIBC_GDBSTUB
 	default n
 
 if SERIAL_GDBSTUB
@@ -254,10 +254,10 @@ config STANDARD_SERIAL
 
 config SERIAL_NPOLLWAITERS
 	int "Number of poll threads"
-	default 4
+	default 2
 	---help---
 		Maximum number of threads than can be waiting for POLL events.
-		Default: 4
+		Default: 2
 
 config SERIAL_IFLOWCONTROL
 	bool
@@ -343,6 +343,28 @@ config SERIAL_TERMIOS
 		(baud, parity, flow control) are not configurable at runtime.
 		Note: other software settings (echo, \r\n<->\n, break, tcflush)
 		are always supported.
+
+config SERIAL_WINSIZE
+	bool "Terminal window size (TIOCGWINSZ/TIOCSWINSZ)"
+	default !DEFAULT_SMALL
+	---help---
+		Enable TIOCGWINSZ and TIOCSWINSZ ioctl support in the serial
+		and pseudo-terminal drivers.  When enabled, each uart_dev_s
+		carries a struct winsize (8 bytes).  A window size change sends
+		SIGWINCH to the foreground process if CONFIG_TTY_SIGINT or
+		CONFIG_TTY_SIGTSTP is enabled.
+
+		Disable on memory-constrained targets that never resize a
+		terminal to save Flash and per-device SRAM.
+
+config SERIAL_BREAK
+	bool "Serial line break (tcsendbreak) support"
+	default !DEFAULT_SMALL
+	---help---
+		Enable TCSBRK and TCSBRKP ioctl handling and the
+		uart_tcsendbreak() function.  When disabled, the break
+		ioctls return -ENOTTY (and tcsendbreak() returns -1 with
+		errno set to ENOTTY), saving Flash on small targets.
 
 config TTY_LAUNCH
 	bool "Enable feature TTY launch program"
@@ -871,25 +893,34 @@ source "drivers/serial/Kconfig-sci"
 
 config RAM_UART
 	bool "RAM uart driver"
-	select SERIAL_RXDMA
-	select SERIAL_TXDMA
 	default n
 	---help---
 		It uses the memory block in the kernel as a communication medium,
-		which can communicate between different processes or different CPUs
+		which can communicate between different processes or different CPUs.
+		It is a character device on two shared rings, without the serial
+		upper half.
 
 if RAM_UART
 config RAM_UART_POLLING_INTERVAL
 	int "RAM uart buffer check interval"
 	default USEC_PER_TICK
 	---help---
-		Interval in milliseconds to check for new data on uart ram buffer
+		Interval in microseconds between polls of the RAM uart buffer
 
 config RAM_UART_BUFSIZE
 	int "RAM_UART buffer size"
 	default 1024
+	range 2 16777152
 	---help---
-		The size of the RAM_UART buffer in bytes
+		The capacity in bytes of the shared ring in each direction.  The
+		upper bound keeps the rounded-up ring within the 24-bit ring index.
+
+config RAM_UART_NPOLLWAITERS
+	int "RAM uart poll waiters"
+	default 2
+	---help---
+		Maximum number of threads that can be waiting for POLL events on a
+		single RAM uart device.
 
 config RAM_UART0
 	bool "RAM uart driver 0"

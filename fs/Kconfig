@@ -41,6 +41,38 @@ config DISABLE_MOUNTPOINT
 config FS_UIO
 	bool
 
+config FS_BLOCK_DRIVER
+	bool "Block driver support without mount points" if DISABLE_MOUNTPOINT
+	default !DISABLE_MOUNTPOINT
+	---help---
+		Build the block driver inode helpers (register_blockdriver(),
+		open_blockdriver(), ...) and the FTL layer over MTD.  Always
+		enabled with mount points.  With DISABLE_MOUNTPOINT, enable this
+		to use block drivers (e.g. an FTL over MTD) for raw access
+		without mounting them.
+
+config BLOCK_PARTITION
+	bool "Block partition inode helpers" if DISABLE_MOUNTPOINT
+	depends on FS_BLOCK_DRIVER
+	default FS_BLOCK_DRIVER
+	---help---
+		Register block partition driver inodes (register_blockpartition /
+		register_partition_with_inode) built on top of the block driver
+		inode helpers.  Always enabled with mount points.  With
+		DISABLE_MOUNTPOINT, disable to drop fs_blockpartition.c when
+		block partitions are not needed.
+
+config BLOCK_MERGE
+	bool "Block merge inode helpers" if DISABLE_MOUNTPOINT
+	depends on FS_BLOCK_DRIVER
+	default FS_BLOCK_DRIVER
+	---help---
+		Register a merged block driver inode (register_merge_blockdriver)
+		that presents multiple non-contiguous partitions as one contiguous
+		block device.  Always enabled with mount points.  With
+		DISABLE_MOUNTPOINT, disable to drop fs_blockmerge.c when the
+		merge helper is not needed.
+
 config FS_LARGEFILE
 	bool "Large File Support"
 	default n
@@ -202,11 +234,41 @@ config PSEUDOFS_FILE
 	---help---
 		Support to create a file on pseudo filesystem.
 
+config PSEUDOFS_FILE_READONLY
+	bool "Pseudo files are read-only"
+	default DEFAULT_SMALL
+	depends on PSEUDOFS_FILE
+	---help---
+		Reject write access to pseudo files and disable write, truncate,
+		and writable memory mapping operations.
+
 config SENDFILE_BUFSIZE
 	int "sendfile() buffer size"
 	default 512
 	---help---
 		Size of the I/O buffer to allocate in sendfile().  Default: 512b
+
+config FS_PREALLOC_FILES
+	int "Preallocated file objects"
+	default 0
+	range 0 65535
+	---help---
+		Number of statically reserved struct file objects. If this or
+		FS_ALLOC_FILES is nonzero, file objects use a dedicated memory pool.
+		Otherwise they are allocated directly from fs_heap as before.
+
+		With FS_ALLOC_FILES set to zero, the pool has a fixed capacity and
+		allocation fails immediately when it is empty. Reserve enough objects
+		for system startup as well as all concurrently open files.
+
+config FS_ALLOC_FILES
+	int "File object pool expansion batch size"
+	default 0
+	range 0 65535
+	---help---
+		Number of file objects allocated from fs_heap when the file pool is
+		empty. Set to zero to disable expansion. Expanded blocks are retained
+		for reuse, so heap use follows the peak number of open file objects.
 
 config FS_HEAPSIZE
 	int "Independent heap bytes"
@@ -227,7 +289,8 @@ config FS_HEAPBUF_SECTION
 config FS_MTD_PROXY
 	bool "Auto-create FTL block device when mounting MTD"
 	default y
-	depends on MTD
+	depends on MTD && FS_BLOCK_DRIVER
+	depends on !DISABLE_MOUNTPOINT || !DISABLE_PSEUDOFS_OPERATIONS
 	---help---
 		When enabled, mount() and open_blockdriver() will automatically
 		create a temporary FTL block device for an MTD device that is

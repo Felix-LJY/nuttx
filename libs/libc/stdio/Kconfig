@@ -29,7 +29,7 @@ menu "Standard C I/O"
 config STDIO_DISABLE_BUFFERING
 	bool "Disable STDIO Buffering"
 	depends on FILE_STREAM
-	default n
+	default DEFAULT_SMALL
 	---help---
 		Tiny systems may need to disable all support for I/O buffering in
 		order to minimize the memory footprint.
@@ -75,6 +75,7 @@ config NUNGET_CHARS
 
 choice
 	prompt "printf profile"
+	default LIBC_PRINTF_MINIMAL if DEFAULT_SMALL
 	default LIBC_PRINTF_DEFAULT
 	---help---
 		A profile only sets the defaults of the printf feature options.
@@ -125,7 +126,7 @@ config LIBC_PRINTF_ALT_FORM
 
 config LIBC_PRINTF_OCTAL
 	bool "Enable %o in printf"
-	default y
+	default LIBC_PRINTF_FULL || !DEFAULT_SMALL
 	---help---
 		Without it, printf() reads the argument of %o and prints "?".
 

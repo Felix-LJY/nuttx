@@ -36,6 +36,7 @@
 #include <nuttx/mm/iob.h>
 #include <nuttx/net/ip.h>
 #include <nuttx/net/netdev_lowerhalf.h>
+#include <nuttx/percpu.h>
 #include <nuttx/virtio/virtio.h>
 #include <nuttx/net/wifi_sim.h>
 
@@ -129,6 +130,7 @@ struct virtio_net_priv_s
 
   FAR struct virtio_device *vdev;      /* Virtio device pointer */
   int                       bufnum;    /* TX and RX Buffer number */
+  int                       rxnum;     /* RX buffers in the virtqueue */
 };
 
 /* Virtio Link Layer Header, follow shows the iob buffer layout:
@@ -186,13 +188,14 @@ static void virtio_net_dump(FAR struct virtio_device *vdev);
  * Private Data
  ****************************************************************************/
 
-static struct virtio_driver g_virtio_net_driver =
+static DEFINE_PER_CPU_BMP(struct virtio_driver, g_virtio_net_driver) =
 {
   VIRTIO_ID_NETWORK, /* device id */
   virtio_net_probe,  /* probe */
   virtio_net_remove, /* remove */
   virtio_net_dump,   /* dump */
 };
+#define g_virtio_net_driver this_cpu_var_bmp(g_virtio_net_driver)
 
 static const struct netdev_ops_s g_virtio_net_ops =
 {
@@ -207,14 +210,14 @@ static const struct netdev_ops_s g_virtio_net_ops =
 #ifdef CONFIG_NETDEV_IOCTL
   virtio_net_ioctl,
 #endif
-  virtio_net_txfree,  /* reclaim */
 #ifdef CONFIG_NET_NETPOLL
   virtio_net_txfree,  /* txpoll */
 #endif
 };
 
 #ifdef CONFIG_DRIVERS_WIFI_SIM
-static uint8_t g_netdev_num = 0;
+static DEFINE_PER_CPU_BMP(uint8_t, g_netdev_num);
+#define g_netdev_num this_cpu_var_bmp(g_netdev_num)
 #endif
 
 /****************************************************************************
@@ -305,7 +308,13 @@ static void virtio_net_rxfill(FAR struct netdev_lowerhalf_s *dev)
   FAR netpkt_t *pkt;
   int i;
 
-  for (i = 0; i < priv->bufnum; i++)
+  /* Keep at most priv->bufnum RX buffers outstanding in the virtqueue.
+   * The netpkt quota used to enforce this limit; now that it is gone from
+   * the upper half, bound the refill here so that we do not drain the
+   * shared IOB pool by filling the whole RX ring.
+   */
+
+  for (i = 0; i < priv->bufnum - priv->rxnum; i++)
     {
       /* IOB Offload, Alloc buffer from RX netpkt */
 
@@ -334,6 +343,8 @@ static void virtio_net_rxfill(FAR struct netdev_lowerhalf_s *dev)
           netpkt_free(dev, pkt, NETPKT_RX);
           break;
         }
+
+      priv->rxnum++;
     }
 
   if (i > 0)
@@ -489,7 +500,9 @@ static int virtio_net_ifdown(FAR struct netdev_lowerhalf_s *dev)
     }
 
   /* Drain RX virtqueue to free netpkt buffers that are still queued
-   * but not yet consumed.
+   * but not yet consumed.  Only the buffers the device has used come
+   * back here; the ones still in the avail ring stay queued, so the
+   * count is decremented per buffer instead of being reset.
    */
 
   while (1)
@@ -502,6 +515,7 @@ static int virtio_net_ifdown(FAR struct netdev_lowerhalf_s *dev)
         }
 
       netpkt_free(dev, hdr->pkt, NETPKT_RX);
+      priv->rxnum--;
     }
 
   /* Drain TX virtqueue as well */
@@ -547,14 +561,24 @@ static int virtio_net_send(FAR struct netdev_lowerhalf_s *dev,
     {
       /* The virtqueue has no room.  The packet was not queued, so it is
        * still owned (and will be recycled) by the upper-half.  Reclaim what
-       * the other side has finished and ask for a TX done callback to
-       * resume the transmission.
+       * the other side has finished and retry before touching the
+       * interrupt, so that a retry which succeeds does not needlessly arm
+       * the TX done callback.
        */
 
-      vrterr("net send failed: %d\n", ret);
       virtio_net_txfree(dev);
-      virtqueue_enable_cb_lock(vq, &priv->lock[VIRTIO_NET_TX]);
-      return -ENOMEM;
+      ret = virtio_net_addbuffer(dev, vq, pkt, VIRTIO_NET_TX);
+      if (ret < 0)
+        {
+          /* Still full.  Ask for a TX done callback and report a transient
+           * failure, so that the upper half queues the packet and offers
+           * it again instead of dropping it.
+           */
+
+          vrtinfo("net send busy: %d\n", ret);
+          virtqueue_enable_cb_lock(vq, &priv->lock[VIRTIO_NET_TX]);
+          return -EBUSY;
+        }
     }
 
   virtqueue_kick_lock(vq, &priv->lock[VIRTIO_NET_TX]);
@@ -562,13 +586,6 @@ static int virtio_net_send(FAR struct netdev_lowerhalf_s *dev,
   /* Try return Netpkt TX buffer to upper-half. */
 
   virtio_net_txfree(dev);
-
-  /* If we have no buffer left, enable TX done callback. */
-
-  if (netdev_lower_quota_load(dev, NETPKT_TX) <= 0)
-    {
-      virtqueue_enable_cb_lock(vq, &priv->lock[VIRTIO_NET_TX]);
-    }
 
   return OK;
 }
@@ -613,6 +630,10 @@ static netpkt_t *virtio_net_recv(FAR struct netdev_lowerhalf_s *dev)
       vrtinfo("get NULL buffer\n");
       return NULL;
     }
+
+  /* One RX buffer left the virtqueue; allow rxfill to replenish it. */
+
+  priv->rxnum--;
 
   /* Set the received pkt length */
 
@@ -786,8 +807,6 @@ static int virtio_net_probe(FAR struct virtio_device *vdev)
   /* Initialize the netdev lower half */
 
   netdev = (FAR struct netdev_lowerhalf_s *)priv;
-  netdev->quota[NETPKT_RX] = priv->bufnum;
-  netdev->quota[NETPKT_TX] = priv->bufnum;
   netdev->ops = &g_virtio_net_ops;
 
 #ifdef CONFIG_DRIVERS_WIFI_SIM
@@ -873,8 +892,7 @@ static void virtio_net_dump(FAR struct virtio_device *vdev)
          "mac=%02x:%02x:%02x:%02x:%02x:%02x\n",
          dev->d_ifname,
          mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-  syslog(LOG_EMERG, "    bufnum=%d, iob_free=%d, "
-         "quota: rx=%" PRId32 " tx=%" PRId32
+  syslog(LOG_EMERG, "    bufnum=%d, iob_free=%d"
 #ifdef CONFIG_NET_IPv4
          ", ipv4=%u.%u.%u.%u"
 #endif
@@ -882,9 +900,7 @@ static void virtio_net_dump(FAR struct virtio_device *vdev)
          ", ipv6=%04x:%04x:%04x:%04x:%04x:%04x:%04x:%04x"
 #endif
          "\n",
-         priv->bufnum, iob_navail(false),
-         netdev_lower_quota_load(netdev, NETPKT_RX),
-         netdev_lower_quota_load(netdev, NETPKT_TX)
+         priv->bufnum, iob_navail(false)
 #ifdef CONFIG_NET_IPv4
          , ip4_addr1(dev->d_ipaddr), ip4_addr2(dev->d_ipaddr),
          ip4_addr3(dev->d_ipaddr), ip4_addr4(dev->d_ipaddr)

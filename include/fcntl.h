@@ -88,7 +88,11 @@
 
 #define O_NDELAY     O_NONBLOCK                  /* Synonym for O_NONBLOCK */
 #define O_SYNC       (__O_SYNC | O_DSYNC)        /* Synchronize output on write */
-#define O_RSYNC      O_SYNC                      /* Synchronize input on read */
+#if UINT_MAX > 0xffff
+#define O_RSYNC      (1U << 23)                  /* Synchronize input on read */
+#else
+#define O_RSYNC      O_SYNC                      /* Not supported: no spare bit */
+#endif
 #ifndef NUTTX_NO_EXTENSIONS                      /* See nuttx/compiler.h */
 #define O_BINARY     0                           /* Open the file in binary mode */
 #endif
@@ -98,7 +102,7 @@
  */
 
 #if UINT_MAX > 0xffff
-#  define _O_MAXBIT   22
+#  define _O_MAXBIT   23
 #else
 #  define _O_MAXBIT   15
 #endif
@@ -109,11 +113,12 @@
 #define FNONBLOCK   O_NONBLOCK       /* Don't wait for data */
 #define FAPPEND     O_APPEND         /* Keep contents, append to end */
 #define FSYNC       O_SYNC           /* Synchronize output on write */
+#define FRSYNC      O_RSYNC          /* Synchronize input on read */
 #define FASYNC      O_ASYNC          /* No counterpart in NuttX */
 
 /* FFCNTL is all the bits that may be set via fcntl. */
 
-#define FFCNTL      (FNONBLOCK | FNDELAY | FAPPEND | FSYNC | FASYNC)
+#define FFCNTL      (FNONBLOCK | FNDELAY | FAPPEND | FSYNC | FASYNC | FRSYNC)
 
 /* fcntl() commands */
 
@@ -167,6 +172,11 @@
 #define AT_SYMLINK_FOLLOW     0x0400 /* Follow symbolic links. */
 #define AT_NO_AUTOMOUNT       0x0800 /* Suppress terminal automount traversal */
 #define AT_EMPTY_PATH         0x1000 /* Allow empty relative pathname */
+#define AT_STATX_SYNC_AS_STAT 0x0000 /* Do whatever stat() does (default) */
+#define AT_STATX_FORCE_SYNC   0x2000 /* Force attributes to be sync'd */
+#define AT_STATX_DONT_SYNC    0x4000 /* Do not sync, accept stale values */
+#define AT_STATX_SYNC_TYPE    0x6000 /* Mask for the sync type values */
+#define AT_RECURSIVE          0x8000 /* Apply to the entire subtree */
 
 /* These are the notifications that can be received from F_NOTIFY (linux) */
 
@@ -184,6 +194,15 @@
 #define F_SEAL_GROW         0x0004 /* Prevent file from growing */
 #define F_SEAL_WRITE        0x0008 /* Prevent writes */
 #define F_SEAL_FUTURE_WRITE 0x0010 /* Prevent future writes while mapped */
+
+/* fallocate() mode flag */
+
+#define FALLOC_FL_KEEP_SIZE      0x01 /* Allocate without changing st_size */
+#define FALLOC_FL_PUNCH_HOLE     0x02 /* De-allocate a range (unsupported) */
+#define FALLOC_FL_COLLAPSE_RANGE 0x08 /* Remove a range (unsupported) */
+#define FALLOC_FL_ZERO_RANGE     0x10 /* Zero a range (unsupported) */
+#define FALLOC_FL_INSERT_RANGE   0x20 /* Insert a hole (unsupported) */
+#define FALLOC_FL_UNSHARE_RANGE  0x40 /* Unshare blocks (unsupported) */
 
 #if defined(CONFIG_FS_LARGEFILE)
 #  define F_GETLK64         F_GETLK
@@ -234,6 +253,7 @@ int open(FAR const char *path, int oflag, ...);
 int openat(int dirfd, FAR const char *path, int oflag, ...);
 int fcntl(int fd, int cmd, ...);
 
+int fallocate(int fd, int mode, off_t offset, off_t len);
 int posix_fallocate(int fd, off_t offset, off_t len);
 
 #if defined(__cplusplus)

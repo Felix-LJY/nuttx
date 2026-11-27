@@ -64,6 +64,7 @@ include regmap/Make.defs
 include rpmsg/Make.defs
 include rptun/Make.defs
 include sensors/Make.defs
+include sent/Make.defs
 include serial/Make.defs
 include spi/Make.defs
 include syslog/Make.defs
@@ -85,9 +86,11 @@ include segger/Make.defs
 include usrsock/Make.defs
 include reset/Make.defs
 include pci/Make.defs
+include ivshmem/Make.defs
 include coresight/Make.defs
 include aie/Make.defs
 include tee/Make.defs
+include trace32/Make.defs
 
 ifeq ($(CONFIG_SPECIFIC_DRIVERS),y)
 -include platform/Make.defs

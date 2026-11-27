@@ -238,12 +238,17 @@ static const char *g_white_prefix[] =
 
   "R_IOPORT_",
   "R_SCI_B_UART_",
+  "R_SCI_B_I2C_",
+  "R_RIIC_",
+  "R_CANFD_",
   "R_FSP_",
+  "R_GPT_",
   "RCR",
   "R_BSP",
   "R_CPG",
   "R_XSPI_",
   "RSP_INT_STSn",
+  "R_RTC",
 
   /* Ref:  apps/system/microros, apps/examples/microros_*
    * ROS 2 standard message package names and rosidl scalar type names
@@ -847,6 +852,24 @@ static const char *g_white_content_list[] =
   "buildVersion",
   "logSystem",
 
+  /* Ref:
+   * drivers/trace32/t32fdx/t32fdx.c
+   */
+
+  "T32_Fdx_DefineChannel",
+  "T32_Fdx_InitChannel",
+  "T32_Fdx_EnableChannel",
+  "T32_Fdx_SendPoll",
+  "T32_Fdx_Send",
+  "T32_Fdx_ReceivePoll",
+  "T32_Fdx_Receive",
+  "T32_Fdx_Poll",
+  "T32_Fdx_PollInterrupt",
+  "T32_Fdx_TraceInit",
+  "T32_Fdx_TraceData",
+  "T32_Fdx_TraceData2",
+  "T32_Fdx_GetTimebase",
+
   NULL
 };
 
@@ -921,6 +944,14 @@ static const char *g_white_files[] =
   "gd32vw55x/gdwifi/gdwifi_glue.c",
   "gd32vw55x/gdwifi/gdwifi_newlib_compat.c",
   "gd32vw55x/gdble/gd32_ble.c",
+
+  /* Skip the OpenSSL-to-Mbed-TLS compatibility wrapper: it implements the
+   * OpenSSL API, whose identifiers (X509_*, PKCS12_*, EVP_*, BIO_*, ...)
+   * are mixed case by definition.  Ref:
+   * apps/crypto/openssl_mbedtls_wrapper
+   */
+
+  "openssl_mbedtls_wrapper/",
 
   /* Skip libcxx support header (C++ file, not NuttX style) */
 
@@ -2554,6 +2585,7 @@ int main(int argc, char **argv, char **envp)
                    strncmp(&line[indent], "union\n", 6) == 0 ||  /* May be unnamed */
                    strncmp(&line[indent], "unsigned ", 9) == 0 ||
                    strncmp(&line[indent], "void ", 5) == 0 ||
+                   strncmp(&line[indent], "DEFINE_PER_CPU_", 15) == 0 ||  /* Maybe the percpu define */
                    strncmp(&line[indent], "volatile ", 9) == 0)
             {
               /* Check if this is extern "C";  We don't typically indent
@@ -4356,7 +4388,7 @@ int main(int argc, char **argv, char **envp)
                 }
               else if (!bfunctions && (indent & 1) != 0)
                 {
-                  ERROR("Bad left brace alignment", lineno, indent);
+                  ERROR("Bad right brace alignment", lineno, indent);
                 }
               else if (indent > 0 && prevdnest == 0 &&
                        (bexact ? indent != stmt_indent : (indent & 3) != 0))

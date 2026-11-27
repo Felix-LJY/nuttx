@@ -35,6 +35,7 @@
 #include <nuttx/fs/smart.h>
 #include <nuttx/fs/loopmtd.h>
 #include <nuttx/input/uinput.h>
+#include <nuttx/ivshmem.h>
 #include <nuttx/mtd/mtd.h>
 #include <nuttx/net/loopback.h>
 #include <nuttx/net/rpmsgdrv.h>
@@ -63,6 +64,7 @@
 #include <nuttx/vhost/vhost.h>
 #include <nuttx/virtio/virtio.h>
 #include <nuttx/drivers/optee.h>
+#include <nuttx/video/video_fake.h>
 #include <nuttx/usb/usbhost.h>
 
 /****************************************************************************
@@ -314,6 +316,10 @@ void drivers_initialize(void)
   usbhost_drivers_initialize();
 #endif
 
+#ifdef CONFIG_IVSHMEM
+  ivshmem_register_drivers();
+#endif
+
 #if defined(CONFIG_PCI) && !defined(CONFIG_PCI_LATE_DRIVERS_REGISTER)
   pci_register_drivers();
 #endif
@@ -332,6 +338,10 @@ void drivers_initialize(void)
 
 #ifdef CONFIG_THERMAL
   thermal_init();
+#endif
+
+#ifdef CONFIG_VIDEO_FAKE
+  video_fake_initialize();
 #endif
 
 #ifdef CONFIG_PTP_CLOCK_DUMMY

@@ -82,10 +82,6 @@ ifeq ($(CONFIG_STM32_RTC_LSECLOCK),y)
 CHIP_CSRCS += stm32_lse.c
 endif
 
-ifeq ($(CONFIG_STM32_I2C),y)
-CHIP_CSRCS += stm32_i2c.c
-endif
-
 ifeq ($(CONFIG_STM32_I2S),y)
 CHIP_CSRCS += stm32_i2s.c
 endif
@@ -121,10 +117,6 @@ ifeq ($(CONFIG_STM32_QSPI),y)
 CHIP_CSRCS += stm32_qspi.c
 endif
 
-ifeq ($(CONFIG_STM32_ETHMAC),y)
-CHIP_CSRCS += stm32_ethernet.c
-endif
-
 ifeq ($(CONFIG_DEBUG_FEATURES),y)
 CHIP_CSRCS += stm32_dumpgpio.c
 endif
@@ -139,10 +131,6 @@ endif
 
 ifeq ($(CONFIG_STM32_LTDC),y)
 CHIP_CSRCS += stm32_ltdc.c
-endif
-
-ifeq ($(CONFIG_STM32_DMA2D),y)
-CHIP_CSRCS += stm32_dma2d.c
 endif
 
 

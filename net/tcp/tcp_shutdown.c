@@ -56,21 +56,43 @@ static uint32_t tcp_shutdown_eventhandler(FAR struct net_driver_s *dev,
 
   ninfo("flags: %" PRIx32 "\n", flags);
 
+  /* The connection is gone: nothing more to send */
+
+  if ((flags & TCP_DISCONN_EVENTS) != 0)
+    {
+      tcp_callback_free(conn, conn->shdcb);
+      conn->shdcb = NULL;
+      return flags;
+    }
+
+  /* The FIN goes after the data that the application wrote before
+   * shutdown(): wait while data waits in the write queue or is not yet
+   * acknowledged, as close() does.  The send callback still sends it.
+   * An ACK can come with new data: leave it to the reader (no d_len = 0).
+   */
+
+  if ((conn->shutdown & SHUT_WR) != 0 &&
+      (conn->tx_unacked != 0
 #ifdef CONFIG_NET_TCP_WRITE_BUFFERS
-  /* We don't need the send callback anymore. */
+       || !sq_empty(&conn->write_q)
+#endif
+      ))
+    {
+      return flags;
+    }
+
+#ifdef CONFIG_NET_TCP_WRITE_BUFFERS
+  /* We don't need the send callback anymore.  Free it now: the
+   * connection can stay in TIME_WAIT for a long time.
+   */
 
   if (conn->sndcb != NULL)
     {
-      conn->sndcb->flags = 0;
-      conn->sndcb->event = NULL;
-
-      /* The callback will be freed by tcp_free. */
-
+      tcp_callback_free(conn, conn->sndcb);
       conn->sndcb = NULL;
     }
 #endif
 
-  dev->d_len = 0;
   if ((conn->shutdown & SHUT_WR) != 0)
     {
       flags |= TCP_TXCLOSE;
@@ -110,6 +132,7 @@ static uint32_t tcp_shutdown_eventhandler(FAR struct net_driver_s *dev,
 static inline int tcp_send_fin(FAR struct socket *psock)
 {
   FAR struct tcp_conn_s *conn;
+  bool reclaimed;
   int ret = OK;
 
   /* Interrupts are disabled here to avoid race conditions */
@@ -123,15 +146,40 @@ static inline int tcp_send_fin(FAR struct socket *psock)
        conn->tcpstateflags == TCP_SYN_RCVD ||
        conn->tcpstateflags == TCP_CLOSE_WAIT))
     {
-      if ((conn->shdcb = tcp_callback_alloc(conn)) == NULL)
+      /* A callback of an earlier shutdown() may still wait for the queued
+       * data: it reads conn->shutdown when it runs, so use it again.
+       */
+
+      if (conn->shdcb == NULL &&
+          (conn->shdcb = tcp_callback_alloc(conn)) == NULL)
         {
-          ret = -EBUSY;
-          goto out;
+          /* All callbacks are in use: free a connection that only waits
+           * for the end of its close (for example in TIME_WAIT), as close()
+           * does.  tcp_reclaim() takes a device lock and the list lock: not
+           * with our locks held.  It does not take this connection: a
+           * socket refers to it.
+           */
+
+          conn_dev_unlock(&conn->sconn, conn->dev);
+          reclaimed = tcp_reclaim(NULL);
+          conn_dev_lock(&conn->sconn, conn->dev);
+
+          if (!reclaimed ||
+              (conn->tcpstateflags != TCP_ESTABLISHED &&
+               conn->tcpstateflags != TCP_SYN_SENT &&
+               conn->tcpstateflags != TCP_SYN_RCVD &&
+               conn->tcpstateflags != TCP_CLOSE_WAIT) ||
+              (conn->shdcb == NULL &&
+               (conn->shdcb = tcp_callback_alloc(conn)) == NULL))
+            {
+              ret = -EBUSY;
+              goto out;
+            }
         }
 
       /* Set up to receive TCP data event callbacks */
 
-      conn->shdcb->flags = TCP_POLL;
+      conn->shdcb->flags = TCP_POLL | TCP_ACKDATA | TCP_DISCONN_EVENTS;
       conn->shdcb->event = tcp_shutdown_eventhandler;
       conn->shdcb->priv  = conn; /* reference for event handler to free cb */
 
@@ -167,6 +215,8 @@ out:
 int tcp_shutdown(FAR struct socket *psock, int how)
 {
   FAR struct tcp_conn_s *conn;
+  uint8_t oldshutdown;
+  int ret;
 
   conn = psock->s_conn;
   DEBUGASSERT(conn != NULL);
@@ -176,11 +226,23 @@ int tcp_shutdown(FAR struct socket *psock, int how)
       return -EOPNOTSUPP;
     }
 
+  oldshutdown     = conn->shutdown;
   conn->shutdown |= how;
 
   tcp_unlisten(psock->s_conn); /* No longer accepting connections */
 
-  return tcp_send_fin(psock);
+  ret = tcp_send_fin(psock);
+  if (ret < 0)
+    {
+      /* No FIN will be sent: do not leave the connection marked as shut
+       * down, or close() sends no FIN either ("avoid multiple FIN") and
+       * the connection stays for ever once the peer closes (CLOSE_WAIT).
+       */
+
+      conn->shutdown = oldshutdown;
+    }
+
+  return ret;
 }
 
 #endif /* CONFIG_NET_TCP */

@@ -89,6 +89,7 @@ begin_packed_struct struct rpmsg_reset_msg
 {
   struct reset_rpmsg_header_s    header;
   int                            id;
+  unsigned int                   reason;
   bool                           shared;
   bool                           acquired;
   char                           name[0];
@@ -137,10 +138,10 @@ static int reset_rpmsg_release(FAR struct reset_controller_dev *rcdev,
                                unsigned int id);
 
 static int reset_rpmsg_reset(FAR struct reset_controller_dev *rcdev,
-                             unsigned int id);
+                             unsigned int id, unsigned int reason);
 
 static int reset_rpmsg_assert(FAR struct reset_controller_dev *rcdev,
-                              unsigned int id);
+                              unsigned int id, unsigned int reason);
 
 static int reset_rpmsg_deassert(FAR struct reset_controller_dev *rcdev,
                                 unsigned int id);
@@ -196,6 +197,7 @@ static void reset_rpmsg_client_created(FAR struct rpmsg_device *rdev,
 
   if (strcmp(client->cpuname, rpmsg_get_cpuname(rdev)) == 0)
     {
+      rpmsg_set_priority(&client->ept, RPMSG_PRIO_RT);
       rpmsg_create_ept(&client->ept, rdev, RESET_RPMSG_EPT_NAME,
                        RPMSG_ADDR_ANY, RPMSG_ADDR_ANY,
                        reset_rpmsg_ept_cb, NULL);
@@ -390,7 +392,7 @@ static int reset_rpmsg_release(FAR struct reset_controller_dev *rcdev,
 }
 
 static int reset_rpmsg_reset(FAR struct reset_controller_dev *rcdev,
-                             unsigned int id)
+                             unsigned int id, unsigned int reason)
 {
   FAR struct rpmsg_endpoint *ept;
   FAR struct rpmsg_reset_msg *msg;
@@ -412,13 +414,14 @@ static int reset_rpmsg_reset(FAR struct reset_controller_dev *rcdev,
 
   strlcpy(msg->name, name, len - sizeof(*msg));
   msg->id = id;
+  msg->reason = reason;
   return reset_rpmsg_sendrecv(ept, RESET_RPMSG_RESET,
                               (struct reset_rpmsg_header_s *)msg,
                               len);
 }
 
 static int reset_rpmsg_assert(FAR struct reset_controller_dev *rcdev,
-                              unsigned int id)
+                              unsigned int id, unsigned int reason)
 {
   FAR struct rpmsg_endpoint *ept;
   FAR struct rpmsg_reset_msg *msg;
@@ -440,6 +443,7 @@ static int reset_rpmsg_assert(FAR struct reset_controller_dev *rcdev,
 
   strlcpy(msg->name, name, len - sizeof(*msg));
   msg->id = id;
+  msg->reason = reason;
   return reset_rpmsg_sendrecv(ept, RESET_RPMSG_ASSERT,
                               (struct reset_rpmsg_header_s *)msg,
                               len);
@@ -616,7 +620,7 @@ static int reset_rpmsg_reset_handler(FAR struct rpmsg_endpoint *ept,
   FAR struct rpmsg_reset_msg *msg = data;
   FAR struct reset_control *rstc = reset_rpmsg_find(ept, msg->name, msg->id);
 
-  msg->header.result = reset_control_reset(rstc);
+  msg->header.result = reset_control_reset_reason(rstc, msg->reason);
   return rpmsg_send(ept, data, len);
 }
 
@@ -627,7 +631,7 @@ static int reset_rpmsg_assert_handler(FAR struct rpmsg_endpoint *ept,
   FAR struct rpmsg_reset_msg *msg = data;
   FAR struct reset_control *rstc = reset_rpmsg_find(ept, msg->name, msg->id);
 
-  msg->header.result = reset_control_assert(rstc);
+  msg->header.result = reset_control_assert_reason(rstc, msg->reason);
   return rpmsg_send(ept, data, len);
 }
 
@@ -688,8 +692,7 @@ static bool reset_rpmsg_server_match(FAR struct rpmsg_device *rdev,
   return strcmp(name, RESET_RPMSG_EPT_NAME) == 0;
 }
 
-static void reset_rpmsg_server_ept_release(FAR struct rpmsg_endpoint *ept,
-                                           FAR void *priv)
+static void reset_rpmsg_server_ept_release(FAR struct rpmsg_endpoint *ept)
 {
   FAR struct reset_rpmsg_server_s *server = ept->priv;
   FAR struct reset_rpmsg_s *reset;

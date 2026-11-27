@@ -65,6 +65,7 @@
 #define RPMSG_GET_OUTGOING_FLOWCONTROL  _RPMSGIOC(12)
 #define RPMSG_SET_INCOMING_FLOWCONTROL  _RPMSGIOC(13)
 
+#define RPMSG_SIGNAL_ALLOC_LOCAL        1
 #define RPMSG_SIGNAL_RUNNING            TIOCM_CD
 
 #if CONFIG_RPMSG_POOL_COUNT <= 0
@@ -121,6 +122,12 @@ CODE typedef bool (*rpmsg_match_cb_t)(FAR struct rpmsg_device *rdev,
 CODE typedef void (*rpmsg_bind_cb_t)(FAR struct rpmsg_device *rdev,
                                      FAR void *priv, FAR const char *name,
                                      uint32_t dest);
+CODE typedef void (*rpmsg_bind_extra_cb_t)(FAR struct rpmsg_device *rdev,
+                                           FAR void *priv,
+                                           FAR const char *name,
+                                           uint32_t dest,
+                                           FAR const void *extra,
+                                           size_t extra_len);
 
 /****************************************************************************
  * Public Function Prototypes
@@ -152,6 +159,11 @@ static inline_function bool rpmsg_is_running(FAR struct rpmsg_device *rdev)
   return rpmsg_get_signals(rdev) & RPMSG_SIGNAL_RUNNING;
 }
 
+static inline_function bool rpmsg_alloc_local(FAR struct rpmsg_device *rdev)
+{
+  return rpmsg_get_signals(rdev) & RPMSG_SIGNAL_ALLOC_LOCAL;
+}
+
 #if CONFIG_RPMSG_POOL_COUNT > 0
 FAR void *rpmsg_pool_alloc(size_t size);
 void rpmsg_pool_free(FAR void *addr);
@@ -167,6 +179,16 @@ void rpmsg_unregister_callback(FAR void *priv,
                                rpmsg_dev_cb_t device_destroy,
                                rpmsg_match_cb_t ns_match,
                                rpmsg_bind_cb_t ns_bind);
+int rpmsg_register_callback_extra(FAR void *priv,
+                                  rpmsg_dev_cb_t device_created,
+                                  rpmsg_dev_cb_t device_destroy,
+                                  rpmsg_match_cb_t ns_match,
+                                  rpmsg_bind_extra_cb_t ns_bind_extra);
+void rpmsg_unregister_callback_extra(FAR void *priv,
+                                     rpmsg_dev_cb_t device_created,
+                                     rpmsg_dev_cb_t device_destroy,
+                                     rpmsg_match_cb_t ns_match,
+                                     rpmsg_bind_extra_cb_t ns_bind_extra);
 
 int rpmsg_ioctl(FAR const char *cpuname, int cmd, unsigned long arg);
 int rpmsg_panic(FAR const char *cpuname);

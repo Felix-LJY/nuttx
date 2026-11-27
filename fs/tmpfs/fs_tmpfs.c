@@ -360,6 +360,22 @@ static int tmpfs_realloc_file(FAR struct tmpfs_file_s *tfo,
   size_t allocsize;
   size_t delta;
 
+  /* A mapping points into tfo_data, so the buffer must not move or be
+   * freed while the file is mapped.
+   */
+
+  if (tfo->tfo_maps > 0)
+    {
+      if (newsize > tfo->tfo_alloc)
+        {
+          return -ENOMEM;
+        }
+
+      memset(tfo->tfo_data + newsize, 0, tfo->tfo_alloc - newsize);
+      tfo->tfo_size = newsize;
+      return OK;
+    }
+
   /* Are we growing or shrinking the object? */
 
   if (newsize <= tfo->tfo_alloc)
@@ -2161,6 +2177,27 @@ static off_t tmpfs_seek(FAR struct file *filep, off_t offset, int whence)
   return position;
 }
 
+/****************************************************************************
+ * Name: tmpfs_release_mapping
+ *
+ * Description:
+ *   Drop one mapping and its file reference.  Called with the file locked;
+ *   the lock is released on return.
+ *
+ ****************************************************************************/
+
+static void tmpfs_release_mapping(FAR struct tmpfs_file_s *tfo)
+{
+  /* Give back memory grown for a mapping past EOF */
+
+  if (--tfo->tfo_maps == 0)
+    {
+      tmpfs_realloc_file(tfo, tfo->tfo_size);
+    }
+
+  tmpfs_release_lockedfile(tfo);
+}
+
 static int tmpfs_unmap(FAR struct task_group_s *group,
                        FAR struct mm_map_entry_s *entry,
                        FAR void *start, size_t length)
@@ -2186,13 +2223,25 @@ static int tmpfs_unmap(FAR struct task_group_s *group,
 
   if (length >= entry->length)
     {
-      /* Then remove the mapping from the list */
+      /* Lock the file first: once the entry is removed, the counts must
+       * be dropped.
+       */
+
+      ret = tmpfs_lock_file(tfo);
+      if (ret < 0)
+        {
+          return ret;
+        }
 
       ret = mm_map_remove(get_group_mm(group), entry);
-      if (ret >= 0)
+      if (ret < 0)
         {
-          ret = tmpfs_release_file(tfo);
+          tmpfs_unlock_file(tfo);
+          return ret;
         }
+
+      DEBUGASSERT(tfo->tfo_maps > 0);
+      tmpfs_release_mapping(tfo);
     }
 
   /* No.. We have been asked to "unmap' only a portion of the memory
@@ -2202,9 +2251,7 @@ static int tmpfs_unmap(FAR struct task_group_s *group,
   else
     {
       entry->length = offset;
-      tmpfs_lock_file(tfo);
-      ret = tmpfs_realloc_file(tfo, offset);
-      tmpfs_unlock_file(tfo);
+      ret = OK;
     }
 
   return ret;
@@ -2241,7 +2288,9 @@ static int tmpfs_msync(FAR struct mm_map_entry_s *entry, FAR void *start,
 static int tmpfs_mmap(FAR struct file *filep, FAR struct mm_map_entry_s *map)
 {
   FAR struct tmpfs_file_s *tfo;
-  int ret = -EINVAL;
+  FAR uint8_t *newdata;
+  size_t mapend;
+  int ret;
 
   DEBUGASSERT(filep->f_priv != NULL);
 
@@ -2251,29 +2300,102 @@ static int tmpfs_mmap(FAR struct file *filep, FAR struct mm_map_entry_s *map)
 
   DEBUGASSERT(tfo != NULL);
 
-  if (map->offset >= 0 && map->offset < tfo->tfo_size &&
-      map->length && map->offset + map->length <= tfo->tfo_size)
+  /* munmap() holds the mm_map lock while tmpfs_unmap() takes the file
+   * lock, so take them in the same order.
+   */
+
+  ret = mm_map_lock();
+  if (ret < 0)
     {
-      map->vaddr = tfo->tfo_data + map->offset;
-      map->priv.p = tfo;
-      map->munmap = tmpfs_unmap;
-      map->msync = tmpfs_msync;
-      ret = mm_map_add(get_current_mm(), map);
-
-      if (ret >= 0)
-        {
-          tmpfs_lock_file(tfo);
-          tfo->tfo_refs++;
-
-          /* POSIX marks st_atime for update on the first access to the
-           * mapping.  tmpfs cannot trap that access, so mark it here.
-           */
-
-          tmpfs_update_atime((FAR struct tmpfs_object_s *)tfo);
-          tmpfs_unlock_file(tfo);
-        }
+      return ret;
     }
 
+  ret = tmpfs_lock_file(tfo);
+  if (ret < 0)
+    {
+      goto errout_with_mmlock;
+    }
+
+  if (map->offset < 0 || map->offset >= tfo->tfo_size ||
+      map->length == 0 || map->length > SIZE_MAX - (size_t)map->offset)
+    {
+      ret = -EINVAL;
+      goto errout_with_lock;
+    }
+
+  /* Each mapping also holds a reference, so tfo_maps <= tfo_refs */
+
+  if (tfo->tfo_refs == UINT8_MAX)
+    {
+      ret = -ENOMEM;
+      goto errout_with_lock;
+    }
+
+  /* A mapping may extend past the end of the file.  Back the whole range
+   * with tfo_data; the file size is unchanged.  The buffer can only grow
+   * while nothing else maps it.
+   */
+
+  mapend = map->offset + map->length;
+  if (mapend > tfo->tfo_alloc)
+    {
+      if (tfo->tfo_maps > 0)
+        {
+          ret = -ENOMEM;
+          goto errout_with_lock;
+        }
+
+      newdata = fs_heap_realloc(tfo->tfo_data, mapend);
+      if (newdata == NULL)
+        {
+          ret = -ENOMEM;
+          goto errout_with_lock;
+        }
+
+      tfo->tfo_data  = newdata;
+      tfo->tfo_alloc = mapend;
+    }
+
+  /* Zero past EOF only for the first mapping, so a later mapping sees what
+   * an earlier one wrote there.  tmpfs_realloc_file() keeps the tail zeroed
+   * while the file stays mapped.
+   */
+
+  if (tfo->tfo_maps == 0)
+    {
+      memset(tfo->tfo_data + tfo->tfo_size, 0,
+             tfo->tfo_alloc - tfo->tfo_size);
+    }
+
+  map->vaddr = tfo->tfo_data + map->offset;
+  map->priv.p = tfo;
+  map->munmap = tmpfs_unmap;
+  map->msync = tmpfs_msync;
+
+  ret = mm_map_add(get_current_mm(), map);
+  if (ret >= 0)
+    {
+      tfo->tfo_refs++;
+      tfo->tfo_maps++;
+
+      /* POSIX marks st_atime for update on the first access to the
+       * mapping.  tmpfs cannot trap that access, so mark it here.
+       */
+
+      tmpfs_update_atime((FAR struct tmpfs_object_s *)tfo);
+    }
+  else if (tfo->tfo_maps == 0)
+    {
+      /* Give back what was grown for this mapping */
+
+      tmpfs_realloc_file(tfo, tfo->tfo_size);
+    }
+
+errout_with_lock:
+  tmpfs_unlock_file(tfo);
+
+errout_with_mmlock:
+  mm_map_unlock();
   return ret;
 }
 

@@ -42,7 +42,21 @@
  ****************************************************************************/
 
 #if CONFIG_MM_HEAP_MEMPOOL_THRESHOLD > 0
-#  define MEMPOOL_NPOOLS (CONFIG_MM_HEAP_MEMPOOL_THRESHOLD / MM_MIN_CHUNK)
+#  if CONFIG_MM_MIN_BLKSIZE != 0
+#    define MEMPOOL_STEP CONFIG_MM_MIN_BLKSIZE
+#  else
+#    define MEMPOOL_STEP MM_MIN_CHUNK
+#  endif
+
+/* A pool block is reused as a struct mm_delaynode_s by delay free, so
+ * skip the pools whose block is smaller than it.
+ */
+
+#  define MEMPOOL_SKIP \
+     (ALIGN_UP(sizeof(struct mm_delaynode_s), MEMPOOL_STEP) / \
+      MEMPOOL_STEP - 1)
+#  define MEMPOOL_NPOOLS \
+     (CONFIG_MM_HEAP_MEMPOOL_THRESHOLD / MM_MIN_CHUNK - MEMPOOL_SKIP)
 #endif
 
 /****************************************************************************
@@ -155,7 +169,7 @@ void mm_addregion(FAR struct mm_heap_s *heap, FAR void *heapstart,
 
   heapbase = MM_ALIGN_UP((uintptr_t)heapstart + 2 * MM_SIZEOF_ALLOCNODE) -
              2 * MM_SIZEOF_ALLOCNODE;
-  heapsize = heapsize - (heapbase - (uintptr_t)heapstart);
+  heapsize = MM_ALIGN_DOWN(heapsize - (heapbase - (uintptr_t)heapstart));
 
   /* Register KASan for access rights check. We need to register after
    * address alignment.
@@ -214,8 +228,8 @@ void mm_addregion(FAR struct mm_heap_s *heap, FAR void *heapstart,
 
   mm_addfreechunk(heap, node);
   heap->mm_curused += 2 * MM_SIZEOF_ALLOCNODE;
-  sched_note_heap(NOTE_HEAP_ADD, heap, heapstart, heapsize,
-                  heap->mm_curused);
+  sched_note_heap_add(heap, heapstart, heapsize,
+                      heap->mm_curused);
 
   kasan_bypass(false);
   mm_unlock(heap);
@@ -337,11 +351,7 @@ mm_initialize_pool(FAR const struct mm_heap_config_s *config,
 
       for (i = 0; i < MEMPOOL_NPOOLS; i++)
         {
-#  if CONFIG_MM_MIN_BLKSIZE != 0
-          poolsize[i] = (i + 1) * CONFIG_MM_MIN_BLKSIZE;
-#  else
-          poolsize[i] = (i + 1) * MM_MIN_CHUNK;
-#  endif
+          poolsize[i] = (i + 1 + MEMPOOL_SKIP) * MEMPOOL_STEP;
         }
 
       def.poolsize        = poolsize;
@@ -406,9 +416,10 @@ void mm_uninitialize(FAR struct mm_heap_s *heap)
           kasan_unregister(heap->mm_heapstart[i]);
         }
 
-      sched_note_heap(NOTE_HEAP_REMOVE, heap, heap->mm_heapstart[i],
-                      (uintptr_t)heap->mm_heapend[i] -
-                      (uintptr_t)heap->mm_heapstart[i], heap->mm_curused);
+      sched_note_heap_remove(heap, heap->mm_heapstart[i],
+                             (uintptr_t)heap->mm_heapend[i] -
+                             (uintptr_t)heap->mm_heapstart[i],
+                             heap->mm_curused);
     }
 
 #if defined(CONFIG_FS_PROCFS) && !defined(CONFIG_FS_PROCFS_EXCLUDE_MEMINFO)

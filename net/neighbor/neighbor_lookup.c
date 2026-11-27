@@ -81,7 +81,10 @@ static int neighbor_match(FAR struct net_driver_s *dev, FAR void *arg)
     {
       info->ni_laddr->na_lltype = dev->d_lltype;
       info->ni_laddr->na_llsize = netdev_lladdrsize(dev);
+
+#ifdef NETDEV_HAVE_LLADDR
       memcpy(&info->ni_laddr->u, &dev->d_mac, info->ni_laddr->na_llsize);
+#endif
     }
 
   /* Return success in any event */

@@ -38,6 +38,7 @@
 
 #include <nuttx/queue.h>
 #include <nuttx/mutex.h>
+#include <nuttx/mm/map.h>
 #ifdef CONFIG_MM_IOB
 #  include <nuttx/mm/iob.h>
 #endif
@@ -50,6 +51,10 @@
 
 #define SOCKCAP_NONBLOCKING (1 << 0)  /* Bit 0: Socket supports non-blocking
                                        *        operation. */
+#define SOCKCAP_CONNSTATE   (1 << 1)  /* Bit 1: The address family sets the
+                                       *        connection state of the
+                                       *        socket in accept() and
+                                       *        connect(). */
 
 /* Definitions of 8-bit socket flags */
 
@@ -193,6 +198,8 @@ struct sock_intf_s
                     FAR struct file *infile, FAR off_t *offset,
                     size_t count);
 #endif
+  CODE int        (*si_mmap)(FAR struct socket *psock,
+                    FAR struct mm_map_entry_s *map);
 };
 
 /* Each socket refers to a connection structure of type FAR void *.  Each
@@ -251,6 +258,10 @@ struct socket_conn_s
 #define s_tclass s_tos       /* IPv6 traffic class definition */
 #if defined(CONFIG_NET_IPv4) || defined(CONFIG_NET_IPv6)
   uint8_t       s_ttl;       /* Default time-to-live */
+#endif
+
+#ifdef CONFIG_NET_TIMESTAMP
+  struct iob_queue_s s_errahead; /* TX timestamp error queue */
 #endif
 
   /* Connection-specific content may follow */
@@ -1362,6 +1373,20 @@ int psock_dup2(FAR struct socket *psock1, FAR struct socket *psock2);
  ****************************************************************************/
 
 int psock_fstat(FAR struct socket *psock, FAR struct stat *buf);
+
+/****************************************************************************
+ * Name: psock_mmap
+ *
+ * Description:
+ *   Perform mmap operations on socket.
+ *
+ * Returned Value:
+ *   On success, returns the number of new socket.  On any error,
+ *   a negated errno value is returned.
+ *
+ ****************************************************************************/
+
+int psock_mmap(FAR struct socket *psock, FAR struct mm_map_entry_s *map);
 
 /****************************************************************************
  * Name: psock_sendfile

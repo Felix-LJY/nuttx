@@ -30,7 +30,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#include <nuttx/list.h>
+#include <nuttx/queue.h>
 #include <nuttx/pci/pci_ids.h>
 #include <nuttx/pci/pci_regs.h>
 
@@ -54,6 +54,15 @@
 #define PCI_DEVFN(slot, func) ((((slot) & 0x1f) << 3) | ((func) & 0x07))
 #define PCI_SLOT(devfn)       (((devfn) >> 3) & 0x1f)
 #define PCI_FUNC(devfn)       ((devfn) & 0x07)
+
+/* Upper 16bit for domain/segment, 8bit for bus and last 8bit for devfn */
+
+#define PCI_SBDF(seg, bus, devfn) ((((seg) & 0xffff) << 16) | \
+                                   (((bus) & 0xff) << 8) | \
+                                   ((devfn) & 0xff))
+
+#define PCI_DOMAIN(sbdf)      (((sbdf) >> 16) & 0xffff)
+#define PCI_BUS(sbdf)         (((sbdf) >> 8) & 0xff)
 
 #define PCI_ANY_ID (uint16_t)(~0)
 
@@ -193,34 +202,36 @@
   while (0)
 
 #define pci_write_mmio_byte(dev, addr, val)  \
-  *((FAR volatile uint8_t *)(addr)) = val
+  ((void)(dev), *((FAR volatile uint8_t *)(addr)) = val)
 
 #define pci_write_mmio_word(dev, addr, val)  \
-  *((FAR volatile uint16_t *)(addr)) = val
+  ((void)(dev), *((FAR volatile uint16_t *)(addr)) = val)
 
 #define pci_write_mmio_dword(dev, addr, val)  \
-  *((FAR volatile uint32_t *)(addr)) = val
+  ((void)(dev), *((FAR volatile uint32_t *)(addr)) = val)
 
 #define pci_write_mmio_qword(dev, addr, val)  \
   do \
     { \
+      (void)(dev); \
       *((FAR volatile uint32_t *)(addr)) = (uint32_t)(val); \
       *((FAR volatile uint32_t *)((FAR char *)(addr) + sizeof(uint32_t))) = (val) >> 32; \
     } \
   while (0)
 
 #define pci_read_mmio_byte(dev, addr, val)    \
-  *(val) = *((FAR volatile uint8_t *)(addr))
+  ((void)(dev), *(val) = *((FAR volatile uint8_t *)(addr)))
 
 #define pci_read_mmio_word(dev, addr, val)    \
-  *(val) = *((FAR volatile uint16_t *)(addr))
+  ((void)(dev), *(val) = *((FAR volatile uint16_t *)(addr)))
 
 #define pci_read_mmio_dword(dev, addr, val)   \
-  *(val) = *((FAR volatile uint32_t *)(addr))
+  ((void)(dev), *(val) = *((FAR volatile uint32_t *)(addr)))
 
 #define pci_read_mmio_qword(dev, addr, val)  \
   do \
     { \
+      (void)(dev); \
       *(val) = *((FAR volatile uint32_t *)(addr)) | \
                *((FAR volatile uint32_t *)((FAR char *)(addr) + sizeof(uint32_t))); \
     } \
@@ -276,8 +287,8 @@ struct pci_device_id_s
 
 struct pci_device_s
 {
-  struct list_node node;
-  struct list_node bus_list;         /* Node in per-bus list */
+  dq_entry_t node;
+  dq_entry_t bus_node;               /* Node in per-bus queue */
   FAR struct pci_bus_s *bus;         /* Bus this device is on */
   FAR struct pci_bus_s *subordinate; /* Bus this device bridges to */
 
@@ -304,9 +315,9 @@ struct pci_bus_s
   FAR struct pci_controller_s *ctrl; /* Associated host controller */
   FAR struct pci_bus_s *parent_bus;  /* Parent bus */
 
-  struct list_node node;     /* Node in list of buses */
-  struct list_node children; /* List of child buses */
-  struct list_node devices;  /* List of devices on this bus */
+  dq_entry_t node;     /* Node in queue of buses */
+  dq_queue_t children; /* queue of child buses */
+  dq_queue_t devices;  /* queue of devices on this bus */
 
   uint8_t number; /* Bus number */
 };
@@ -360,7 +371,8 @@ struct pci_controller_s
   FAR const struct pci_ops_s *ops;
 
   FAR struct pci_bus_s *bus;
-  struct list_node node;
+  dq_entry_t node;
+  uint16_t domain;     /* PCI domain/segment id */
   uint8_t busno;
 };
 
@@ -376,7 +388,7 @@ struct pci_driver_s
 
   CODE void (*remove)(FAR struct pci_device_s *dev);
 
-  struct list_node node;
+  dq_entry_t node;
 };
 
 /****************************************************************************

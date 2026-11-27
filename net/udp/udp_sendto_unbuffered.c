@@ -224,6 +224,15 @@ static uint32_t sendto_eventhandler(FAR struct net_driver_s *dev,
             }
 
           dev->d_len = dev->d_iob->io_pktlen;
+
+#ifdef CONFIG_NET_TIMESTAMP
+          if (_SO_GETOPT(pstate->st_conn->sconn.s_options,
+                         SO_TIMESTAMPING))
+            {
+              dev->d_iob->io_conn = &pstate->st_conn->sconn;
+            }
+#endif
+
 #ifdef NEED_IPDOMAIN_SUPPORT
           /* If both IPv4 and IPv6 support are enabled, then we will need to
            * select which one to use when generating the outgoing packet.
@@ -491,8 +500,11 @@ ssize_t psock_udp_sendto(FAR struct socket *psock, FAR const void *buf,
       state.st_cb->priv  = (FAR void *)&state;
       state.st_cb->event = sendto_eventhandler;
 
-      /* Notify the device driver of the availability of TX data */
+      /* Notify the device driver of the availability of TX data.  The
+       * poll waiters report POLLOUT while conn->sending is not zero.
+       */
 
+      conn->sending++;
       netdev_txnotify_dev(state.st_dev, UDP_POLL);
 
       /* Wait for either the receive to complete or for an error/timeout to
@@ -503,6 +515,7 @@ ssize_t psock_udp_sendto(FAR struct socket *psock, FAR const void *buf,
       ret = conn_dev_sem_timedwait(&state.st_sem, true,
                                    _SO_TIMEOUT(conn->sconn.s_sndtimeo),
                                    &conn->sconn, state.st_dev);
+      conn->sending--;
       if (ret >= 0)
         {
           /* The result of the sendto operation is the number of bytes

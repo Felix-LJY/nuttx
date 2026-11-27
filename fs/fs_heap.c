@@ -44,7 +44,8 @@ void fs_heap_initialize(void)
 {
   struct mm_heap_config_s config;
 #ifdef FS_HEAPBUF_SECTION
-  static uint8_t buf[CONFIG_FS_HEAPSIZE] locate_data(FS_HEAPBUF_SECTION);
+  static uint8_t buf[CONFIG_FS_HEAPSIZE]
+    locate_data(CONFIG_FS_HEAPBUF_SECTION);
 #else
   FAR void *buf = kmm_malloc(CONFIG_FS_HEAPSIZE);
 #endif
@@ -87,10 +88,16 @@ void fs_heap_free(FAR void *mem)
   mm_free(g_fs_heap, mem);
 }
 
+bool fs_heap_member(FAR void *mem)
+{
+  return mm_heapmember(g_fs_heap, mem);
+}
+
 FAR char *fs_heap_strdup(FAR const char *s)
 {
   size_t len = strlen(s) + 1;
   FAR char *copy = fs_heap_malloc(len);
+
   if (copy != NULL)
     {
       memcpy(copy, s, len);
@@ -103,6 +110,7 @@ FAR char *fs_heap_strndup(FAR const char *s, size_t size)
 {
   size_t len = strnlen(s, size) + 1;
   FAR char *copy = fs_heap_malloc(len);
+
   if (copy != NULL)
     {
       memcpy(copy, s, len);

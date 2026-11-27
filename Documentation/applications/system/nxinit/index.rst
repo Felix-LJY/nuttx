@@ -233,13 +233,14 @@ These are the built-in commands of NXInit:
 - Service management: ``start``/``stop`` (start/stop a service),
   ``exec_start`` (start a service and wait until it exits),
   ``class_start``/``class_stop`` (start/stop all services of a class).
+- Waiting: ``wait`` (wait for a file, see below).
 - Programs: ``exec -- <program> [<argument>]*`` (run a program and wait until
   it exits).
 - Others: ``trigger`` (trigger an event), and ``netinit``, ``boot``,
-  ``start_cpu``, ``board_finalinit`` and ``rptun`` when their configuration
-  options are on (``CONFIG_NETUTILS_NETINIT``, ``CONFIG_BOARDCTL_BOOT_IMAGE``,
-  ``CONFIG_BOARDCTL_START_CPU``, ``CONFIG_BOARDCTL_FINALINIT``,
-  ``CONFIG_RPTUN``).
+  ``start_cpu``, ``board_finalinit``, ``rptun`` and ``pmconfig`` when
+  their configuration options are on (``CONFIG_NETUTILS_NETINIT``,
+  ``CONFIG_BOARDCTL_BOOT_IMAGE``, ``CONFIG_BOARDCTL_START_CPU``,
+  ``CONFIG_BOARDCTL_FINALINIT``, ``CONFIG_RPTUN``, ``CONFIG_PM``).
 
 Mounting File Systems
 ---------------------
@@ -267,6 +268,41 @@ mount point. For example:
 
 A ``mount`` line in neither form fails. With ``CONFIG_DISABLE_MOUNTPOINT``,
 NXInit has no ``mount`` and ``umount`` commands.
+
+Setting Power States
+--------------------
+
+.. code-block::
+
+    pmconfig stay|relax <state> [<domain>]
+
+``pmconfig`` has the same syntax as the NSH command: ``stay`` requests to
+keep the power state of the domain at or above ``<state>``, and ``relax``
+removes the request. ``<state>`` is ``normal``, ``idle``, ``standby`` or
+``sleep``, and ``<domain>`` is a PM activity domain number (0 to
+``CONFIG_PM_NDOMAINS`` - 1) and defaults to 0. The NSH command without
+arguments dumps the PM statistics; NXInit does not have that form, which
+init does not need. With ``CONFIG_PM`` disabled, NXInit has no
+``pmconfig`` command.
+
+Waiting for a File
+------------------
+
+.. code-block::
+
+    wait <path> [<timeout>]
+
+``wait`` checks for the existence of ``<path>`` with stat() every 10 ms
+and returns when the file is found. ``<timeout>`` is in seconds and may
+be fractional; it defaults to 5. When the timeout is reached, the
+command only warns and continues, so the next command still runs.
+
+.. code-block::
+
+    on boot
+        start foo_driver
+        wait /dev/xxx 2
+        start bar
 
 Compound Commands
 ------------------

@@ -536,11 +536,29 @@ void tcp_timer(FAR struct net_driver_s *dev, FAR struct tcp_conn_s *conn)
 
               conn->timer = 0;
 
+              /* The first SYN of tcp_connect() is not a retransmission:
+               * send it with the initial RTO and do not count it.
+               */
+
+              if ((conn->flags & TCP_SYNFIRST) != 0)
+                {
+                  conn->flags &= ~TCP_SYNFIRST;
+                  if (conn->tcpstateflags == TCP_SYN_SENT)
+                    {
+                      tcp_setsequence(conn->sndseq, conn->rexmit_seq);
+                      tcp_synack(dev, conn, TCP_SYN);
+                      goto done;
+                    }
+                }
+
               /* Check for a timeout on connection in the TCP_SYN_RCVD state.
                * On such timeouts, we would normally resend the SYNACK until
                * the ACK is received, completing the 3-way handshake.  But if
                * the retry count elapsed, then we must assume that no ACK is
                * forthcoming and terminate the attempted connection.
+               *
+               * Send no reset: the peer never answered, and the source
+               * address of the SYN can be spoofed.
                */
 
               if (conn->tcpstateflags == TCP_SYN_RCVD &&
@@ -548,10 +566,6 @@ void tcp_timer(FAR struct net_driver_s *dev, FAR struct tcp_conn_s *conn)
                 {
                   conn->tcpstateflags = TCP_CLOSED;
                   ninfo("TCP state: TCP_SYN_RCVD->TCP_CLOSED\n");
-
-                  /* We also send a reset packet to the remote host. */
-
-                  tcp_send(dev, conn, TCP_RST | TCP_ACK, hdrlen);
 
                   /* Finally, we must free this TCP connection structure */
 
@@ -566,14 +580,10 @@ void tcp_timer(FAR struct net_driver_s *dev, FAR struct tcp_conn_s *conn)
                * close the connection.
                */
 
-              else if (
-#ifdef CONFIG_NET_TCP_WRITE_BUFFERS
-                  conn->expired > 0 ||
-#endif
-                  (conn->tcpstateflags != TCP_SYN_SENT &&
-                   conn->nrtx >= TCP_MAXRTX) ||
-                  (conn->tcpstateflags == TCP_SYN_SENT &&
-                   conn->nrtx >= TCP_MAXSYNRTX))
+              else if ((conn->tcpstateflags != TCP_SYN_SENT &&
+                        conn->nrtx >= TCP_MAXRTX) ||
+                       (conn->tcpstateflags == TCP_SYN_SENT &&
+                        conn->nrtx >= TCP_MAXSYNRTX))
                 {
                   conn->tcpstateflags = TCP_CLOSED;
                   ninfo("TCP state: TCP_CLOSED\n");

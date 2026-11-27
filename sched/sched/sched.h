@@ -30,6 +30,7 @@
 #include <nuttx/config.h>
 
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <stdbool.h>
 #include <sched.h>
 
@@ -43,6 +44,11 @@
  ****************************************************************************/
 
 #define PIDHASH(pid)             ((pid) & (g_npidhash - 1))
+
+/* The wait() status of a stopped child and of a continued child */
+
+#define WAIT_STOPPED(signo)      ((((signo) & 0xff) << 8) | 0x7f)
+#define WAIT_CONTINUED           0xffff
 
 /* The state of a task is indicated both by the task_state field of the TCB
  * and by a series of task lists.  All of these tasks lists are declared
@@ -384,6 +390,25 @@ void nxsched_sporadic_lowpriority(FAR struct tcb_s *tcb);
 void nxsched_suspend(FAR struct tcb_s *tcb);
 #endif
 
+#if defined(CONFIG_SCHED_WAITPID) && defined(CONFIG_SCHED_HAVE_PARENT)
+int  nxsched_waitid(idtype_t idtype, pid_t id, FAR siginfo_t *info,
+                    int options);
+#endif
+
+static inline_function int32_t nxsched_get_policy(FAR struct tcb_s *tcb)
+{
+  return atomic_read(&tcb->shared_flags) & TCB_FLAG_POLICY_MASK;
+}
+
+static inline_function void nxsched_set_policy(FAR struct tcb_s *tcb,
+                                               int32_t policy)
+{
+  int32_t old = atomic_read(&tcb->shared_flags);
+
+  while (!atomic_try_cmpxchg(&tcb->shared_flags, &old,
+                             (old & ~TCB_FLAG_POLICY_MASK) | policy));
+}
+
 #if defined(up_this_task)
 #  define this_task()            up_this_task()
 #elif !defined(CONFIG_SMP)
@@ -395,9 +420,8 @@ static inline_function FAR struct tcb_s *this_task(void)
   FAR struct tcb_s *tcb;
   irqstate_t flags;
 
-  /* If the CPU supports suppression of interprocessor interrupts, then
-   * simple disabling interrupts will provide sufficient protection for
-   * the following operations.
+  /* Use up_irq_save directly to avoid recursion when called from
+   * irq_save() -> nxsched_critmon_irqdisable() -> running_task() path.
    */
 
   flags = up_irq_save();
@@ -457,11 +481,6 @@ void nxsched_critmon_preemption(FAR struct tcb_s *tcb, bool state,
                                 FAR void *caller);
 #else
 #  define nxsched_critmon_preemption(t, s, c)
-#endif
-
-#if CONFIG_SCHED_CRITMONITOR_MAXTIME_CSECTION >= 0
-void nxsched_critmon_csection(FAR struct tcb_s *tcb, bool state,
-                              FAR void *caller);
 #endif
 
 #ifdef CONFIG_SCHED_CAPABILITIES

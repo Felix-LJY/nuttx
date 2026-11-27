@@ -42,9 +42,6 @@
 
 #define RPMSG_PORT_TIMEOUT_MS       15000
 
-#define RPMSG_PORT_BUF_TO_NODE(q,b) ((q)->node + ((FAR void *)(b) - (q)->buf) / (q)->len)
-#define RPMSG_PORT_NODE_TO_BUF(q,n) ((q)->buf + (((n) - (q)->node)) * (q)->len)
-
 #define rpmsg_port_from_rdev(d) container_of(d, struct rpmsg_port_s, rdev)
 #define rpmsg_port_hdr_from_buf(r) \
   container_of(r, struct rpmsg_port_header_s, buf)
@@ -53,7 +50,9 @@
  * Private Function Prototypes
  ****************************************************************************/
 
+#if CONFIG_RPMSG_DUMP_LEVEL > RPMSG_DUMP_DISABLE
 static void rpmsg_port_dump(FAR struct rpmsg_s *rpmsg, bool verbose);
+#endif
 static int rpmsg_port_get_timestamp(FAR struct rpmsg_s *rpmsg,
                                     FAR const void *data,
                                     FAR struct rpmsg_timestamp_s *ts);
@@ -68,7 +67,11 @@ static const struct rpmsg_ops_s g_rpmsg_port_ops =
   NULL,
   NULL,
   NULL,
+#if CONFIG_RPMSG_DUMP_LEVEL > RPMSG_DUMP_DISABLE
   rpmsg_port_dump,
+#else
+  NULL,
+#endif
   rpmsg_port_get_timestamp,
 };
 
@@ -444,9 +447,19 @@ static void rpmsg_port_rx_callback(FAR struct rpmsg_port_s *port,
 
   if (ept != NULL)
     {
+      metal_mutex_acquire(&rdev->lock);
       if (ept->dest_addr == RPMSG_ADDR_ANY)
         {
           ept->dest_addr = rphdr->src;
+          metal_mutex_release(&rdev->lock);
+          if (ept->ns_bound_cb != NULL)
+            {
+              ept->ns_bound_cb(ept);
+            }
+        }
+      else
+        {
+          metal_mutex_release(&rdev->lock);
         }
 
       rpmsg_trace(ept->name, false, rphdr, len,
@@ -487,12 +500,11 @@ static int rpmsg_port_ns_callback(FAR struct rpmsg_endpoint *ept,
 {
   FAR struct rpmsg_port_s *port = priv;
   FAR struct rpmsg_device *rdev = &port->rdev;
-  struct rpmsg_ns_msg msg;
-  FAR const char *name;
-  uint32_t dest;
-  bool decref = false;
+  struct rpmsg_ns_msg_max msg;
 
-  if (len != sizeof(msg))
+  /* The announcement has to be there and to fit in the local message */
+
+  if (len < sizeof(struct rpmsg_ns_msg) || len > sizeof(msg))
     {
       return RPMSG_SUCCESS;
     }
@@ -501,95 +513,10 @@ static int rpmsg_port_ns_callback(FAR struct rpmsg_endpoint *ept,
    * improve the buffer utilization.
    */
 
-  memcpy(&msg, data, sizeof(msg));
+  memcpy(&msg, data, len);
   rpmsg_port_release_rx_buffer(rdev, data);
 
-  name = msg.name;
-  dest = msg.addr;
-
-  metal_mutex_acquire(&rdev->lock);
-  ept = rpmsg_get_endpoint(rdev, name, RPMSG_ADDR_ANY, dest);
-
-  if (msg.flags == RPMSG_NS_DESTROY)
-    {
-      if (ept != NULL)
-        {
-          ept->dest_addr = RPMSG_ADDR_ANY;
-          if (ept->release_cb != NULL)
-            {
-              rpmsg_ept_incref(ept);
-              decref = true;
-            }
-        }
-
-      metal_mutex_release(&rdev->lock);
-      if (ept != NULL && ept->ns_unbind_cb != NULL)
-        {
-          ept->ns_unbind_cb(ept);
-        }
-
-      if (rdev->ns_unbind_cb != NULL)
-        {
-          rdev->ns_unbind_cb(rdev, name, dest);
-        }
-
-      if (decref)
-        {
-          metal_mutex_acquire(&rdev->lock);
-          rpmsg_ept_decref(ept);
-          metal_mutex_release(&rdev->lock);
-        }
-    }
-  else if (msg.flags == RPMSG_NS_CREATE)
-    {
-      if (ept == NULL)
-        {
-          metal_mutex_release(&rdev->lock);
-          if (rdev->ns_bind_cb != NULL)
-            {
-              rdev->ns_bind_cb(rdev, name, dest);
-            }
-        }
-      else if (ept->dest_addr == RPMSG_ADDR_ANY)
-        {
-          ept->dest_addr = dest;
-          metal_mutex_release(&rdev->lock);
-          if (ept->name[0] && rdev->support_ack)
-            {
-              rpmsg_send_ns_message(ept, RPMSG_NS_CREATE_ACK);
-            }
-
-          /* Notify application that the endpoint has been bound */
-
-          if (ept->ns_bound_cb != NULL)
-            {
-              ept->ns_bound_cb(ept);
-            }
-        }
-      else
-        {
-          metal_mutex_release(&rdev->lock);
-        }
-    }
-  else
-    {
-      /* RPMSG_NS_CREATE_ACK */
-
-      if (ept != NULL && ept->dest_addr == RPMSG_ADDR_ANY)
-        {
-          ept->dest_addr = dest;
-          metal_mutex_release(&rdev->lock);
-
-          if (ept->ns_bound_cb != NULL)
-            {
-              ept->ns_bound_cb(ept);
-            }
-        }
-      else
-        {
-          metal_mutex_release(&rdev->lock);
-        }
-    }
+  rpmsg_ns_handle_msg(rdev, (FAR struct rpmsg_ns_msg *)&msg, len);
 
   return RPMSG_SUCCESS_BUFFER_RELEASED;
 }
@@ -623,10 +550,17 @@ int rpmsg_port_initialize(FAR struct rpmsg_port_s *port,
   port->ops = ops;
   strlcpy(port->rpmsg.cpuname, cfg->remotecpu, RPMSG_NAME_SIZE);
 
+#ifdef CONFIG_RPMSG_PORT_RETX
+  list_initialize(&port->retx.queue);
+  spin_lock_init(&port->retx.lock);
+  port->retx.last_ackno = UINT16_MAX;
+  port->retx.retx_max_retry = cfg->retx_max_retry;
+#endif
+
   rdev = &port->rdev;
   memset(rdev, 0, sizeof(*rdev));
   metal_mutex_init(&rdev->lock);
-  rdev->ns_bind_cb = rpmsg_ns_bind;
+  rdev->ns_bind_extra_cb = rpmsg_ns_bind_extra;
   rdev->ns_unbind_cb = rpmsg_ns_unbind;
   rdev->ops.send_offchannel_raw = rpmsg_port_send_offchannel_raw;
   rdev->ops.hold_rx_buffer = rpmsg_port_hold_rx_buffer;
@@ -697,7 +631,9 @@ rpmsg_port_queue_get_available_buffer(FAR struct rpmsg_port_queue_s *queue,
             {
               rpmsgerr("Get buffer timeout, Dump debug information:\n");
               dump_stack();
+#if CONFIG_RPMSG_DUMP_LEVEL > RPMSG_DUMP_DISABLE
               rpmsg_port_dump(&port->rpmsg, true);
+#endif
             }
         }
     }
@@ -803,6 +739,126 @@ void rpmsg_port_drop_packets(FAR struct rpmsg_port_s *rport, uint8_t type)
     }
 }
 
+#ifdef CONFIG_RPMSG_PORT_RETX
+
+/****************************************************************************
+ * Name: rpmsg_port_retx_process_ack
+ ****************************************************************************/
+
+void rpmsg_port_retx_process_ack(FAR struct rpmsg_port_s *port,
+                                  uint16_t ackno, uint16_t min_seq)
+{
+  FAR struct rpmsg_port_node_s *node;
+  FAR struct rpmsg_port_node_s *tmp;
+  irqstate_t flags;
+
+  flags = spin_lock_irqsave(&port->retx.lock);
+
+  /* Traverse and delete acknowledged or retry-exhausted nodes */
+
+  list_for_every_entry_safe(&port->retx.queue, node, tmp,
+                            struct rpmsg_port_node_s, node)
+    {
+      FAR struct rpmsg_port_header_s *hdr =
+        RPMSG_PORT_NODE_TO_BUF(&port->txq, node);
+      if (RPMSG_PORT_SEQ_LT(hdr->seqno, ackno) ||
+          node->retry_count >= port->retx.retx_max_retry)
+        {
+          if (node->retry_count >= port->retx.retx_max_retry)
+            {
+              rpmsgerr("Retransmission failed for seqno %u after %u retries "
+                       "ackno: %u\n",
+                       hdr->seqno, node->retry_count, ackno);
+            }
+
+          rpmsg_port_retx_del(port, node);
+        }
+    }
+
+  /* Duplicate ACK detection for fast retransmit */
+
+  if (!list_is_empty(&port->retx.queue) &&
+      (ackno == port->retx.last_ackno ||
+       atomic_read(&port->retx.ackdup_count) >= 2))
+    {
+      atomic_add(&port->retx.ackdup_count, 1);
+    }
+  else
+    {
+      atomic_set(&port->retx.ackdup_count, 0);
+    }
+
+  rpmsginfo("retx ack: ackno %u, last_ackno %u, ackdup %" PRId32 "\n",
+            ackno, port->retx.last_ackno,
+            atomic_read(&port->retx.ackdup_count));
+  port->retx.last_ackno = ackno;
+
+  /* Advance rx_next based on peer's min_seq to skip abandoned frames */
+
+  if (RPMSG_PORT_SEQ_LT(port->retx.rx_next, min_seq))
+    {
+      rpmsgerr("Peer abandoned seqno [%u, %u), advancing rx_next\n",
+               port->retx.rx_next, min_seq);
+      port->retx.rx_next = min_seq;
+    }
+
+  spin_unlock_irqrestore(&port->retx.lock, flags);
+}
+
+/****************************************************************************
+ * Name: rpmsg_port_retx_rx_valid
+ ****************************************************************************/
+
+bool rpmsg_port_retx_rx_valid(FAR struct rpmsg_port_s *port,
+                              FAR struct rpmsg_port_header_s *hdr)
+{
+  bool valid = false;
+  irqstate_t flags;
+
+  flags = spin_lock_irqsave(&port->retx.lock);
+  if (hdr->seqno == port->retx.rx_next)
+    {
+      port->retx.rx_next++;
+      valid = true;
+    }
+  else
+    {
+      rpmsgerr("rx_validate FAIL got seq:%u expect:%u cmd:%u\n",
+               hdr->seqno, port->retx.rx_next, hdr->cmd);
+    }
+
+  spin_unlock_irqrestore(&port->retx.lock, flags);
+  return valid;
+}
+
+/****************************************************************************
+ * Name: rpmsg_port_retx_reset
+ ****************************************************************************/
+
+void rpmsg_port_retx_reset(FAR struct rpmsg_port_s *port)
+{
+  FAR struct rpmsg_port_node_s *node;
+  FAR struct rpmsg_port_node_s *tmp;
+  irqstate_t flags;
+
+  flags = spin_lock_irqsave(&port->retx.lock);
+
+  list_for_every_entry_safe(&port->retx.queue, node, tmp,
+                            struct rpmsg_port_node_s, node)
+    {
+      rpmsg_port_retx_del(port, node);
+    }
+
+  atomic_set(&port->retx.ackdup_count, 0);
+  port->retx.tx_next = 0;
+  port->retx.rx_next = 0;
+  port->retx.last_ackno = UINT16_MAX;
+
+  spin_unlock_irqrestore(&port->retx.lock, flags);
+}
+
+#endif /* CONFIG_RPMSG_PORT_RETX */
+
 /****************************************************************************
  * Name: rpmsg_port_register
  ****************************************************************************/
@@ -850,6 +906,7 @@ void rpmsg_port_unregister(FAR struct rpmsg_port_s *port)
   rpmsgvbs("unregister %s success\n", port->rpmsg.cpuname);
 }
 
+#if CONFIG_RPMSG_DUMP_LEVEL > RPMSG_DUMP_DISABLE
 /****************************************************************************
  * Name: rpmsg_port_dump_buffer
  ****************************************************************************/
@@ -911,3 +968,4 @@ static void rpmsg_port_dump(FAR struct rpmsg_s *rpmsg, bool verbose)
       port->ops->dump(port, verbose);
     }
 }
+#endif

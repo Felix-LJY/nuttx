@@ -67,7 +67,7 @@ static int restart_handler(FAR void *cookie)
 
   tcb = nxsched_get_tcb(arg->pid);
   if (!tcb || tcb->task_state == TSTATE_TASK_INVALID ||
-      (tcb->flags & TCB_FLAG_EXIT_PROCESSING) != 0)
+      (atomic_read(&tcb->shared_flags) & TCB_FLAG_EXIT_PROCESSING) != 0)
     {
       /* There is no TCB with this pid or, if there is, it is not a task. */
 
@@ -77,7 +77,7 @@ static int restart_handler(FAR void *cookie)
 
   if (arg->need_restore)
     {
-      tcb->flags &= ~TCB_FLAG_CPU_LOCKED;
+      atomic_and(&tcb->shared_flags, ~TCB_FLAG_CPU_LOCKED);
     }
 
   nxsched_remove_readytorun(tcb);
@@ -233,23 +233,23 @@ static int nxtask_restart(pid_t pid)
     {
       struct restart_arg_s arg;
 
-      if ((tcb->flags & TCB_FLAG_CPU_LOCKED) != 0)
+      arg.pid = tcb->pid;
+      if (atomic_or(&tcb->shared_flags, TCB_FLAG_CPU_LOCKED) &
+          TCB_FLAG_CPU_LOCKED)
         {
-          arg.pid = tcb->pid;
           arg.need_restore = false;
         }
       else
         {
-          arg.pid = tcb->pid;
           arg.need_restore = true;
-          tcb->flags |= TCB_FLAG_CPU_LOCKED;
         }
 
       nxsched_smp_call_single(tcb->cpu, restart_handler, &arg);
 
       tcb = nxsched_get_tcb(pid);
       if (!tcb || tcb->task_state != TSTATE_TASK_INVALID ||
-          (tcb->flags & TCB_FLAG_EXIT_PROCESSING) != 0)
+          (atomic_read(&tcb->shared_flags) &
+           TCB_FLAG_EXIT_PROCESSING) != 0)
         {
           ret = -ESRCH;
           goto errout_with_lock;
@@ -266,6 +266,36 @@ static int nxtask_restart(pid_t pid)
       return OK;
     }
 #endif /* CONFIG_SMP */
+
+  /* Reset critmon info */
+
+#if CONFIG_SCHED_CRITMONITOR_MAXTIME_THREAD >= 0
+  tcb->run_max             = 0;
+  tcb->run_time            = 0;
+#endif
+
+#if CONFIG_SCHED_CRITMONITOR_MAXTIME_PREEMPTION >= 0
+  tcb->preemp_start        = 0;
+  tcb->preemp_max          = 0;
+  tcb->preemp_caller       = NULL;
+  tcb->preemp_max_caller   = NULL;
+#endif
+
+#if CONFIG_SCHED_CRITMONITOR_MAXTIME_IRQDISABLE >= 0
+  tcb->irqdis_start        = 0;
+  tcb->irqdis_max          = 0;
+  tcb->irqdis_count        = 0;
+  tcb->irqdis_caller       = NULL;
+  tcb->irqdis_max_caller   = NULL;
+#endif
+
+#if CONFIG_SCHED_CRITMONITOR_MAXTIME_BUSYWAIT >= 0
+  tcb->busywait_start      = 0;
+  tcb->busywait_max        = 0;
+  tcb->busywait_total      = 0;
+  tcb->busywait_caller     = NULL;
+  tcb->busywait_max_caller = NULL;
+#endif
 
   nxtask_reset_task(tcb, true);
   leave_critical_section(flags);

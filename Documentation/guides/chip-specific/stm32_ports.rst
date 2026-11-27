@@ -230,6 +230,39 @@ that the chip Kconfig ``select``-s next to its timer IP-core selector.  The
 16-bit cases - TIM2 on STM32F10xx/STM32L15xx/STM32L0 and TIM5 on
 STM32F10xx/STM32F30xx - simply leave them unset.
 
+Ethernet drivers
+================
+
+The Ethernet MAC drivers of F1, F2, F4, F7
+(``common/stm32/stm32_eth_v1.c``) and H5, H7, N6
+(``common/stm32/stm32_eth_v2.c``) are lower half drivers of the network upper
+half (``include/nuttx/net/netdev_lowerhalf.h``, see
+:ref:`Network Drivers <netdriver>`).  New STM32 network drivers must use this
+interface too.
+
+The drivers send and receive the IOBs of the network in place.  Each DMA
+descriptor holds one IOB and a frame spans ``NSEGS`` descriptors, where
+``NSEGS`` is ``CONFIG_NET_ETH_PKTSIZE + 4`` divided by the IOB data size
+that the DMA can use, rounded up.  The frames are received in the interrupt work
+(``NETDEV_RX_DIRECT``).  When no IOB is free, the received frame is
+dropped.  ``CONFIG_STM32_ETH_NRXDESC`` and
+``CONFIG_STM32_ETH_NTXDESC`` are the number of RX and TX frames (H5, H7 and
+N6 only, the other families use 8 and 4).  The build fails if the IOB pool
+is too small for the rings.  Recommended settings:
+
+- ``CONFIG_IOB_NBUFFERS=100``: the rings hold ``(NRXDESC + 1) * NSEGS +
+  NTXDESC`` IOBs, 76 with the default 8 RX and 4 TX frames of up to 1514
+  bytes, and the network keeps the others,
+- ``CONFIG_IOB_THROTTLE=8``: the IOBs that the driver needs to refill the
+  RX ring for one frame.  Without this reserve the TCP receive window takes
+  all free IOBs and received frames are dropped.
+
+With the D-Cache (``CONFIG_ARMV7M_DCACHE`` or ``CONFIG_ARMV8M_DCACHE``),
+also in the write-through mode, ``CONFIG_IOB_ALIGNMENT`` and
+``CONFIG_IOB_BUFSIZE`` must be multiples of the D-Cache line size, for
+example ``CONFIG_IOB_ALIGNMENT=32`` and ``CONFIG_IOB_BUFSIZE=224``: the RX
+DMA corrupts other data in the D-Cache lines of its buffers.
+
 Family peripheral inventory
 ===========================
 
@@ -349,7 +382,7 @@ CRC           to be done     not supported
 DAC           v1             arch/arm/src/common/stm32/stm32_dac_m3m4_v1.c          
 DBGMCU        v1             not supported                                          
 DMA           v1             arch/arm/src/common/stm32/stm32_dma_m3m4_v1_8ch.c      
-ETH           to be done     arch/arm/src/common/stm32/stm32_eth_m3m4_v1.c          
+ETH           v1             arch/arm/src/common/stm32/stm32_eth_v1.c
 EXTI          v1             arch/arm/src/common/stm32/stm32_exti_gpio_m3m4_v1v2.c  
 FLASH         F1/F3          arch/arm/src/common/stm32/stm32_flash_m3m4_f1f3.c      
 FSMC          v1             arch/arm/src/common/stm32/stm32_fsmc_m3m4_v1.c         
@@ -378,7 +411,7 @@ CAN/FDCAN     bxCAN         arch/arm/src/common/stm32/stm32_can_m3m4_v1.c
 CRYP          v1            arch/arm/src/common/stm32/stm32_aes_m3m4_v1.c          
 DAC           v1            arch/arm/src/common/stm32/stm32_dac_m3m4_v1.c          
 DMA           v2            arch/arm/src/common/stm32/stm32_dma_m3m4_v2_stream.c   
-ETH           to be done    arch/arm/src/common/stm32/stm32_eth_m3m4_v1.c          
+ETH           v1            arch/arm/src/common/stm32/stm32_eth_v1.c
 EXTI          v1            arch/arm/src/common/stm32/stm32_exti_gpio_m3m4_v1v2.c  
 FLASH         F2/F4         arch/arm/src/common/stm32/stm32_flash_m3m4_f2f4.c      
 FSMC          v1            arch/arm/src/common/stm32/stm32_fsmc_m3m4_v1.c         
@@ -413,7 +446,7 @@ EXTI          v1              arch/arm/src/common/stm32/stm32_exti_gpio_m3m4_v1v
 FLASH         F1/F3           arch/arm/src/common/stm32/stm32_flash_m3m4_f1f3.c      
 GPIO          v1              arch/arm/src/common/stm32/stm32_gpio_m3m4_v1v2.c       
 HRTIM         v1              arch/arm/src/common/stm32/stm32_hrtim_m3m4_v1.c        
-I2C           v2              arch/arm/src/common/stm32/stm32_i2c_m3m4_v2.c          
+I2C           v2              arch/arm/src/common/stm32/stm32_i2c_v2.c
 IWDG          v1              arch/arm/src/common/stm32/stm32_iwdg.c
 OPAMP         v1              arch/arm/src/common/stm32/stm32_opamp_m3m4_v1.c        
 RCC           to be done      arch/arm/src/stm32f3/stm32_rcc.c                       
@@ -438,8 +471,8 @@ CAN/FDCAN     bxCAN         arch/arm/src/common/stm32/stm32_can_m3m4_v1.c
 CRYP          v1            arch/arm/src/common/stm32/stm32_aes_m3m4_v1.c         
 DAC           v1            arch/arm/src/common/stm32/stm32_dac_m3m4_v1.c         
 DMA           v2            arch/arm/src/common/stm32/stm32_dma_m3m4_v2_stream.c  
-DMA2D         v1            arch/arm/src/common/stm32/stm32_dma2d_m3m4_v1.c       
-ETH           to be done    arch/arm/src/common/stm32/stm32_eth_m3m4_v1.c         
+DMA2D         v1            arch/arm/src/common/stm32/stm32_dma2d_v1.c       
+ETH           v1            arch/arm/src/common/stm32/stm32_eth_v1.c
 EXTI          v1            arch/arm/src/common/stm32/stm32_exti_gpio_m3m4_v1v2.c 
 FLASH         F2/F4         arch/arm/src/common/stm32/stm32_flash_m3m4_f2f4.c     
 FMC/FSMC      v1            arch/arm/src/common/stm32/stm32_fmc_m3m4_v1.c         
@@ -479,7 +512,7 @@ EXTI          v2            arch/arm/src/common/stm32/stm32_exti_gpio_m3m4_v1v2.
 FLASH         G4            arch/arm/src/common/stm32/stm32_flash_m3m4_g4.c        
 GPIO          v1            arch/arm/src/common/stm32/stm32_gpio_m3m4_v1v2.c       
 HRTIM         v1            arch/arm/src/common/stm32/stm32_hrtim_m3m4_v1.c        
-I2C           v2            arch/arm/src/common/stm32/stm32_i2c_m3m4_v2.c          
+I2C           v2            arch/arm/src/common/stm32/stm32_i2c_v2.c
 IWDG          v2            arch/arm/src/common/stm32/stm32_iwdg.c
 LPTIM         v1            arch/arm/src/common/stm32/stm32_lptim.c
 OPAMP         v1            arch/arm/src/common/stm32/stm32_opamp_m3m4_v1.c        
@@ -539,13 +572,13 @@ ADC           to be done    arch/arm/src/stm32f7/stm32_adc.c
 CAN/FDCAN     bxCAN         arch/arm/src/stm32f7/stm32_can.c       
 DAC           to be done    not supported                          
 DMA           v2 style      arch/arm/src/stm32f7/stm32_dma.c       
-DMA2D         v1            arch/arm/src/stm32f7/stm32_dma2d.c     
-ETH           to be done    arch/arm/src/stm32f7/stm32_ethernet.c  
+DMA2D         v1            arch/arm/src/common/stm32/stm32_dma2d_v1.c
+ETH           v1            arch/arm/src/common/stm32/stm32_eth_v1.c
 EXTI          to be done    arch/arm/src/stm32f7/stm32_exti_gpio.c 
 FLASH         to be done    arch/arm/src/stm32f7/stm32_flash.c     
 FMC/FSMC      to be done    arch/arm/src/stm32f7/stm32_fmc.c       
 GPIO          to be done    arch/arm/src/stm32f7/stm32_gpio.c      
-I2C           to be done    arch/arm/src/stm32f7/stm32_i2c.c       
+I2C           v2            arch/arm/src/common/stm32/stm32_i2c_v2.c
 IWDG          v1            arch/arm/src/common/stm32/stm32_iwdg.c
 LPTIM         v1            arch/arm/src/common/stm32/stm32_lptim.c
 LTDC          to be done    arch/arm/src/stm32f7/stm32_ltdc.c      
@@ -609,14 +642,14 @@ Peripheral    Core version  Driver
 ADC           to be done    arch/arm/src/stm32h5/stm32_adc.c       
 AES/CRYP      to be done    not supported                          
 CAN/FDCAN     FDCAN         arch/arm/src/stm32h5/stm32_fdcan.c     
-DAC           to be done    not supported                          
+DAC           M33 v1        arch/arm/src/common/stm32/stm32_dac_m33_v1.c
 DTS           to be done    arch/arm/src/stm32h5/stm32_dts.c       
 ETH           v2            arch/arm/src/common/stm32/stm32_eth_v2.c
 EXTI          to be done    arch/arm/src/stm32h5/stm32_exti_gpio.c 
 FLASH         to be done    arch/arm/src/stm32h5/stm32_flash.c     
 GPIO          to be done    arch/arm/src/stm32h5/stm32_gpio.c      
 GPDMA         GPDMA         arch/arm/src/common/stm32/stm32_dma_gpdma.c
-I2C           v2            arch/arm/src/common/stm32/stm32_i2c_m33m55_v2.c
+I2C           v2            arch/arm/src/common/stm32/stm32_i2c_v2.c
 IWDG          v3            arch/arm/src/common/stm32/stm32_iwdg.c
 ICACHE        to be done    arch/arm/src/stm32h5/stm32_icache.c    
 OCTOSPI       to be done    arch/arm/src/stm32h5/stm32_qspi.c      
@@ -653,7 +686,7 @@ FLASH         to be done    arch/arm/src/stm32h7/stm32_flash.c
 FMC/FSMC      to be done    arch/arm/src/stm32h7/stm32_fmc.c       
 GPIO          to be done    arch/arm/src/stm32h7/stm32_gpio.c      
 HSEM          to be done    not supported                          
-I2C           to be done    arch/arm/src/stm32h7/stm32_i2c.c       
+I2C           v2            arch/arm/src/common/stm32/stm32_i2c_v2.c
 IWDG          v2, H7RS v3   arch/arm/src/common/stm32/stm32_iwdg.c
 LTDC          to be done    arch/arm/src/stm32h7/stm32_ltdc.c      
 MDMA          to be done    arch/arm/src/stm32h7/stm32_dma.c       
@@ -666,7 +699,7 @@ SDMMC         v2            arch/arm/src/common/stm32/stm32_sdmmc_v2.c
 SPI/I2S       to be done    arch/arm/src/stm32h7/stm32_spi.c       
 TIM           v2, H7RS v3   arch/arm/src/common/stm32/stm32_tim.c  
 USART/LPUART  v4            arch/arm/src/stm32h7/stm32_serial.c    
-USB           OTG FS/HS     arch/arm/src/stm32h7/stm32_otgdev.c    
+USB           OTG v2        arch/arm/src/common/stm32/stm32_otgdev_v2.c
 WWDG          v2, H7RS v3   arch/arm/src/common/stm32/stm32_wwdg.c
 AES/CRYP      n/a           arch/arm/src/stm32h7/stm32_aes.c       
 BBSRAM        n/a           arch/arm/src/stm32h7/stm32_bbsram.c    
@@ -675,7 +708,7 @@ LPTIM         v1, H7RS v2   arch/arm/src/common/stm32/stm32_lptim.c
 PULSECOUNT    n/a           arch/arm/src/common/stm32/stm32_pulsecount.c
 PWM           n/a           arch/arm/src/stm32h7/stm32_pwm.c       
 QENCODER      n/a           arch/arm/src/common/stm32/stm32_qencoder.c  
-USB host      n/a           arch/arm/src/stm32h7/stm32_otghost.c   
+USB host      OTG v2        arch/arm/src/common/stm32/stm32_otghost_v2.c
 ============  ============  ============================================
 
 STM32L0
@@ -772,12 +805,15 @@ Peripheral    Core version  Driver
 ============  ============  ==================================================
 ADC           to be done    not supported
 CAN/FDCAN     to be done    not supported
+CSI           n6            arch/arm/src/stm32n6/stm32_csi.c
 DAC           to be done    not supported
+DCMIPP        n6            arch/arm/src/stm32n6/stm32_dcmipp.c
+DMA2D         v1            arch/arm/src/common/stm32/stm32_dma2d_v1.c
 ETH           v2            arch/arm/src/common/stm32/stm32_eth_v2.c
 EXTI          M33M55 v1     arch/arm/src/common/stm32/stm32_exti_gpio_m33m55_v1.c
 GPIO          M33M55 v1     arch/arm/src/common/stm32/stm32_gpio_m33m55_v1.c
 GPDMA         v1            arch/arm/src/common/stm32/stm32_dma_gpdma.c
-I2C           v2            arch/arm/src/common/stm32/stm32_i2c_m33m55_v2.c
+I2C           v2            arch/arm/src/common/stm32/stm32_i2c_v2.c
 IWDG          v3            arch/arm/src/common/stm32/stm32_iwdg.c
 LPTIM         v2            arch/arm/src/common/stm32/stm32_lptim.c
 LTDC          v2            arch/arm/src/common/stm32/stm32_ltdc_v1v2.c
@@ -790,6 +826,7 @@ SPI/I2S       v5            arch/arm/src/common/stm32/stm32_spi_v5.c
 TIM           v3            arch/arm/src/common/stm32/stm32_tim.c
 USART/LPUART  M33M55 v3     arch/arm/src/common/stm32/stm32_serial_m33m55_v3.c
 USB           device        not supported
+USB host      OTG v2        arch/arm/src/common/stm32/stm32_otghost_v2.c
 WWDG          v3            arch/arm/src/common/stm32/stm32_wwdg.c
 XSPI          to be done    not supported
 ============  ============  ==================================================
@@ -839,7 +876,7 @@ CCB           to be done    not supported
 COMP          to be done    not supported
 CRC           to be done    not supported
 CRS           to be done    not supported
-DAC           to be done    not supported
+DAC           M33 v1        arch/arm/src/common/stm32/stm32_dac_m33_v1.c
 DBGMCU        v5            not supported
 DLYB          to be done    not supported
 EXTI          M33M55 v1     arch/arm/src/common/stm32/stm32_exti_gpio_m33m55_v1.c

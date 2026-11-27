@@ -318,6 +318,10 @@ static inline void rcc_enableahb5(void)
   regval |= RCC_AHB5ENR_HPDMA1EN;
 #endif
 
+#ifdef CONFIG_STM32_DMA2D
+  regval |= RCC_AHB5ENR_DMA2DEN;
+#endif
+
 #ifdef CONFIG_STM32_SDMMC1
   regval |= RCC_AHB5ENR_SDMMC1EN;
 #endif
@@ -331,6 +335,16 @@ static inline void rcc_enableahb5(void)
 
   regval |= RCC_AHB5ENR_ETH1EN | RCC_AHB5ENR_ETH1MACEN |
             RCC_AHB5ENR_ETH1TXEN | RCC_AHB5ENR_ETH1RXEN;
+#endif
+
+#if defined(CONFIG_STM32_OTGHS) && defined(CONFIG_STM32N6_OTGHS_USB2)
+  /* USB2 OTG HS core and its embedded high speed PHY */
+
+  regval |= RCC_AHB5ENR_OTG2EN | RCC_AHB5ENR_OTGPHY2EN;
+#elif defined(CONFIG_STM32_OTGHS)
+  /* USB1 OTG HS core and its embedded high speed PHY */
+
+  regval |= RCC_AHB5ENR_OTG1EN | RCC_AHB5ENR_OTGPHY1EN;
 #endif
 
   if (regval != 0)
@@ -511,6 +525,10 @@ static inline void rcc_enableapb5(void)
 
 #ifdef CONFIG_STM32_LTDC
   regval |= RCC_APB5ENR_LTDCEN;
+#endif
+
+#ifdef CONFIG_STM32_DCMIPP
+  regval |= RCC_APB5ENR_DCMIPPEN | RCC_APB5ENR_CSIEN;
 #endif
 
   if (regval != 0)

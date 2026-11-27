@@ -100,6 +100,21 @@ void stm32_rifconfig(void)
   rif_setslave_secpriv(RIFSC_PERIPH_LTDCL2);
 #endif
 
+#ifdef CONFIG_STM32_DMA2D
+  /* The DMA2D reads and writes the overlays in Secure AXISRAM */
+
+  rif_setmaster(RIFSC_MASTER_DMA2D, RIF_MASTER_CID1_SEC_PRIV);
+  rif_setslave_secpriv(RIFSC_PERIPH_DMA2D);
+#endif
+
+#ifdef CONFIG_STM32_DCMIPP
+  /* The DCMIPP writes the camera frames to Secure AXISRAM */
+
+  rif_setmaster(RIFSC_MASTER_DCMIPP, RIF_MASTER_CID1_SEC_PRIV);
+  rif_setslave_secpriv(RIFSC_PERIPH_DCMIPP);
+  rif_setslave_secpriv(RIFSC_PERIPH_CSI);
+#endif
+
 #ifdef CONFIG_STM32_SDMMC1
   /* The SDMMC IDMA reads and writes buffers in Secure AXISRAM */
 
@@ -110,5 +125,17 @@ void stm32_rifconfig(void)
 #ifdef CONFIG_STM32_SDMMC2
   rif_setmaster(RIFSC_MASTER_SDMMC2, RIF_MASTER_CID1_SEC_PRIV);
   rif_setslave_secpriv(RIFSC_PERIPH_SDMMC2);
+#endif
+
+#if defined(CONFIG_STM32_OTGHS) && defined(CONFIG_STM32N6_OTGHS_USB2)
+  /* USB2 OTG HS is a bus master (its DMA mode is not used by the driver) */
+
+  rif_setmaster(RIFSC_MASTER_OTG2, RIF_MASTER_CID1_SEC_PRIV);
+  rif_setslave_secpriv(RIFSC_PERIPH_OTG2HS);
+#elif defined(CONFIG_STM32_OTGHS)
+  /* USB1 OTG HS is a bus master (its DMA mode is not used by the driver) */
+
+  rif_setmaster(RIFSC_MASTER_OTG1, RIF_MASTER_CID1_SEC_PRIV);
+  rif_setslave_secpriv(RIFSC_PERIPH_OTG1HS);
 #endif
 }

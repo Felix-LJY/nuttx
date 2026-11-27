@@ -94,12 +94,29 @@ static uint32_t udp_poll_eventhandler(FAR struct net_driver_s *dev,
           eventset |= (POLLHUP | POLLERR);
         }
 
-      /* A poll is a sign that we are free to send data. */
+      /* A poll is a sign that we are free to send data.  Without write
+       * buffers the device polls every UDP connection when one of them
+       * sends: an epoll set (POLLALWAYS) gets POLLOUT only from its own.
+       */
 
-      else if (psock_udp_cansend(info->conn) >= 0)
+      else if (psock_udp_cansend(info->conn) >= 0
+#ifndef CONFIG_NET_UDP_WRITE_BUFFERS
+               && ((info->fds->events & POLLALWAYS) == 0 ||
+                   info->conn->sending > 0)
+#endif
+              )
         {
           eventset |= POLLOUT;
         }
+
+#ifdef CONFIG_NET_TIMESTAMP
+      /* Check for timestamping data */
+
+      if (!IOB_QEMPTY(&info->conn->sconn.s_errahead))
+        {
+          eventset |= POLLPRI | POLLERR;
+        }
+#endif
 
       /* Awaken the caller of poll() is requested event occurred. */
 
@@ -207,6 +224,13 @@ int udp_pollsetup(FAR struct socket *psock, FAR struct pollfd_s *fds)
       cb->flags |= UDP_NEWDATA;
     }
 
+#ifdef CONFIG_NET_TIMESTAMP
+  if ((fds->events & POLLPRI) != 0)
+    {
+      cb->flags |= UDP_NEWDATA;
+    }
+#endif
+
   /* Save the reference in the poll info structure as fds private as well
    * for use during poll teardown as well.
    */
@@ -221,6 +245,13 @@ int udp_pollsetup(FAR struct socket *psock, FAR struct pollfd_s *fds)
 
       eventset |= POLLRDNORM;
     }
+
+#ifdef CONFIG_NET_TIMESTAMP
+  if (!IOB_QEMPTY(&conn->sconn.s_errahead))
+    {
+      eventset |= POLLPRI | POLLERR;
+    }
+#endif
 
   if (psock_udp_cansend(conn) >= 0)
     {

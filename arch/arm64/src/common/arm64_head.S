@@ -118,7 +118,7 @@ real_start:
     /* Disable all exceptions and interrupts */
 
     msr    DAIFSet, 0xf
-#ifdef CONFIG_SMP
+#ifndef CONFIG_UP
     get_cpu_id x1
 
     /* The global variable cpu_boot_params is not safety to
@@ -141,14 +141,6 @@ real_start:
     cmp    x1, #0
     beq    primary_core
 
-    /* Wait until cpu0 notify */
-
-    ldr    x2, =g_smp_busy_wait_flag
-1:
-    ldr    w3, [x2, #0]
-    cmp    w3, #0
-    beq    1b
-
     /* we can now load our stack pointer value and move on */
 
     ldr    x24, =g_cpu_idlestackalloc
@@ -160,26 +152,17 @@ real_start:
      */
 1:
     sub    x1, x1, #1
-    add    x24, x24, #(SMP_STACK_SIZE)
+    add    x24, x24, #(CONFIG_IDLETHREAD_STACKSIZE)
     cmp    x1, #0
     bne    1b
 
-#  ifdef CONFIG_STACK_COLORATION
-    /* Write a known value to the IDLE thread stack to support stack
-     * monitoring logic
+    /* The IDLE thread stack is colored by up_cpu_idlestack() on CPU0 before
+     * tls_init_info() carves the TLS region out of its bottom.  Re-coloring
+     * the whole stack here would overwrite that TLS info, so just advance
+     * x24 to the stack top.
      */
 
-    ldr    w1, =SMP_STACK_WORDS
-    ldr    w2, =STACK_COLOR
-
-.loop:
-    sub    w1, w1, #1
-    str    w2, [x24], #4
-    cmp    w1, #0
-    bne    .loop
-#  else
-    add    x24, x24, #(SMP_STACK_SIZE)
-#  endif
+    add    x24, x24, #(CONFIG_IDLETHREAD_STACKSIZE)
 
     /* Initialize percpu reg tpidr_el1 */
 
@@ -206,7 +189,7 @@ primary_core:
 
     /* load stack and entry point */
 
-    ldr    x24, =(g_idle_stack + CONFIG_IDLETHREAD_STACKSIZE)
+    ldr    x24, =(g_cpu_idlestackalloc + CONFIG_IDLETHREAD_STACKSIZE)
 #endif /* CONFIG_SMP */
 
     /* Initialize percpu reg tpidr_el1 */

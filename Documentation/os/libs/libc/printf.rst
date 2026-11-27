@@ -285,8 +285,9 @@ Options and profiles
 ====================
 
 Each feature is an option with its own prompt.  A profile only sets the default
-of each option: select one in *Library Routines*, *printf profile*.  You can add
-or remove any feature in any profile.
+of each option: select one in *Library Routines*, *printf profile*.  The profile
+defaults to Minimal when ``DEFAULT_SMALL`` is enabled, and to Default otherwise.
+You can add or remove any feature in any profile.
 
 =============================  ==========  ===========  ======
 Option                         Minimal     Default      Full
@@ -309,7 +310,8 @@ Option                         Minimal     Default      Full
 =============================  ==========  ===========  ======
 
 In Default, ``LIBC_FLOATINGPOINT`` is on when ``DEFAULT_SMALL`` is off and the
-CPU has an FPU, as before the profiles existed.  In Minimal,
+CPU has an FPU, as before the profiles existed.  ``LIBC_PRINTF_OCTAL`` is on
+unless ``DEFAULT_SMALL`` is enabled.  In Minimal,
 ``LIBC_PRINTF_LONG_LONG`` stays on with ``SYSLOG_TIMESTAMP`` or ``FS_PROCFS``,
 because the log time stamps and ``/proc`` print ``time_t`` and ``uint64_t``.
 

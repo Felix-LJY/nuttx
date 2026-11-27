@@ -182,6 +182,16 @@ The GT911 touch controller on I2C2 (interrupt on PQ4) is reset at bring-up
 with PQ4 held low, which selects address 0x5d, and registered as
 ``/dev/input0``; ``tc`` prints the touch coordinates.
 
+Camera module
+=============
+
+The MB1854 module (Sony IMX335) is on the CSI-2 host (two lanes) and I2C1
+(0x1a).  PD2 enables the module and PC8 releases the sensor reset.  The
+DCMIPP converts the raw frames to RGB565 and scales them, with automatic
+exposure (``CONFIG_STM32_DCMIPP_AE``) and white balance
+(``CONFIG_STM32_DCMIPP_AWB``), switched off with ``V4L2_CID_EXPOSURE_AUTO``
+and ``V4L2_CID_AUTO_WHITE_BALANCE``.
+
 Time-of-flight sensor
 =====================
 
@@ -205,6 +215,26 @@ With a FAT formatted card::
   nsh> echo hello > /mnt/test.txt
   nsh> cat /mnt/test.txt
   nsh> dd if=/dev/zero of=/mnt/big.bin bs=4096 count=256
+  nsh> umount /mnt
+
+USB host
+========
+
+The host runs at full speed on the embedded PHY (24 MHz reference, HSE / 2)
+of the port selected with ``CONFIG_STM32N6_OTGHS_USB1``/``USB2``:
+
+* USB2 (default in ``jumbo``): the Type-A connector, VBUS switched by PB9.
+* USB1: the Type-C connector (CN18).  VBUS comes from the TCPP03: PA4
+  enables it and the host driver closes its provider switch over I2C2
+  (0x34).  The CC lines are not driven.  Not tested on hardware.
+
+VBUS of a flash drive can exceed what the ST-LINK USB port supplies: power
+the board from CN18 when using the Type-A port.  A FAT formatted flash
+drive is ``/dev/sda``::
+
+  nsh> mount -t vfat /dev/sda /mnt
+  nsh> ls /mnt
+  nsh> echo hello > /mnt/test.txt
   nsh> umount /mnt
 
 Clocking
@@ -250,8 +280,15 @@ lvgl
 with ``lvgldemo &``.  The image is close to the 511 KiB limit of the boot
 ROM, so LVGL logging and extra fonts are left out.
 
-sdcard
+camera
 ------
 
-NuttShell with the microSD slot on SDMMC2 and the FAT file system, see
-`microSD`_.
+``fb`` plus the IMX335 camera and the ``camera`` example, see `Camera module`_.
+``camera 0`` shows a 320x240 preview on the LCD.
+
+jumbo
+-----
+
+``netnsh`` plus the microSD slot, the USB host on the USB2 Type-A
+connector, USB mass storage, FAT and the L1 caches.  Features that do not
+conflict with each other are added here instead of to new configurations.
