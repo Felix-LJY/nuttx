@@ -3060,6 +3060,10 @@ static int fat_readdir(FAR struct inode *mountpt,
   uint8_t ch;
   uint8_t attribute;
   bool found;
+#ifdef CONFIG_FAT_LFN
+  off_t namesector;
+  unsigned int nameindex;
+#endif
   int ret;
 
   /* Sanity checks */
@@ -3135,6 +3139,10 @@ static int fat_readdir(FAR struct inode *mountpt,
            * several directory entries.
            */
 
+#ifdef CONFIG_FAT_LFN
+          namesector = fdir->dir.fd_currsector;
+          nameindex  = fdir->dir.fd_index;
+#endif
           ret = fat_dirname2path(fs, dir, entry);
           if (ret == OK)
             {
@@ -3179,6 +3187,21 @@ static int fat_readdir(FAR struct inode *mountpt,
 
               found = true;
             }
+
+#ifdef CONFIG_FAT_LFN
+          /* Long file name entries that are not followed by a matching
+           * short entry are skipped over by fat_dirname2path().  The entry
+           * they lead to has not been examined yet, so look at it next
+           * instead of skipping it.
+           */
+
+          else if (ret == -EINVAL &&
+                   (fdir->dir.fd_currsector != namesector ||
+                    fdir->dir.fd_index != nameindex))
+            {
+              continue;
+            }
+#endif
         }
 
       /* Set up the next directory index */
