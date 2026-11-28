@@ -1158,14 +1158,15 @@ static int fat_path2dirname(FAR const char **path,
        *   - we are creating file on NuttX -> write it as short file name
        */
 
-      if (strlen((FAR const char *)dirinfo->fd_lfname) <= DIR_MAXFNAME)
+      if (strlen((FAR const char *)dirinfo->fd_lfname) <= DIR_MAXFNAME + 1)
         {
           /* Get short file name for given path */
 
-          char name[DIR_MAXFNAME];
+          char name[DIR_MAXFNAME + 2];
           FAR const char *tmp;
 
-          memcpy(name, dirinfo->fd_lfname, DIR_MAXFNAME);
+          memcpy(name, dirinfo->fd_lfname, DIR_MAXFNAME + 1);
+          name[DIR_MAXFNAME + 1] = '\0';
           tmp = (FAR const char *)name;
           if (fat_parsesfname(&tmp, dirinfo, NULL) != OK)
             {
